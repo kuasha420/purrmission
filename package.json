@@ -1,4 +1,19 @@
 {
   "name": "purrmission",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "workspaces": [
+    "apps/*"
+  ],
+  "scripts": {
+    "lint": "eslint apps/*/src --ext .ts",
+    "lint:fix": "eslint apps/*/src --ext .ts --fix",
+    "format": "prettier --write \"apps/*/src/**/*.ts\"",
+    "format:check": "prettier --check \"apps/*/src/**/*.ts\"",
+    "build": "yarn workspace @purrfecthq/purrmission-bot build",
+    "dev:purrmission": "yarn workspace @purrfecthq/purrmission-bot dev",
+    "discord:deploy-commands": "yarn workspace @purrfecthq/purrmission-bot discord:deploy-commands"
+  },
   "packageManager": "yarn@4.12.0"
 }
