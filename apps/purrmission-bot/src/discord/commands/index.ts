@@ -13,6 +13,7 @@ import {
 import type { Services } from '../../domain/services.js';
 import { handleRegisterResource } from './registerResource.js';
 import { handleAddGuardian } from './addGuardian.js';
+import { handlePurrmissionCommand, purrmissionCommand } from './twoFaAdd.js';
 import { logger } from '../../logging/logger.js';
 
 /**
@@ -47,6 +48,8 @@ export const commands: RESTPostAPIChatInputApplicationCommandsJSONBody[] = [
                 .setRequired(true)
         )
         .toJSON(),
+
+    purrmissionCommand.toJSON(),
 ];
 
 /**
@@ -68,6 +71,10 @@ export async function handleSlashCommand(
 
         case 'purrmission-add-guardian':
             await handleAddGuardian(interaction, services);
+            break;
+
+        case 'purrmission':
+            await handlePurrmissionCommand(interaction);
             break;
 
         default:

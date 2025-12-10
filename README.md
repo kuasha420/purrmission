@@ -1,4 +1,6 @@
-# 🐱 Purrmission
+![Purrmission Banner](assets/banner.png)
+
+# 🐱 Purrmission <img src="assets/logo-square.png" align="right" width="120" />
 
 > **Discord-based multi-user approval gate** – An "Authy-clone" for shared accounts (e.g., `shared-account@example.com`), with an HTTP API for external services to request approvals.
 
