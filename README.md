@@ -4,9 +4,12 @@
 
 > **Discord-based multi-user approval gate** – An "Authy-clone" for shared accounts (e.g., `shared-account@example.com`), with an HTTP API for external services to request approvals.
 
-## Overview
+## Key Features
 
-Purrmission provides a centralized approval workflow where:
+- **Shared 2FA / TOTP**: Maintain a centralized vault of 2FA secrets for team accounts (GitHub, AWS, etc.).
+- **Approval Chains**: Require guardian approval for protected resource usage.
+- **Discord Integration**: Get codes and approve requests directly in DMs or channels.
+
 
 1. **External services** send approval requests via HTTP API
 2. **Guardians** (trusted users) receive approval requests in Discord
@@ -32,7 +35,8 @@ Purrmission provides a centralized approval workflow where:
 
 - **Resource**: A protected account or service requiring approval (e.g., a shared email)
 - **Guardian**: A Discord user who can approve/deny requests for a resource
-- **Approval Request**: A pending request from an external service
+- **TOTP Account**: A stored 2FA credential that generates time-based codes
+
 
 ## Setup
 
@@ -64,6 +68,16 @@ yarn discord:deploy-commands
 # 6. Start the bot
 yarn dev:purrmission
 ```
+
+### 🔐 2FA Cheatsheet
+
+| Action | Command |
+| :--- | :--- |
+| **Add Account** | `/purrmission 2fa add account:"..." mode:uri uri:...` |
+| **List Accounts** | `/purrmission 2fa list [shared:True]` |
+| **Get Code** | `/purrmission 2fa get account:"..."` |
+| **Update Key** | `/purrmission 2fa update account:"..." backup_key:"..."` |
+
 
 ### Environment Variables
 
@@ -185,6 +199,11 @@ This is a scaffold/MVP with the following limitations:
 - **No authentication for owner operations**: Anyone can add guardians. TODO: Enforce owner-only.
 - **No callback implementation**: Callback URLs are logged but not called. TODO: Implement HTTP callbacks.
 - **Single channel/DM**: Messages go to guardian DMs. TODO: Configurable notification channels.
+
+## Further Reading
+
+- [Purrmission 2FA Guide](docs/purrmission-2fa.md)
+
 
 ## License
 
