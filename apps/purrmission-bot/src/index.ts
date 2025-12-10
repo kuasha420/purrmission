@@ -15,6 +15,8 @@ import { createInMemoryRepositories } from './domain/repositories.js';
 import { createServices } from './domain/services.js';
 import { createDiscordClient } from './discord/client.js';
 import { startHttpServer } from './http/server.js';
+import { getPrismaClient } from './infra/prismaClient.js';
+import { PrismaTOTPRepository } from './domain/repositories.js';
 
 /**
  * Main application bootstrap.
@@ -25,6 +27,10 @@ async function main(): Promise<void> {
     // 1. Initialize repositories (in-memory for MVP)
     logger.info('Initializing repositories...');
     const repositories = createInMemoryRepositories();
+
+    // Wire up Prisma for TOTP (replace in-memory default)
+    const prisma = getPrismaClient();
+    repositories.totp = new PrismaTOTPRepository(prisma);
 
     // 2. Initialize services
     logger.info('Initializing services...');

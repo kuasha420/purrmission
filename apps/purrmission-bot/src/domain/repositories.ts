@@ -8,6 +8,7 @@
  * TODO: Replace in-memory implementations with Postgres/Prisma for production.
  */
 
+import type { PrismaClient } from "@prisma/client";
 import type {
     Resource,
     Guardian,
@@ -308,6 +309,121 @@ export class InMemoryTOTPRepository implements TOTPRepository {
         return results;
     }
 }
+
+export class PrismaTOTPRepository implements TOTPRepository {
+    private readonly prisma: PrismaClient;
+
+    constructor(prisma: PrismaClient) {
+        this.prisma = prisma;
+    }
+
+    async create(
+        account: Omit<TOTPAccount, "id" | "createdAt" | "updatedAt">,
+    ): Promise<TOTPAccount> {
+        const created = await this.prisma.tOTPAccount.create({
+            data: {
+                ownerDiscordUserId: account.ownerDiscordUserId,
+                accountName: account.accountName,
+                secret: account.secret,
+                issuer: account.issuer ?? null,
+                shared: account.shared,
+            },
+        });
+
+        return this.mapPrismaToDomain(created);
+    }
+
+    async update(account: TOTPAccount): Promise<TOTPAccount> {
+        const updated = await this.prisma.tOTPAccount.update({
+            where: { id: account.id },
+            data: {
+                ownerDiscordUserId: account.ownerDiscordUserId,
+                accountName: account.accountName,
+                secret: account.secret,
+                issuer: account.issuer ?? null,
+                shared: account.shared,
+            },
+        });
+
+        return this.mapPrismaToDomain(updated);
+    }
+
+    async deleteById(id: string): Promise<void> {
+        // If record doesn't exist, Prisma will throw; swallow "not found" errors for idempotency.
+        try {
+            await this.prisma.tOTPAccount.delete({
+                where: { id },
+            });
+        } catch (error: unknown) {
+            // TODO: optionally check for Prisma.PrismaClientKnownRequestError and ignore P2025 (record not found)
+        }
+    }
+
+    async findById(id: string): Promise<TOTPAccount | null> {
+        const row = await this.prisma.tOTPAccount.findUnique({
+            where: { id },
+        });
+        return row ? this.mapPrismaToDomain(row) : null;
+    }
+
+    async findByOwnerDiscordUserId(ownerDiscordUserId: string): Promise<TOTPAccount[]> {
+        const rows = await this.prisma.tOTPAccount.findMany({
+            where: { ownerDiscordUserId },
+            orderBy: { accountName: "asc" },
+        });
+
+        return rows.map((row) => this.mapPrismaToDomain(row));
+    }
+
+    async findByOwnerAndName(
+        ownerDiscordUserId: string,
+        accountName: string,
+    ): Promise<TOTPAccount | null> {
+        const row = await this.prisma.tOTPAccount.findUnique({
+            where: {
+                ownerDiscordUserId_accountName: {
+                    ownerDiscordUserId,
+                    accountName,
+                },
+            },
+        });
+
+        return row ? this.mapPrismaToDomain(row) : null;
+    }
+
+    async findSharedVisibleTo(discordUserId: string): Promise<TOTPAccount[]> {
+        // MVP: all shared accounts are visible to everyone.
+        const rows = await this.prisma.tOTPAccount.findMany({
+            where: { shared: true },
+            orderBy: { accountName: "asc" },
+        });
+
+        return rows.map((row) => this.mapPrismaToDomain(row));
+    }
+
+    private mapPrismaToDomain(row: {
+        id: string;
+        ownerDiscordUserId: string;
+        accountName: string;
+        secret: string;
+        issuer: string | null;
+        shared: boolean;
+        createdAt: Date;
+        updatedAt: Date;
+    }): TOTPAccount {
+        return {
+            id: row.id,
+            ownerDiscordUserId: row.ownerDiscordUserId,
+            accountName: row.accountName,
+            secret: row.secret,
+            issuer: row.issuer ?? undefined,
+            shared: row.shared,
+            createdAt: row.createdAt,
+            updatedAt: row.updatedAt,
+        };
+    }
+}
+
 
 // =============================================================================
 // Repository Container
