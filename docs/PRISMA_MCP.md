@@ -14,6 +14,8 @@ yarn dlx prisma mcp
 
 This starts a local MCP server using the Prisma CLI. It will use the `DATABASE_URL` from your `.env` file by default.
 
+**Important**: Ensure your `DATABASE_URL` is consistent across the root `.env`, `apps/purrmission-bot/.env`, and this MCP config to ensuring all tools work on the same database file.
+
 ### Example MCP config (local)
 
 See [`docs/mcp/prisma-local.json`](./mcp/prisma-local.json) for an example `mcpServers` entry that many MCP clients recognize. You can adapt it into your tool’s configuration.
