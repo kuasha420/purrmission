@@ -18,11 +18,14 @@ import type { Services } from '../domain/services.js';
 import { handleSlashCommand } from './commands/index.js';
 import { handleApprovalButton } from './interactions/approvalButtons.js';
 
+import type { Repositories } from '../domain/repositories.js';
+
 /**
  * Dependencies for the Discord client.
  */
 export interface DiscordClientDeps {
     services: Services;
+    repositories: Repositories;
 }
 
 /**
@@ -116,7 +119,10 @@ async function handleChatInputCommand(
         guildId: interaction.guildId,
     });
 
-    await handleSlashCommand(interaction, deps.services);
+    await handleSlashCommand(interaction, {
+        services: deps.services,
+        repositories: deps.repositories,
+    });
 }
 
 /**

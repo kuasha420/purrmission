@@ -58,11 +58,20 @@ export const commands: RESTPostAPIChatInputApplicationCommandsJSONBody[] = [
  * @param interaction - The command interaction
  * @param services - Application services
  */
+import type { CommandContext } from './context.js';
+
+/**
+ * Route slash commands to their handlers.
+ *
+ * @param interaction - The command interaction
+ * @param context - Command execution context with dependencies
+ */
 export async function handleSlashCommand(
     interaction: ChatInputCommandInteraction,
-    services: Services
+    context: CommandContext
 ): Promise<void> {
     const { commandName } = interaction;
+    const { services } = context;
 
     switch (commandName) {
         case 'purrmission-register-resource':
@@ -74,7 +83,7 @@ export async function handleSlashCommand(
             break;
 
         case 'purrmission':
-            await handlePurrmissionCommand(interaction);
+            await handlePurrmissionCommand(interaction, context);
             break;
 
         default:

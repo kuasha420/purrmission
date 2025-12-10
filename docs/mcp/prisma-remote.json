@@ -1,0 +1,17 @@
+{
+    "mcpServers": {
+        "prisma-remote": {
+            "command": "npx",
+            "args": [
+                "-y",
+                "prisma",
+                "mcp"
+            ],
+            "env": {
+                "//": "This configuration is for Prisma's remote MCP server via Prisma Postgres / Console.",
+                "//PRISMA_PROJECT_URL": "https://console.prisma.io/projects/your-project-id",
+                "//PRISMA_API_KEY": "your-api-key"
+            }
+        }
+    }
+}

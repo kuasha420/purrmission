@@ -1,0 +1,15 @@
+{
+    "mcpServers": {
+        "prisma-local": {
+            "command": "yarn",
+            "args": [
+                "dlx",
+                "prisma",
+                "mcp"
+            ],
+            "env": {
+                "DATABASE_URL": "file:./prisma/purrmission.db"
+            }
+        }
+    }
+}

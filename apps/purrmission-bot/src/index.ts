@@ -32,7 +32,7 @@ async function main(): Promise<void> {
 
     // 3. Create and configure Discord client
     logger.info('Creating Discord client...');
-    const discordClient = createDiscordClient({ services });
+    const discordClient = createDiscordClient({ services, repositories });
 
     // 4. Login to Discord
     logger.info('Logging in to Discord...');

@@ -14,7 +14,15 @@
     "format:check": "prettier --check \"apps/*/src/**/*.ts\"",
     "build": "yarn workspace @purrfecthq/purrmission-bot build",
     "dev:purrmission": "yarn workspace @purrfecthq/purrmission-bot dev",
-    "discord:deploy-commands": "yarn workspace @purrfecthq/purrmission-bot discord:deploy-commands"
+    "discord:deploy-commands": "yarn workspace @purrfecthq/purrmission-bot discord:deploy-commands",
+    "prisma:generate": "prisma generate",
+    "prisma:migrate:dev": "prisma migrate dev",
+    "prisma:studio": "prisma studio",
+    "prisma:format": "prisma format"
   },
-  "packageManager": "yarn@4.12.0"
+  "packageManager": "yarn@4.12.0",
+  "devDependencies": {
+    "dotenv": "^17.2.3",
+    "prisma": "^6.0.0"
+  }
 }
