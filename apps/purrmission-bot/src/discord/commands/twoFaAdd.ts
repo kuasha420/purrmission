@@ -100,6 +100,24 @@ export const purrmissionCommand = new SlashCommandBuilder()
                             .setAutocomplete(true)
                     )
             )
+            .addSubcommand((subcommand) =>
+                subcommand
+                    .setName('update')
+                    .setDescription('Update a TOTP account (e.g. add backup key)')
+                    .addStringOption((option) =>
+                        option
+                            .setName('account')
+                            .setDescription('Account name')
+                            .setRequired(true)
+                            .setAutocomplete(true)
+                    )
+                    .addStringOption((option) =>
+                        option
+                            .setName('backup_key')
+                            .setDescription('Backup key / recovery code to store')
+                            .setRequired(true)
+                    )
+            )
     );
 
 
@@ -125,6 +143,8 @@ export async function handlePurrmissionCommand(
         await handleList2FA(interaction, context);
     } else if (subcommand === 'get') {
         await handleGet2FA(interaction, context);
+    } else if (subcommand === 'update') {
+        await handleUpdate2FA(interaction, context);
     } else {
         await interaction.reply({
             content: 'Unsupported subcommand for /purrmission 2fa.',
@@ -140,7 +160,11 @@ export async function handlePurrmissionAutocomplete(
     const subcommandGroup = interaction.options.getSubcommandGroup(false);
     const subcommand = interaction.options.getSubcommand(false);
 
-    if (subcommandGroup !== '2fa' || subcommand !== 'get') {
+    if (subcommandGroup !== '2fa') {
+        return;
+    }
+
+    if (subcommand !== 'get' && subcommand !== 'update') {
         return;
     }
 
@@ -433,4 +457,56 @@ async function handleAdd2FA(
             ephemeral: true,
         });
     }
+}
+
+async function handleUpdate2FA(
+    interaction: ChatInputCommandInteraction,
+    context: CommandContext
+): Promise<void> {
+    const accountName = interaction.options.getString('account', true);
+    const backupKey = interaction.options.getString('backup_key', true);
+    const requesterId = interaction.user.id;
+    const { totp: totpRepository } = context.repositories;
+
+    // Only owner can update backup key in v0.0.1
+    // We check personal accounts first, then shared, but ensure ownership.
+    let account = await totpRepository.findByOwnerAndName(requesterId, accountName);
+
+    if (!account) {
+        // Check shared accounts too, but we verify ownership next
+        const sharedAccounts = await totpRepository.findSharedVisibleTo(requesterId);
+        account = sharedAccounts.find((a) => a.accountName === accountName) ?? null;
+    }
+
+    if (!account) {
+        await interaction.reply({
+            content: '❌ Account not found.',
+            ephemeral: true,
+        });
+        return;
+    }
+
+    if (account.ownerDiscordUserId !== requesterId) {
+        await interaction.reply({
+            content:
+                '❌ You are not the owner of this 2FA account. Only the owner can update the backup key.',
+            ephemeral: true,
+        });
+        return;
+    }
+
+    account.backupKey = backupKey;
+
+    await totpRepository.update(account);
+
+    await interaction.reply({
+        content: [
+            '✅ Backup key updated successfully.',
+            '',
+            `Account: **${account.accountName}**`,
+            '',
+            '_Your backup key is now stored with this TOTP account._',
+        ].join('\n'),
+        ephemeral: true,
+    });
 }

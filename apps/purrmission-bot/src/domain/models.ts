@@ -176,6 +176,9 @@ export interface TOTPAccount {
     /** True if this account is intended to be shared */
     shared: boolean;
 
+    /** Optional backup key / recovery code */
+    backupKey?: string;
+
     /** Timestamp when the account was created */
     createdAt: Date;
 

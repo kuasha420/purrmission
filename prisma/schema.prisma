@@ -73,6 +73,7 @@ model TOTPAccount {
   secret             String
   issuer             String?
   shared             Boolean  @default(false)
+  backupKey          String?
   createdAt          DateTime @default(now())
   updatedAt          DateTime @updatedAt
 

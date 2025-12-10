@@ -251,6 +251,7 @@ export class InMemoryTOTPRepository implements TOTPRepository {
         const newAccount: TOTPAccount = {
             ...account,
             id: crypto.randomUUID(),
+            backupKey: account.backupKey,
             createdAt: new Date(),
             updatedAt: new Date(),
         };
@@ -265,6 +266,7 @@ export class InMemoryTOTPRepository implements TOTPRepository {
         }
         const updated: TOTPAccount = {
             ...account,
+            backupKey: account.backupKey,
             updatedAt: new Date(),
         };
         this.accounts.set(updated.id, updated);
@@ -408,6 +410,7 @@ export class PrismaTOTPRepository implements TOTPRepository {
         secret: string;
         issuer: string | null;
         shared: boolean;
+        backupKey?: string | null;
         createdAt: Date;
         updatedAt: Date;
     }): TOTPAccount {
@@ -418,6 +421,7 @@ export class PrismaTOTPRepository implements TOTPRepository {
             secret: row.secret,
             issuer: row.issuer ?? undefined,
             shared: row.shared,
+            backupKey: row.backupKey ?? undefined,
             createdAt: row.createdAt,
             updatedAt: row.updatedAt,
         };
