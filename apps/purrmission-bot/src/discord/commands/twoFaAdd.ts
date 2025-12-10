@@ -2,13 +2,20 @@ import {
     SlashCommandBuilder,
     type ChatInputCommandInteraction,
     type SlashCommandSubcommandBuilder,
+    type AutocompleteInteraction,
 } from 'discord.js';
 
 import type { CommandContext } from './context.js';
 import {
     createTOTPAccountFromSecret,
     createTOTPAccountFromUri,
+    generateTOTPCode,
 } from '../../domain/totp.js';
+import type { TOTPAccount } from '../../domain/models.js';
+
+const LAST_GET_REQUEST: Map<string, number> = new Map();
+// key: `${userId}:${accountName}`, value: timestamp (ms)
+const GET_RATE_LIMIT_MS = 10_000; // 10 seconds
 
 export const purrmissionCommand = new SlashCommandBuilder()
     .setName('purrmission')
@@ -81,9 +88,21 @@ export const purrmissionCommand = new SlashCommandBuilder()
                             .setRequired(false)
                     )
             )
+            .addSubcommand((subcommand) =>
+                subcommand
+                    .setName('get')
+                    .setDescription('Get a TOTP code for one of your accounts')
+                    .addStringOption((option) =>
+                        option
+                            .setName('account')
+                            .setDescription('Account name')
+                            .setRequired(true)
+                            .setAutocomplete(true)
+                    )
+            )
     );
 
-import type { TOTPAccount } from '../../domain/models.js';
+
 
 export async function handlePurrmissionCommand(
     interaction: ChatInputCommandInteraction,
@@ -104,9 +123,139 @@ export async function handlePurrmissionCommand(
         await handleAdd2FA(interaction, context);
     } else if (subcommand === 'list') {
         await handleList2FA(interaction, context);
+    } else if (subcommand === 'get') {
+        await handleGet2FA(interaction, context);
     } else {
         await interaction.reply({
             content: 'Unsupported subcommand for /purrmission 2fa.',
+            ephemeral: true,
+        });
+    }
+}
+
+export async function handlePurrmissionAutocomplete(
+    interaction: AutocompleteInteraction,
+    context: CommandContext
+): Promise<void> {
+    const subcommandGroup = interaction.options.getSubcommandGroup(false);
+    const subcommand = interaction.options.getSubcommand(false);
+
+    if (subcommandGroup !== '2fa' || subcommand !== 'get') {
+        return;
+    }
+
+    const focusedOption = interaction.options.getFocused(true);
+    if (focusedOption.name !== 'account') {
+        return;
+    }
+
+    const query = focusedOption.value.trim().toLowerCase();
+    const ownerDiscordUserId = interaction.user.id;
+    const { totp: totpRepository } = context.repositories;
+
+    // Load accounts visible to this user:
+    const personalAccounts = await totpRepository.findByOwnerDiscordUserId(
+        ownerDiscordUserId
+    );
+    const sharedAccounts = await totpRepository.findSharedVisibleTo(ownerDiscordUserId);
+
+    // Merge + dedupe by accountName, preferring personal first
+    const seen = new Set<string>();
+    const allAccounts: TOTPAccount[] = [];
+
+    for (const account of personalAccounts) {
+        if (!seen.has(account.accountName)) {
+            seen.add(account.accountName);
+            allAccounts.push(account);
+        }
+    }
+
+    for (const account of sharedAccounts) {
+        if (!seen.has(account.accountName)) {
+            seen.add(account.accountName);
+            allAccounts.push(account);
+        }
+    }
+
+    // Filter by query (simple case-insensitive substring match)
+    const filtered = allAccounts.filter((account) =>
+        account.accountName.toLowerCase().includes(query)
+    );
+
+    const choices = filtered.slice(0, 25).map((account) => ({
+        name: account.accountName,
+        value: account.accountName,
+    }));
+
+    await interaction.respond(choices);
+}
+
+async function handleGet2FA(
+    interaction: ChatInputCommandInteraction,
+    context: CommandContext
+): Promise<void> {
+    const accountName = interaction.options.getString('account', true);
+    const requesterId = interaction.user.id;
+    const { totp: totpRepository } = context.repositories;
+
+    // Simple rate limit per user+account
+    const key = `${requesterId}:${accountName}`;
+    const now = Date.now();
+    const last = LAST_GET_REQUEST.get(key) ?? 0;
+
+    if (now - last < GET_RATE_LIMIT_MS) {
+        const remaining = Math.ceil((GET_RATE_LIMIT_MS - (now - last)) / 1000);
+        await interaction.reply({
+            content: `⏱️ You're requesting codes too quickly for this account. Please wait ~${remaining}s and try again.`,
+            ephemeral: true,
+        });
+        return;
+    }
+
+    // Resolve account: personal first, then shared
+    const personal = await totpRepository.findByOwnerAndName(requesterId, accountName);
+    let account: TOTPAccount | null = personal;
+
+    if (!account) {
+        const sharedAccounts = await totpRepository.findSharedVisibleTo(requesterId);
+        account = sharedAccounts.find((a) => a.accountName === accountName) ?? null;
+    }
+
+    if (!account) {
+        await interaction.reply({
+            content: '❌ No matching 2FA account found that you can access.',
+            ephemeral: true,
+        });
+        return;
+    }
+
+    // Generate TOTP code
+    const code = generateTOTPCode(account);
+
+    // Try to DM the user
+    try {
+        const dm = await interaction.user.createDM();
+        await dm.send(
+            [
+                `🔐 Your TOTP code for **${account.accountName}**:`,
+                '',
+                `**${code}**`,
+                '',
+                '_Code is time-based and will expire soon._',
+            ].join('\n')
+        );
+
+        LAST_GET_REQUEST.set(key, now);
+
+        await interaction.reply({
+            content: '✅ TOTP code sent to your DMs.',
+            ephemeral: true,
+        });
+    } catch (error) {
+        console.error('Failed to DM TOTP code:', error);
+        await interaction.reply({
+            content:
+                "⚠️ I couldn't send you a DM (DMs may be disabled). Please enable DMs from this server and try again.",
             ephemeral: true,
         });
     }

@@ -8,12 +8,17 @@
 import {
     SlashCommandBuilder,
     type ChatInputCommandInteraction,
+    type AutocompleteInteraction,
     type RESTPostAPIChatInputApplicationCommandsJSONBody,
 } from 'discord.js';
 import type { Services } from '../../domain/services.js';
 import { handleRegisterResource } from './registerResource.js';
 import { handleAddGuardian } from './addGuardian.js';
-import { handlePurrmissionCommand, purrmissionCommand } from './twoFaAdd.js';
+import {
+    handlePurrmissionCommand,
+    purrmissionCommand,
+    handlePurrmissionAutocomplete,
+} from './twoFaAdd.js';
 import { logger } from '../../logging/logger.js';
 
 /**
@@ -93,4 +98,25 @@ export async function handleSlashCommand(
                 ephemeral: true,
             });
     }
+}
+
+
+/**
+ * Handle autocomplete interactions.
+ *
+ * @param interaction - The autocomplete interaction
+ * @param context - Command execution context with dependencies
+ */
+export async function handleAutocomplete(
+    interaction: AutocompleteInteraction,
+    context: CommandContext
+): Promise<void> {
+    const { commandName } = interaction;
+
+    if (commandName === 'purrmission') {
+        await handlePurrmissionAutocomplete(interaction, context);
+        return;
+    }
+
+    // No autocomplete for other commands yet – just exit.
 }

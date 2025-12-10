@@ -12,10 +12,11 @@ import {
     type Interaction,
     type ChatInputCommandInteraction,
     type ButtonInteraction,
+    type AutocompleteInteraction,
 } from 'discord.js';
 import { logger } from '../logging/logger.js';
 import type { Services } from '../domain/services.js';
-import { handleSlashCommand } from './commands/index.js';
+import { handleSlashCommand, handleAutocomplete } from './commands/index.js';
 import { handleApprovalButton } from './interactions/approvalButtons.js';
 
 import type { Repositories } from '../domain/repositories.js';
@@ -58,6 +59,15 @@ export function createDiscordClient(deps: DiscordClientDeps): Client {
             // Handle slash commands
             if (interaction.isChatInputCommand()) {
                 await handleChatInputCommand(interaction, deps);
+                return;
+            }
+
+            // Handle autocomplete
+            if (interaction.isAutocomplete()) {
+                await handleAutocomplete(interaction, {
+                    services: deps.services,
+                    repositories: deps.repositories,
+                });
                 return;
             }
 
