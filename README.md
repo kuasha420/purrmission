@@ -67,12 +67,12 @@ yarn dev:purrmission
 
 ### Environment Variables
 
-| Variable | Description |
-|----------|-------------|
-| `DISCORD_BOT_TOKEN` | Your Discord bot token |
-| `DISCORD_CLIENT_ID` | Your Discord application client ID |
-| `DISCORD_GUILD_ID` | Guild ID for development (commands deploy here) |
-| `APP_PORT` | HTTP server port (default: 3000) |
+| Variable            | Description                                     |
+| ------------------- | ----------------------------------------------- |
+| `DISCORD_BOT_TOKEN` | Your Discord bot token                          |
+| `DISCORD_CLIENT_ID` | Your Discord application client ID              |
+| `DISCORD_GUILD_ID`  | Guild ID for development (commands deploy here) |
+| `APP_PORT`          | HTTP server port (default: 3000)                |
 
 ## Usage
 
@@ -85,6 +85,7 @@ Use the Discord slash command:
 ```
 
 This will:
+
 - Create a new protected resource
 - Generate an API key (save this!)
 - Set you as the owner/guardian
@@ -115,6 +116,7 @@ curl -X POST http://localhost:3000/api/requests \
 ```
 
 Response:
+
 ```json
 {
   "requestId": "abc123-...",
@@ -167,12 +169,12 @@ purrmission/
 
 ### Scripts
 
-| Command | Description |
-|---------|-------------|
-| `yarn dev:purrmission` | Start bot in development mode |
-| `yarn build` | Build TypeScript to JavaScript |
-| `yarn lint` | Run ESLint |
-| `yarn format` | Format code with Prettier |
+| Command                        | Description                          |
+| ------------------------------ | ------------------------------------ |
+| `yarn dev:purrmission`         | Start bot in development mode        |
+| `yarn build`                   | Build TypeScript to JavaScript       |
+| `yarn lint`                    | Run ESLint                           |
+| `yarn format`                  | Format code with Prettier            |
 | `yarn discord:deploy-commands` | Register slash commands with Discord |
 
 ## MVP Limitations

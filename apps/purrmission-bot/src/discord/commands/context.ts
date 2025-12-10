@@ -9,6 +9,6 @@ import type { Repositories } from '../../domain/repositories.js';
 import type { Services } from '../../domain/services.js';
 
 export interface CommandContext {
-    repositories: Repositories;
-    services: Services;
+  repositories: Repositories;
+  services: Services;
 }

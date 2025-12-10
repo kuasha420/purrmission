@@ -1,4 +1,4 @@
-import { PrismaClient } from "@prisma/client";
+import { PrismaClient } from '@prisma/client';
 
 let prisma: PrismaClient | null = null;
 
@@ -8,9 +8,9 @@ let prisma: PrismaClient | null = null;
  * This ensures we don't create multiple clients in dev/hot-reload scenarios.
  */
 export function getPrismaClient(): PrismaClient {
-    if (!prisma) {
-        prisma = new PrismaClient();
-    }
+  if (!prisma) {
+    prisma = new PrismaClient();
+  }
 
-    return prisma;
+  return prisma;
 }
