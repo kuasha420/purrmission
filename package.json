@@ -1,6 +1,7 @@
 {
   "name": "purrmission",
   "version": "0.1.0",
+  "description": "Discord-based multi-user approval gate with HTTP API for external services",
   "private": true,
   "type": "module",
   "workspaces": [

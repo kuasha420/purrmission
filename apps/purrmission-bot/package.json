@@ -1,6 +1,7 @@
 {
     "name": "@purrfecthq/purrmission-bot",
     "version": "0.1.0",
+    "description": "Discord bot and HTTP API for Purrmission approval gate",
     "private": true,
     "type": "module",
     "main": "dist/index.js",
