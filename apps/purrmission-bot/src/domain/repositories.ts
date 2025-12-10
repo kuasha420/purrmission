@@ -16,7 +16,10 @@ import type {
     AddGuardianInput,
     CreateApprovalRequestInput,
     ApprovalStatus,
+    TOTPAccount,
 } from './models.js';
+
+import crypto from 'node:crypto';
 
 // =============================================================================
 // Repository Interfaces
@@ -89,6 +92,23 @@ export interface ApprovalRequestRepository {
      * Find all pending requests for a resource.
      */
     findPendingByResourceId(resourceId: string): Promise<ApprovalRequest[]>;
+}
+
+/**
+ * Repository for managing TOTPAccount entities.
+ */
+export interface TOTPRepository {
+    create(account: Omit<TOTPAccount, 'id' | 'createdAt' | 'updatedAt'>): Promise<TOTPAccount>;
+    update(account: TOTPAccount): Promise<TOTPAccount>;
+    deleteById(id: string): Promise<void>;
+    findById(id: string): Promise<TOTPAccount | null>;
+    findByOwnerDiscordUserId(ownerDiscordUserId: string): Promise<TOTPAccount[]>;
+    findByOwnerAndName(ownerDiscordUserId: string, accountName: string): Promise<TOTPAccount | null>;
+    /**
+     * Find all shared accounts visible to the given user.
+     * TODO: Implement fine-grained ACLs. For now, returns all shared accounts.
+     */
+    findSharedVisibleTo(discordUserId: string): Promise<TOTPAccount[]>;
 }
 
 // =============================================================================
@@ -220,6 +240,75 @@ export class InMemoryApprovalRequestRepository implements ApprovalRequestReposit
     }
 }
 
+/**
+ * In-memory implementation of TOTPRepository.
+ */
+export class InMemoryTOTPRepository implements TOTPRepository {
+    private accounts: Map<string, TOTPAccount> = new Map();
+
+    async create(account: Omit<TOTPAccount, 'id' | 'createdAt' | 'updatedAt'>): Promise<TOTPAccount> {
+        const newAccount: TOTPAccount = {
+            ...account,
+            id: crypto.randomUUID(),
+            createdAt: new Date(),
+            updatedAt: new Date(),
+        };
+        this.accounts.set(newAccount.id, newAccount);
+        return newAccount;
+    }
+
+    async update(account: TOTPAccount): Promise<TOTPAccount> {
+        const existing = this.accounts.get(account.id);
+        if (!existing) {
+            throw new Error(`TOTPAccount with ID ${account.id} not found`);
+        }
+        const updated: TOTPAccount = {
+            ...account,
+            updatedAt: new Date(),
+        };
+        this.accounts.set(updated.id, updated);
+        return updated;
+    }
+
+    async deleteById(id: string): Promise<void> {
+        this.accounts.delete(id);
+    }
+
+    async findById(id: string): Promise<TOTPAccount | null> {
+        return this.accounts.get(id) ?? null;
+    }
+
+    async findByOwnerDiscordUserId(ownerDiscordUserId: string): Promise<TOTPAccount[]> {
+        const results: TOTPAccount[] = [];
+        for (const account of this.accounts.values()) {
+            if (account.ownerDiscordUserId === ownerDiscordUserId) {
+                results.push(account);
+            }
+        }
+        return results;
+    }
+
+    async findByOwnerAndName(ownerDiscordUserId: string, accountName: string): Promise<TOTPAccount | null> {
+        for (const account of this.accounts.values()) {
+            if (account.ownerDiscordUserId === ownerDiscordUserId && account.accountName === accountName) {
+                return account;
+            }
+        }
+        return null;
+    }
+
+    async findSharedVisibleTo(discordUserId: string): Promise<TOTPAccount[]> {
+        // TODO: Implement fine-grained ACLs
+        const results: TOTPAccount[] = [];
+        for (const account of this.accounts.values()) {
+            if (account.shared) {
+                results.push(account);
+            }
+        }
+        return results;
+    }
+}
+
 // =============================================================================
 // Repository Container
 // =============================================================================
@@ -232,6 +321,7 @@ export interface Repositories {
     resources: ResourceRepository;
     guardians: GuardianRepository;
     approvalRequests: ApprovalRequestRepository;
+    totp: TOTPRepository;
 }
 
 /**
@@ -242,5 +332,6 @@ export function createInMemoryRepositories(): Repositories {
         resources: new InMemoryResourceRepository(),
         guardians: new InMemoryGuardianRepository(),
         approvalRequests: new InMemoryApprovalRequestRepository(),
+        totp: new InMemoryTOTPRepository(),
     };
 }

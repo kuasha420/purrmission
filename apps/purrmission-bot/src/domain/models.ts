@@ -150,3 +150,35 @@ export type AddGuardianInput = Omit<Guardian, 'createdAt'>;
  * Input for creating a new approval request.
  */
 export type CreateApprovalRequestInput = Omit<ApprovalRequest, 'createdAt'>;
+
+/**
+ * A TOTP account for generating 2FA codes.
+ */
+export interface TOTPAccount {
+    /** Unique identifier for the account */
+    id: string;
+
+    /** Discord ID of the primary owner */
+    ownerDiscordUserId: string;
+
+    /** Human-readable name (e.g., "GitHub (opensource@...)") */
+    accountName: string;
+
+    /**
+     * Raw TOTP secret (BASE32).
+     * TODO: Encrypt this at rest.
+     */
+    secret: string;
+
+    /** Optional issuer from otpauth URI */
+    issuer?: string;
+
+    /** True if this account is intended to be shared */
+    shared: boolean;
+
+    /** Timestamp when the account was created */
+    createdAt: Date;
+
+    /** Timestamp when the account was last updated */
+    updatedAt: Date;
+}
