@@ -16,7 +16,7 @@ Manage shared and personal 2FA accounts directly from Discord.
     - `mode:qr`: (Stub) Support for QR code images planned.
 - **List**:
     - View personal accounts.
-    - content: `shared:True` to see accounts shared with the team.
+    - Option: `shared:True` to see accounts shared with the team.
 - **Get Code**:
     - `/purrmission 2fa get`: Autocomplete search for accounts.
     - Delivers code via ephemeral DM.

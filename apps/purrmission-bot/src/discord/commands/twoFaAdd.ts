@@ -5,6 +5,7 @@ import {
 } from 'discord.js';
 
 import type { CommandContext } from './context.js';
+import { logger } from '../../logging/logger.js';
 import {
   createTOTPAccountFromSecret,
   createTOTPAccountFromUri,
@@ -179,22 +180,14 @@ export async function handlePurrmissionAutocomplete(
   const sharedAccounts = await totpRepository.findSharedVisibleTo(ownerDiscordUserId);
 
   // Merge + dedupe by accountName, preferring personal first
-  const seen = new Set<string>();
-  const allAccounts: TOTPAccount[] = [];
-
-  for (const account of personalAccounts) {
-    if (!seen.has(account.accountName)) {
-      seen.add(account.accountName);
-      allAccounts.push(account);
+  const accountMap = new Map<string, TOTPAccount>();
+  personalAccounts.forEach((acc) => accountMap.set(acc.accountName, acc));
+  sharedAccounts.forEach((acc) => {
+    if (!accountMap.has(acc.accountName)) {
+      accountMap.set(acc.accountName, acc);
     }
-  }
-
-  for (const account of sharedAccounts) {
-    if (!seen.has(account.accountName)) {
-      seen.add(account.accountName);
-      allAccounts.push(account);
-    }
-  }
+  });
+  const allAccounts = Array.from(accountMap.values());
 
   // Filter by query (simple case-insensitive substring match)
   const filtered = allAccounts.filter((account) =>
@@ -271,7 +264,7 @@ async function handleGet2FA(
       ephemeral: true,
     });
   } catch (error) {
-    console.error('Failed to DM TOTP code:', error);
+    logger.error('Failed to DM TOTP code:', error);
     await interaction.reply({
       content:
         "⚠️ I couldn't send you a DM (DMs may be disabled). Please enable DMs from this server and try again.",
@@ -427,12 +420,12 @@ async function handleAdd2FA(
         createdAccountSummary,
         shared ? '🔓 This account is marked as **shared**.' : '🔒 This account is **personal**.',
         '',
-        '_Note: TOTP codes can be retrieved later via `/purrmission 2fa get` (coming soon)._',
+        '_Note: You can now retrieve codes using `/purrmission 2fa get`._',
       ].join('\n'),
       ephemeral: true,
     });
   } catch (error) {
-    console.error(error);
+    logger.error(String(error));
     await interaction.reply({
       content:
         '❌ Failed to add 2FA account. Please check your input (otpauth URI or secret) and try again.',

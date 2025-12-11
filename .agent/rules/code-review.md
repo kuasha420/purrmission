@@ -32,4 +32,4 @@ gh pr view PR_NUMBER --json reviews --jq '.reviews[-1].databaseId'
 ### Important Notes
 
 - **Always use the script** to ensure you get all comments and context.
-- Parse priority levels from comment body: `![critical]`, `![high]`, `![medium]` 
+- Parse priority levels from comment body: `![critical]`, `![high]`, `![medium]`

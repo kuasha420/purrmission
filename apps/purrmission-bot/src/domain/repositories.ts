@@ -319,6 +319,7 @@ export class PrismaTOTPRepository implements TOTPRepository {
         secret: account.secret,
         issuer: account.issuer ?? null,
         shared: account.shared,
+        backupKey: account.backupKey ?? null,
       },
     });
 
@@ -334,6 +335,7 @@ export class PrismaTOTPRepository implements TOTPRepository {
         secret: account.secret,
         issuer: account.issuer ?? null,
         shared: account.shared,
+        backupKey: account.backupKey ?? null,
       },
     });
 

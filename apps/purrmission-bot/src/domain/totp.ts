@@ -121,28 +121,9 @@ export function createTOTPAccountFromSecret(
 
 /**
  * Generates the current TOTP code for the given account.
- * timestamp is optional, defaults to Date.now() via authenticator.
+ * Uses the current system time via authenticator.
  */
-export function generateTOTPCode(account: TOTPAccount, _timestamp?: number): string {
-  // TODO: timestamp parameter integration for custom time if needed.
-  // authenticator.generate uses Date.now() by default.
-  // If we wanted to use timestamp:
-  // if (timestamp) {
-  //    // otplib's generate doesn't take timestamp directly in simpliest form,
-  //    // we'd need to use totp.generate(...) or set options epoch temporarily?
-  //    // Actually authenticator is a class instance of Authenticator.
-  //    // It has .generate(secret)
-  //    // To verify historical/future, we use check/verify.
-  //    // To generate for specific time, we might use underlying core or check docs.
-  //    // authenticator.generate(secret) -> calls internal generic generate.
-  //    // Actually, otplib documentation says:
-  //    // authenticator.generate(secret)
-  //    // To generate for a specific epoch, we usually need the underlying 'totp' instance or pass options?
-  //    // Checking otplib types/docs: `authenticator` is an instance of `Authenticator`.
-  //    // It doesn't seem to easily allow passing epoch to `generate` in the high-level API without re-instantiating or using `totp` core.
-  //    // However, for this MVP, instructions say: "But for MVP, you can ignore timestamp and just use current system time"
-  // }
-
+export function generateTOTPCode(account: TOTPAccount): string {
   return authenticator.generate(account.secret);
 }
 
