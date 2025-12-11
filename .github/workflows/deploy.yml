@@ -1,0 +1,148 @@
+name: Deploy Bot
+
+on:
+  push:
+    branches:
+      - deploy
+    paths:
+      # Bot application
+      - 'apps/purrmission-bot/**'
+      # Root configuration
+      - 'package.json'
+      - 'yarn.lock'
+      - '.yarnrc.yml'
+      # Node version
+      - '.nvmrc'
+      # Workflow itself
+      - '.github/workflows/deploy.yml'
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Enable Corepack
+        run: corepack enable
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: '.nvmrc'
+          cache: 'yarn'
+
+      - name: Install Dependencies
+        run: yarn install --immutable
+
+      - name: Build
+        run: yarn build
+
+      - name: Generate checksums
+        run: |
+          find apps/purrmission-bot/dist -type f -exec sha256sum {} \\; | sort > dist-checksums.txt
+          sha256sum package.json yarn.lock .yarnrc.yml ecosystem.config.cjs >> dist-checksums.txt
+          cat dist-checksums.txt
+
+      - name: Deploy Commands
+        if: github.ref == 'refs/heads/deploy'
+        env:
+          DISCORD_TOKEN: ${{ secrets.DISCORD_TOKEN }}
+          DISCORD_CLIENT_ID: ${{ secrets.DISCORD_CLIENT_ID }}
+        run: yarn workspace purrmission-bot run deploy:commands
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: bot-build
+          path: |
+            apps/purrmission-bot/dist
+            apps/purrmission-bot/package.json
+            package.json
+            yarn.lock
+            .yarnrc.yml
+            ecosystem.config.cjs
+            dist-checksums.txt
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Download artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: bot-build
+
+      - name: Verify checksums
+        run: |
+          echo "Verifying artifact integrity..."
+          sha256sum -c dist-checksums.txt
+
+      - name: Stop PM2 and clean target directory
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USERNAME }}
+          key: ${{ secrets.SSH_KEY }}
+          port: ${{ secrets.SSH_PORT || 22 }}
+          script: |
+            set -e
+            export NVM_DIR="$HOME/.nvm"
+            [ -s "$NVM_DIR/nvm.sh" ] && \\. "$NVM_DIR/nvm.sh"
+            cd ${{ secrets.SSH_TARGET }}
+            pm2 stop Purrmission || true
+            # Remove old deployment files but preserve .env
+            rm -rf apps dist package.json yarn.lock .yarnrc.yml ecosystem.config.cjs dist-checksums.txt
+
+      - name: Copy files to server
+        uses: appleboy/scp-action@v1
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USERNAME }}
+          key: ${{ secrets.SSH_KEY }}
+          port: ${{ secrets.SSH_PORT || 22 }}
+          target: ${{ secrets.SSH_TARGET }}
+          source: "apps,package.json,yarn.lock,.yarnrc.yml,ecosystem.config.cjs,dist-checksums.txt"
+
+      - name: Verify deployment integrity
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USERNAME }}
+          key: ${{ secrets.SSH_KEY }}
+          port: ${{ secrets.SSH_PORT || 22 }}
+          script: |
+            set -e
+            cd ${{ secrets.SSH_TARGET }}
+            echo "Verifying deployed files..."
+            sha256sum -c dist-checksums.txt
+
+      - name: Install dependencies and restart
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USERNAME }}
+          key: ${{ secrets.SSH_KEY }}
+          port: ${{ secrets.SSH_PORT || 22 }}
+          script: |
+            set -e
+            export NVM_DIR="$HOME/.nvm"
+            [ -s "$NVM_DIR/nvm.sh" ] && \\. "$NVM_DIR/nvm.sh"
+            cd ${{ secrets.SSH_TARGET }}
+            
+            # Enable Corepack if not available
+            if ! command -v corepack &> /dev/null; then
+              echo "Enabling corepack..."
+              corepack enable
+            fi
+
+            # Ensure pm2 is installed
+            if ! command -v pm2 &> /dev/null; then
+              echo "pm2 not found, installing globally..."
+              yarn global add pm2
+            fi
+
+            yarn install --immutable
+            pm2 startOrRestart ecosystem.config.cjs

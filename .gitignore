@@ -36,3 +36,9 @@ yarn-error.log*
 
 # Testing
 coverage/
+
+/generated/prisma
+
+# SQLite
+*.db
+*.db-journal

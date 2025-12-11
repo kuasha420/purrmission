@@ -1,0 +1,83 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+enum ResourceMode {
+  ONE_OF_N
+  // TODO: extend with other modes in future if needed (e.g. TWO_OF_N, MAJORITY, etc.)
+}
+
+enum GuardianRole {
+  OWNER
+  GUARDIAN
+}
+
+enum ApprovalRequestStatus {
+  PENDING
+  APPROVED
+  DENIED
+  EXPIRED
+}
+
+model Resource {
+  id        String       @id @default(uuid())
+  name      String
+  mode      ResourceMode @default(ONE_OF_N)
+  apiKey    String
+  createdAt DateTime     @default(now())
+
+  guardians        Guardian[]
+  approvalRequests ApprovalRequest[]
+
+  @@index([apiKey])
+}
+
+model Guardian {
+  id            String       @id @default(uuid())
+  resourceId    String
+  discordUserId String
+  role          GuardianRole @default(GUARDIAN)
+  createdAt     DateTime     @default(now())
+
+  resource Resource @relation(fields: [resourceId], references: [id], onDelete: Cascade)
+
+  @@index([resourceId])
+  @@index([discordUserId])
+}
+
+model ApprovalRequest {
+  id          String                @id @default(uuid())
+  resourceId  String
+  status      ApprovalRequestStatus @default(PENDING)
+  context     Json
+  callbackUrl String? // nullable
+  createdAt   DateTime              @default(now())
+  expiresAt   DateTime?
+
+  resource Resource @relation(fields: [resourceId], references: [id], onDelete: Cascade)
+
+  @@index([resourceId])
+  @@index([status])
+}
+
+model TOTPAccount {
+  id                 String   @id @default(uuid())
+  ownerDiscordUserId String
+  accountName        String
+  /// TODO: Encrypt TOTP secrets at rest in the application layer before writing to DB.
+  secret             String
+  issuer             String?
+  shared             Boolean  @default(false)
+  backupKey          String?
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  @@unique([ownerDiscordUserId, accountName])
+  @@index([ownerDiscordUserId])
+  @@index([shared])
+}
