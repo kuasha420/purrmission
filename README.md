@@ -9,6 +9,32 @@
 - **Shared 2FA / TOTP**: Maintain a centralized vault of 2FA secrets for team accounts (GitHub, AWS, etc.).
 - **Approval Chains**: Require guardian approval for protected resource usage.
 - **Discord Integration**: Get codes and approve requests directly in DMs or channels.
+- **HTTP API**: External services can request approvals via RESTful endpoints.
+- **Pluggable Storage**: In-memory repositories with future support for databases.
+
+## Sponsorship & Licensing
+
+This project is classified under the **Purrfect Universe Licensing Directive** as:
+
+**🟧 Company-Supported Personal IP (CSP-IP)**  
+A category for employee-created projects that are:
+
+* Built by the employee as their personal intellectual property
+* Actively supported, enhanced, or resourced by **Purrfect Software Limited**
+* Strategically aligned with the broader **Purrfect Universe** ecosystem
+* Recognized as dual-heritage work belonging to the creator and the company
+
+Under this classification:
+
+* **Primary Author:** Project Contributors — Original creators & maintainers
+* **Strategic Stewardship:** Universe Architect & PU Founder
+* **Support:** **Purrfect Software Limited** — Engineering, DevOps & Infrastructure
+* **Usage Rights:** Community-friendly, zero-penalty experimentation encouraged
+* **Disclosure:** Reuse, forks, or derivative tools should mention this CSP-IP origin
+
+This ensures the project remains open, resilient, supported, and future-proof while preserving individual authorship and PU-aligned governance.
+
+## How It Works
 
 
 1. **External services** send approval requests via HTTP API
@@ -200,14 +226,32 @@ This is a scaffold/MVP with the following limitations:
 - **No callback implementation**: Callback URLs are logged but not called. TODO: Implement HTTP callbacks.
 - **Single channel/DM**: Messages go to guardian DMs. TODO: Configurable notification channels.
 
+## Deployment
+
+For production deployment instructions, server requirements, and GitHub Actions configuration, see the [Deployment Guide](DEPLOY.md).
+
 ## Further Reading
 
 - [Purrmission 2FA Guide](docs/purrmission-2fa.md)
+- [Deployment Guide](DEPLOY.md)
+- [Agent Instructions](.agent/rules/README.md)
 
 
 ## License
 
 MIT
+
+### 🛡️ ICARO-42/B ORDINANCE — COMPLIANCE NOTICE
+
+This project is distributed under the MIT License — designed for maximum freedom, remixability, and interstellar interoperability.
+
+Under the Interstellar Code Appropriation & Redistribution Ordinance (ICARO-42/B),
+reuse, modification, and redistribution are fully permitted. Creative divergence is
+not a violation — it is an expected evolutionary pathway.
+
+If your fork, derivative, or remix contributes something meaningful to any corner
+of the universe, a small nod of acknowledgment helps maintain cosmic symmetry.
+Not required. Always appreciated.
 
 ---
 
