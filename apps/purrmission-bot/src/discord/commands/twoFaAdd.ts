@@ -425,7 +425,7 @@ async function handleAdd2FA(
       ephemeral: true,
     });
   } catch (error) {
-    logger.error(String(error));
+    logger.error('Failed to add 2FA account', { error });
     await interaction.reply({
       content:
         '❌ Failed to add 2FA account. Please check your input (otpauth URI or secret) and try again.',

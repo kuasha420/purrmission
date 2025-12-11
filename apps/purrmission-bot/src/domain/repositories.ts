@@ -348,8 +348,15 @@ export class PrismaTOTPRepository implements TOTPRepository {
       await this.prisma.tOTPAccount.delete({
         where: { id },
       });
-    } catch {
-      // TODO: optionally check for Prisma.PrismaClientKnownRequestError and ignore P2025 (record not found)
+    } catch (e) {
+      // Prisma's error code for "record to delete does not exist" is P2025.
+      // We check for this specific error to avoid swallowing other unexpected errors.
+      if ((e as { code?: string }).code === 'P2025') {
+        // Record not found, which is fine for an idempotent delete.
+        return;
+      }
+      // Re-throw any other unexpected errors.
+      throw e;
     }
   }
 
