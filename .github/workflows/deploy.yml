@@ -63,6 +63,7 @@ jobs:
             yarn.lock
             .yarnrc.yml
             ecosystem.config.cjs
+            prisma
             dist-checksums.txt
 
   deploy:
@@ -93,8 +94,10 @@ jobs:
             [ -s "$NVM_DIR/nvm.sh" ] && \\. "$NVM_DIR/nvm.sh"
             cd ${{ secrets.SSH_TARGET }}
             pm2 stop Purrmission || true
-            # Remove old deployment files but preserve .env
-            rm -rf apps dist package.json yarn.lock .yarnrc.yml ecosystem.config.cjs dist-checksums.txt
+            # Remove old deployment files but preserve .env and potential sqlite db if in non-standard location
+            # However, standard practice dictates DB outside this folder.
+            # We explicitly remove known build artifacts.
+            rm -rf apps dist package.json yarn.lock .yarnrc.yml ecosystem.config.cjs dist-checksums.txt prisma
 
       - name: Copy files to server
         uses: appleboy/scp-action@v1
@@ -104,7 +107,7 @@ jobs:
           key: ${{ secrets.SSH_KEY }}
           port: ${{ secrets.SSH_PORT || 22 }}
           target: ${{ secrets.SSH_TARGET }}
-          source: "apps,package.json,yarn.lock,.yarnrc.yml,ecosystem.config.cjs,dist-checksums.txt"
+          source: "apps,package.json,yarn.lock,.yarnrc.yml,ecosystem.config.cjs,dist-checksums.txt,prisma"
 
       - name: Verify deployment integrity
         uses: appleboy/ssh-action@v1

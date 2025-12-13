@@ -5,6 +5,9 @@
 - [ ] **Environment Variables**:
     - [ ] `DATABASE_URL` is set in `.env`.
         - *Critical*: For SQLite, verify the path points to a persistent volume/location outside the ephemeral build directories.
+        - **Example**: 
+            - BAD: `file:./dev.db` (Relative to app, deleted on deploy)
+            - GOOD: `file:/home/user/purrmission_data/prod.db` (Absolute path, outside deploy folder)
     - [ ] `DISCORD_TOKEN`, `DISCORD_CLIENT_ID` are set.
     - [ ] `PORT` is set (default 3000).
 
