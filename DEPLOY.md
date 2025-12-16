@@ -149,12 +149,6 @@ See `.env.example` for a complete list of available environment variables.
 
 ## High Level Verification
 
-> [!WARNING]
-> **Critical Missing Artifact**: The current `deploy.yml` does **not** upload the `prisma/` directory. 
-> This means `npx prisma migrate deploy` will **FAIL** on the server because `schema.prisma` is missing.
-> 
-> **Workaround**: You must manually copy the `prisma/` directory to the server or update `deploy.yml`.
-
 ### Database Persistence
 If using SQLite, ensure `DATABASE_URL` points to a persistent location (e.g., `/home/user/purrmission_data/dev.db`) rather than inside the deployment folder, as cleanup scripts may delete it.
 
