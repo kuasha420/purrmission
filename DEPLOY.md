@@ -39,6 +39,33 @@ Configure the following secrets in your GitHub repository settings (Settings > S
 | `SSH_PORT` | (Optional) The SSH port. Defaults to `22`. |
 | `SSH_TARGET` | The absolute path to the deployment directory on the server (e.g., `/home/user/purrmission-bot`). |
 
+### SSH Key Setup (Quick Reference)
+
+Generate a dedicated deployment key:
+
+```bash
+# Generate Ed25519 key (recommended)
+ssh-keygen -t ed25519 -C "purrmission-deploy" -f ~/.ssh/purrmission_deploy
+
+# Or RSA if Ed25519 is unsupported
+ssh-keygen -t rsa -b 4096 -C "purrmission-deploy" -f ~/.ssh/purrmission_deploy
+```
+
+Copy public key to server:
+
+```bash
+ssh-copy-id -i ~/.ssh/purrmission_deploy.pub user@your-server
+```
+
+Add the **private key** contents to GitHub Secrets as `SSH_KEY`:
+
+```bash
+cat ~/.ssh/purrmission_deploy
+```
+
+> [!TIP]
+> Use a passphrase-less key for automation, or configure ssh-agent if needed.
+
 ## Configuration Files
 
 ### ecosystem.config.cjs
