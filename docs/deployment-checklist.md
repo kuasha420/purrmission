@@ -8,7 +8,7 @@
         - **Example**: 
             - BAD: `file:./dev.db` (Relative to app, deleted on deploy)
             - GOOD: `file:/home/user/purrmission_data/prod.db` (Absolute path, outside deploy folder)
-    - [ ] `DISCORD_TOKEN`, `DISCORD_CLIENT_ID` are set.
+    - [ ] `DISCORD_BOT_TOKEN`, `DISCORD_CLIENT_ID` are set.
     - [ ] `PORT` is set (default 3000).
 
 - [ ] **Database & Migrations**:

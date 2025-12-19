@@ -66,9 +66,9 @@ jobs:
       - name: Deploy Commands
         if: env.DEPLOY_DRY_RUN != 'true' && github.ref == 'refs/heads/deploy'
         env:
-          DISCORD_TOKEN: ${{ secrets.DISCORD_TOKEN }}
+          DISCORD_BOT_TOKEN: ${{ secrets.DISCORD_BOT_TOKEN }}
           DISCORD_CLIENT_ID: ${{ secrets.DISCORD_CLIENT_ID }}
-        run: yarn workspace purrmission-bot run deploy:commands
+        run: yarn workspace @purrfecthq/purrmission-bot run discord:deploy-commands
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4

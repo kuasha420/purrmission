@@ -14,6 +14,9 @@ const envSchema = z.object({
 
   // HTTP Server Configuration
   APP_PORT: z.coerce.number().default(3000),
+
+  // Database Configuration
+  DATABASE_URL: z.string().min(1, 'DATABASE_URL is required'),
 });
 
 /**

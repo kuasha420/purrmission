@@ -31,7 +31,7 @@ Configure the following secrets in your GitHub repository settings (Settings > S
 
 | Secret Name | Description |
 | :--- | :--- |
-| `DISCORD_TOKEN` | The Discord bot token for production command deployment. |
+| `DISCORD_BOT_TOKEN` | The Discord bot token for production command deployment. |
 | `DISCORD_CLIENT_ID` | The Discord application client ID for production command deployment. |
 | `SSH_HOST` | The IP address or hostname of your server. |
 | `SSH_USERNAME` | The SSH username. |
@@ -111,7 +111,7 @@ If you encounter errors related to native modules, ensure that the Node.js versi
 - To rebuild dependencies: `yarn rebuild`
 
 ### Command Registration Issues
-- Ensure `DISCORD_TOKEN` and `DISCORD_CLIENT_ID` are set in GitHub Secrets
+- Ensure `DISCORD_BOT_TOKEN` and `DISCORD_CLIENT_ID` are set in GitHub Secrets
 - Commands are deployed during the GitHub Actions build phase
 - Check the Actions log for command deployment errors
 
@@ -138,7 +138,7 @@ If you need to deploy manually:
 Ensure the following environment variables are set in `.env` on the server:
 
 ```env
-DISCORD_TOKEN=your_bot_token
+DISCORD_BOT_TOKEN=your_bot_token
 DISCORD_CLIENT_ID=your_client_id
 DISCORD_GUILD_ID=your_guild_id  # For testing
 PORT=3000  # Optional, for HTTP API
