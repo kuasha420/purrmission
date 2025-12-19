@@ -99,6 +99,12 @@ export const purrmissionCommand = new SlashCommandBuilder()
               .setRequired(true)
               .setAutocomplete(true)
           )
+          .addBooleanOption((option) =>
+            option
+              .setName('backup')
+              .setDescription('Get the backup key instead of a TOTP code')
+              .setRequired(false)
+          )
       )
       .addSubcommand((subcommand) =>
         subcommand
@@ -207,6 +213,7 @@ async function handleGet2FA(
   context: CommandContext
 ): Promise<void> {
   const accountName = interaction.options.getString('account', true);
+  const getBackup = interaction.options.getBoolean('backup', false) ?? false;
   const requesterId = interaction.user.id;
   const { totp: totpRepository } = context.repositories;
 
@@ -238,6 +245,44 @@ async function handleGet2FA(
       content: '❌ No matching 2FA account found that you can access.',
       ephemeral: true,
     });
+    return;
+  }
+
+  if (getBackup) {
+    if (!account.backupKey) {
+      await interaction.reply({
+        content: `❌ No backup key found for **${account.accountName}**. You can add one with \`/purrmission 2fa update\`.`,
+        ephemeral: true,
+      });
+      return;
+    }
+
+    try {
+      const dm = await interaction.user.createDM();
+      await dm.send(
+        [
+          `🔐 Your backup key for **${account.accountName}**:`,
+          '',
+          `\`${account.backupKey}\``,
+          '',
+          '_Keep this key safe and do not share it._',
+        ].join('\n')
+      );
+
+      LAST_GET_REQUEST.set(key, now);
+
+      await interaction.reply({
+        content: '✅ Backup key sent to your DMs.',
+        ephemeral: true,
+      });
+    } catch (error) {
+      logger.error('Failed to DM backup key:', error);
+      await interaction.reply({
+        content:
+          "⚠️ I couldn't send you a DM (DMs may be disabled). Please enable DMs from this server and try again.",
+        ephemeral: true,
+      });
+    }
     return;
   }
 
