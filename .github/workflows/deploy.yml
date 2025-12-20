@@ -71,6 +71,8 @@ jobs:
         env:
           DISCORD_BOT_TOKEN: ${{ secrets.DISCORD_BOT_TOKEN }}
           DISCORD_CLIENT_ID: ${{ secrets.DISCORD_CLIENT_ID }}
+          DISCORD_GUILD_ID: ${{ secrets.DISCORD_GUILD_ID }}
+          DATABASE_URL: "file:./dev.db" # Dummy value for validation, not used by script
         run: yarn workspace @purrfecthq/purrmission-bot run discord:deploy-commands
 
       - name: Upload artifact
