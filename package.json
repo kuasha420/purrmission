@@ -21,10 +21,12 @@
     "prisma:format": "prisma format"
   },
   "packageManager": "yarn@4.12.0",
+  "dependencies": {
+    "dotenv": "^16.4.7"
+  },
   "devDependencies": {
     "@typescript-eslint/eslint-plugin": "^8.49.0",
     "@typescript-eslint/parser": "^8.49.0",
-    "dotenv": "^17.2.3",
     "eslint": "^9.39.1",
     "prettier": "^3.7.4",
     "prisma": "^6.0.0",

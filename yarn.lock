@@ -1211,13 +1211,6 @@ __metadata:
   languageName: node
   linkType: hard
 
-"dotenv@npm:^17.2.3":
-  version: 17.2.3
-  resolution: "dotenv@npm:17.2.3"
-  checksum: 10c0/c884403209f713214a1b64d4d1defa4934c2aa5b0002f5a670ae298a51e3c3ad3ba79dfee2f8df49f01ae74290fcd9acdb1ab1d09c7bfb42b539036108bb2ba0
-  languageName: node
-  linkType: hard
-
 "effect@npm:3.18.4":
   version: 3.18.4
   resolution: "effect@npm:3.18.4"
@@ -2424,7 +2417,7 @@ __metadata:
   dependencies:
     "@typescript-eslint/eslint-plugin": "npm:^8.49.0"
     "@typescript-eslint/parser": "npm:^8.49.0"
-    dotenv: "npm:^17.2.3"
+    dotenv: "npm:^16.4.7"
     eslint: "npm:^9.39.1"
     prettier: "npm:^3.7.4"
     prisma: "npm:^6.0.0"
