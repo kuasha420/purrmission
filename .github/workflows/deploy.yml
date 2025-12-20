@@ -62,7 +62,7 @@ jobs:
 
       - name: Generate checksums
         run: |
-          find apps/purrmission-bot/dist -type f -exec sha256sum {} \\; | sort > dist-checksums.txt
+          find apps/purrmission-bot/dist -type f -exec sha256sum {} \; | sort > dist-checksums.txt
           sha256sum package.json yarn.lock .yarnrc.yml ecosystem.config.cjs >> dist-checksums.txt
           cat dist-checksums.txt
 
