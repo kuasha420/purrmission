@@ -54,6 +54,9 @@ jobs:
             echo "Production deploy mode."
           fi
 
+      - name: Generate Prisma Client
+        run: yarn prisma generate
+
       - name: Build
         run: yarn build
 
