@@ -11,6 +11,7 @@ import { env } from '../config/env.js';
 const ALGORITHM = 'aes-256-gcm';
 const IV_LENGTH = 12; // GCM recommended IV length
 const AUTH_TAG_LENGTH = 16;
+const HEX_REGEX = /^[0-9a-fA-F]{64}$/;
 
 /**
  * Get the encryption key from environment.
@@ -22,8 +23,8 @@ function getEncryptionKey(): Buffer {
         throw new Error('ENCRYPTION_KEY environment variable is not set');
     }
 
-    if (keyHex.length !== 64) {
-        throw new Error('ENCRYPTION_KEY must be a 32-byte hex string (64 characters)');
+    if (!HEX_REGEX.test(keyHex)) {
+        throw new Error('ENCRYPTION_KEY must be a valid 32-byte hex string (64 hexadecimal characters)');
     }
 
     return Buffer.from(keyHex, 'hex');
@@ -61,18 +62,25 @@ export function decryptValue(ciphertext: string): string {
     const parts = ciphertext.split(':');
 
     if (parts.length !== 3) {
-        throw new Error('Invalid ciphertext format');
+        // Generic error to avoid leaking information about expected format
+        throw new Error('Decryption failed: invalid data');
     }
 
-    const iv = Buffer.from(parts[0], 'base64');
-    const authTag = Buffer.from(parts[1], 'base64');
-    const encrypted = Buffer.from(parts[2], 'base64');
+    try {
+        const iv = Buffer.from(parts[0], 'base64');
+        const authTag = Buffer.from(parts[1], 'base64');
+        const encrypted = Buffer.from(parts[2], 'base64');
 
-    const decipher = crypto.createDecipheriv(ALGORITHM, key, iv, {
-        authTagLength: AUTH_TAG_LENGTH,
-    });
-    decipher.setAuthTag(authTag);
+        const decipher = crypto.createDecipheriv(ALGORITHM, key, iv, {
+            authTagLength: AUTH_TAG_LENGTH,
+        });
+        decipher.setAuthTag(authTag);
 
-    const decrypted = Buffer.concat([decipher.update(encrypted), decipher.final()]);
-    return decrypted.toString('utf8');
+        const decrypted = Buffer.concat([decipher.update(encrypted), decipher.final()]);
+        return decrypted.toString('utf8');
+    } catch {
+        // Generic error to avoid leaking cryptographic details
+        throw new Error('Decryption failed: invalid data or wrong key');
+    }
 }
+
