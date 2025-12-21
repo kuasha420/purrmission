@@ -148,14 +148,17 @@ jobs:
             [ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"
             cd ${{ secrets.SSH_TARGET }}
             
-            # Enable Corepack if not available
-            if ! command -v corepack &> /dev/null; then
-              echo "Enabling corepack..."
-              corepack enable
-            fi
-
-            # Ensure pnpm is installed via corepack
+            # Enable Corepack
+            corepack enable
+            
+            # Prepare pnpm
             corepack prepare pnpm@9.15.1 --activate
+
+            # Ensure pm2 is installed globally if not present
+            if ! command -v pm2 &> /dev/null; then
+                echo "pm2 not found, installing..."
+                pnpm add -g pm2
+            fi
 
             pnpm install --frozen-lockfile
             
