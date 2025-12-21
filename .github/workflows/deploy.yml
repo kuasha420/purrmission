@@ -11,6 +11,7 @@ on:
       - 'package.json'
       - 'yarn.lock'
       - '.yarnrc.yml'
+      - 'turbo.json'
       # Node version
       - '.nvmrc'
       # Workflow itself
