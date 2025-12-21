@@ -549,21 +549,6 @@ __metadata:
   languageName: node
   linkType: hard
 
-"@prisma/client@npm:^6.0.0":
-  version: 6.19.0
-  resolution: "@prisma/client@npm:6.19.0"
-  peerDependencies:
-    prisma: "*"
-    typescript: ">=5.1.0"
-  peerDependenciesMeta:
-    prisma:
-      optional: true
-    typescript:
-      optional: true
-  checksum: 10c0/c3173fae0195adc952ab47d30120b5ae397b71997b9b60c2ba78fb10a99d10bda2996869c311164a08311ae0bbde41b86806898e49648df3fe713fbe8cb4659e
-  languageName: node
-  linkType: hard
-
 "@prisma/client@npm:^7.2.0":
   version: 7.2.0
   resolution: "@prisma/client@npm:7.2.0"
@@ -643,7 +628,6 @@ __metadata:
   version: 0.0.0-use.local
   resolution: "@purrfecthq/purrmission-bot@workspace:apps/purrmission-bot"
   dependencies:
-    "@prisma/client": "npm:^6.0.0"
     "@types/node": "npm:^22.10.2"
     discord.js: "npm:^14.16.3"
     dotenv: "npm:^16.4.7"
