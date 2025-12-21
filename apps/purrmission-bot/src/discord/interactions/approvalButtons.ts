@@ -117,37 +117,16 @@ export async function handleApprovalButton(
 
     // Handle callback if configured
     if (result.action?.type === 'CALL_CALLBACK_URL') {
-      logger.info('Callback URL configured, would call', {
+      logger.info('Callback URL configured', {
         url: result.action.url,
         status: result.action.status,
       });
-
       // TODO: Implement actual HTTP callback
-      // For MVP, just log it. In production:
-      // await fetch(result.action.url, {
-      //   method: 'POST',
-      //   headers: { 'Content-Type': 'application/json' },
-      //   body: JSON.stringify({
-      //     requestId,
-      //     status: result.action.status,
-      //     resolvedBy: userId,
-      //     resolvedAt: new Date().toISOString(),
-      //   }),
-      // });
     }
 
-    logger.info('Approval button processed successfully', {
-      requestId,
-      action,
-      userId,
-    });
+    logger.info('Approval button processed', { requestId, action, userId });
   } catch (error) {
-    logger.error('Failed to process approval button', {
-      requestId,
-      action,
-      userId,
-      error: error instanceof Error ? error.message : String(error),
-    });
+    logger.error('Failed to process approval button', { requestId, error });
 
     await interaction.followUp({
       content: '❌ Failed to process your decision. Please try again.',

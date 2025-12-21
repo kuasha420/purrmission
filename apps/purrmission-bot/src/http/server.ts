@@ -138,8 +138,7 @@ export function createHttpServer(deps: HttpServerDeps): FastifyInstance {
   server.get<{ Params: { id: string } }>('/api/requests/:id', async (request, reply) => {
     const { id } = request.params;
 
-    const approvalRequest =
-      await services.approval['deps'].repositories.approvalRequests.findById(id);
+    const approvalRequest = await services.approval.getApprovalRequest(id);
     if (!approvalRequest) {
       return reply.status(404).send({
         error: 'Request not found',

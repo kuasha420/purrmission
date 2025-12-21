@@ -209,6 +209,13 @@ export class ApprovalService {
 
     return result;
   }
+
+  /**
+   * Get an approval request by ID.
+   */
+  async getApprovalRequest(id: string): Promise<ApprovalRequest | null> {
+    return this.deps.repositories.approvalRequests.findById(id);
+  }
 }
 
 /**

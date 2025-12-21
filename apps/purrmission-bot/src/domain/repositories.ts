@@ -22,27 +22,13 @@ import type {
 
 import crypto from 'node:crypto';
 
-// =============================================================================
-// Repository Interfaces
-// =============================================================================
 
-/**
- * Repository for managing Resource entities.
- */
+
 export interface ResourceRepository {
-  /**
-   * Create a new resource.
-   */
   create(resource: CreateResourceInput): Promise<Resource>;
 
-  /**
-   * Find a resource by its ID.
-   */
   findById(id: string): Promise<Resource | null>;
 
-  /**
-   * Find a resource by its API key.
-   */
   findByApiKey(apiKey: string): Promise<Resource | null>;
 }
 
@@ -108,9 +94,7 @@ export interface TOTPRepository {
   findSharedVisibleTo(discordUserId: string): Promise<TOTPAccount[]>;
 }
 
-// =============================================================================
-// In-Memory Implementations
-// =============================================================================
+
 
 /**
  * In-memory implementation of ResourceRepository.
@@ -427,9 +411,7 @@ export class PrismaTOTPRepository implements TOTPRepository {
   }
 }
 
-// =============================================================================
-// Repository Container
-// =============================================================================
+
 
 /**
  * Container for all repositories.

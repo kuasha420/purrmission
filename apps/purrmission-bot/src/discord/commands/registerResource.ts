@@ -30,7 +30,6 @@ export async function handleRegisterResource(
   try {
     const { resource, guardian } = await services.resource.createResource(name, userId);
 
-    // Reply with resource details (ephemeral to keep API key private)
     await interaction.reply({
       content: [
         '✅ **Resource registered successfully!**',
@@ -49,17 +48,9 @@ export async function handleRegisterResource(
       ephemeral: true,
     });
 
-    logger.info('Resource registered successfully', {
-      resourceId: resource.id,
-      name: resource.name,
-      ownerId: userId,
-    });
+    logger.info('Resource registered', { resourceId: resource.id, ownerId: userId });
   } catch (error) {
-    logger.error('Failed to register resource', {
-      name,
-      ownerId: userId,
-      error: error instanceof Error ? error.message : String(error),
-    });
+    logger.error('Failed to register resource', error);
 
     await interaction.reply({
       content: '❌ Failed to register resource. Please try again.',

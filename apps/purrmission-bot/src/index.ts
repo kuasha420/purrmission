@@ -1,12 +1,5 @@
 /**
  * Purrmission Bot - Main Entry Point
- *
- * This is the main entry point for the Purrmission Discord bot.
- * It initializes and starts:
- * 1. In-memory repositories
- * 2. Application services
- * 3. Discord client
- * 4. HTTP server
  */
 
 import { env } from './config/env.js';
@@ -24,7 +17,6 @@ import { PrismaTOTPRepository } from './domain/repositories.js';
 async function main(): Promise<void> {
   logger.info('🐱 Starting Purrmission Bot...');
 
-  // 1. Initialize repositories (in-memory for MVP)
   logger.info('Initializing repositories...');
   const repositories = createInMemoryRepositories();
 
@@ -32,15 +24,12 @@ async function main(): Promise<void> {
   const prisma = getPrismaClient();
   repositories.totp = new PrismaTOTPRepository(prisma);
 
-  // 2. Initialize services
   logger.info('Initializing services...');
   const services = createServices({ repositories });
 
-  // 3. Create and configure Discord client
   logger.info('Creating Discord client...');
   const discordClient = createDiscordClient({ services, repositories });
 
-  // 4. Login to Discord
   logger.info('Logging in to Discord...');
   await discordClient.login(env.DISCORD_BOT_TOKEN);
 
@@ -53,7 +42,6 @@ async function main(): Promise<void> {
     }
   });
 
-  // 5. Start HTTP server
   logger.info('Starting HTTP server...');
   await startHttpServer(env.APP_PORT, {
     services,

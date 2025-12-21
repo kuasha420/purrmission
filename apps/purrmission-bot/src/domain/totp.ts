@@ -1,14 +1,12 @@
 import { authenticator } from 'otplib';
 import type { TOTPAccount } from './models.js';
 
-// Configure authenticator with sane defaults
+// Configure authenticator
 authenticator.options = {
   ...authenticator.options,
   step: 30,
   digits: 6,
-  // encoding: "base32" -> authenticator defaults to base32 via keyEncoder/keyDecoder
 };
-// TODO: In the future, per-account options (step/digits) may be supported if needed.
 
 export interface ParsedOtpauthUri {
   accountName: string;
@@ -32,21 +30,10 @@ export function parseOtpauthUri(uri: string): ParsedOtpauthUri {
     throw new Error(`Invalid protocol: ${url.protocol}. Expected 'otpauth:'`);
   }
 
-  // Check host or type. usually otpauth://totp/...
-  // node's URL parser might put 'totp' in host if the slashes are present.
-  // otpauth URIs are technically `otpauth://TYPE/LABEL?PARAMETERS`.
-  if (url.hostname !== 'totp' && !url.pathname.startsWith('//totp')) {
-    // Some libs might produce otpauth:totp... without //
-    // But standard is usually otpauth://totp
-    // Let's be strict for now based on what typical apps generate.
-    if (url.hostname !== 'totp') {
-      throw new Error('Only TOTP URIs are supported');
-    }
+  if (url.hostname !== 'totp') {
+    throw new Error('Only TOTP URIs are supported');
   }
 
-  // Extract label / account name
-  // Pathname is usually `/Label` or `/Issuer:Label`
-  // remove leading slash
   const label = decodeURIComponent(url.pathname.substring(1));
   if (!label) {
     throw new Error('Missing label in TOTP URI');
@@ -79,7 +66,7 @@ export function createTOTPAccountFromUri(
 ): Omit<TOTPAccount, 'id' | 'createdAt' | 'updatedAt'> {
   const { accountName, issuer, secret } = parseOtpauthUri(uri);
 
-  // TODO: Encryption at rest will be added in a later mission
+
   return {
     ownerDiscordUserId,
     accountName,
@@ -99,7 +86,7 @@ export function createTOTPAccountFromSecret(
   issuer: string | undefined,
   shared: boolean
 ): Omit<TOTPAccount, 'id' | 'createdAt' | 'updatedAt'> {
-  // Lightweight validation
+
   if (!secret || secret.trim().length === 0) {
     throw new Error('Secret cannot be empty');
   }

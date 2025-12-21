@@ -14,7 +14,6 @@ import {
 import type { TOTPAccount } from '../../domain/models.js';
 
 const LAST_GET_REQUEST: Map<string, number> = new Map();
-// key: `${userId}:${accountName}`, value: timestamp (ms)
 const GET_RATE_LIMIT_MS = 10_000; // 10 seconds
 
 export const purrmissionCommand = new SlashCommandBuilder()
@@ -44,13 +43,6 @@ export const purrmissionCommand = new SlashCommandBuilder()
                 { name: 'Secret Key (Base32)', value: 'secret' },
                 { name: 'QR Code Image', value: 'qr' }
               )
-          )
-          // Conditional options based on mode (discord doesn't support conditional params well, so we make them optional)
-          .addStringOption((option) =>
-            option
-              .setName('uri')
-              .setDescription('OTP Auth URI (required if mode=uri)')
-              .setRequired(false)
           )
           .addStringOption((option) =>
             option
