@@ -12,6 +12,14 @@
    - This file must contain `DISCORD_BOT_TOKEN`, `DISCORD_CLIENT_ID`, `DISCORD_GUILD_ID`, `DATABASE_URL`.
    - *Note*: If `ecosystem.config.cjs` sets `cwd: "./"`, the `.env` must be in the root.
 
+## Data Persistence
+The deployment script **flushes** the directory on each deploy, **EXCEPT** for:
+- `.env*` files
+- `*.db` / `*.sqlite` / `*.sqlite3` files
+- `data/` directory
+
+**Recommendation**: Set your `DATABASE_URL` to point to a file in the project root (e.g., `file:./prod.db`) or a path outside the deployment directory. If using SQLite, `production.db` in the root is safe.
+
 ## Running in Production
 You can use the provided script or PM2.
 

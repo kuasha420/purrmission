@@ -108,9 +108,8 @@ jobs:
             [ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"
             cd ${{ secrets.SSH_TARGET }}
             pm2 stop Purrmission || true
-            # Remove old deployment files but preserve .env and potential sqlite db if in non-standard location
-            # Flush target directory except .env files to ensure clean state
-            find . -mindepth 1 -maxdepth 1 -not -name '.env*' -exec rm -rf {} +
+            # Flush target directory except .env files and persistent data
+            find . -mindepth 1 -maxdepth 1 -not -name '.env*' -not -name '*.db' -not -name '*.sqlite*' -not -name 'data' -exec rm -rf {} +
 
       - name: Copy files to server
         uses: appleboy/scp-action@v1
