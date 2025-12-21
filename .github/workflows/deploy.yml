@@ -111,7 +111,7 @@ jobs:
             # Remove old deployment files but preserve .env and potential sqlite db if in non-standard location
             # However, standard practice dictates DB outside this folder.
             # We explicitly remove known build artifacts.
-            rm -rf apps dist package.json yarn.lock .yarnrc.yml ecosystem.config.cjs dist-checksums.txt prisma
+            rm -rf apps dist package.json yarn.lock .yarnrc.yml ecosystem.config.cjs dist-checksums.txt prisma .pnp.* .yarn
 
       - name: Copy files to server
         uses: appleboy/scp-action@v1
