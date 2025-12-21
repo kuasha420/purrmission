@@ -24,12 +24,26 @@ import { logger } from '../../logging/logger.js';
  */
 function isAccessRequestContext(context: unknown): context is AccessRequestContext {
   const ctx = context as AccessRequestContext;
-  return (
-    typeof ctx === 'object' &&
-    ctx !== null &&
-    (ctx.type === 'FIELD_ACCESS' || ctx.type === 'TOTP_ACCESS') &&
-    typeof ctx.requesterId === 'string'
-  );
+  if (
+    typeof ctx !== 'object' ||
+    ctx === null ||
+    typeof ctx.requesterId !== 'string' ||
+    typeof ctx.description !== 'string'
+  ) {
+    return false;
+  }
+
+  // Validate type-specific fields
+  if (ctx.type === 'FIELD_ACCESS') {
+    // FIELD_ACCESS requires a non-empty fieldName
+    return typeof ctx.fieldName === 'string' && ctx.fieldName.trim().length > 0;
+  }
+
+  if (ctx.type === 'TOTP_ACCESS') {
+    return true;
+  }
+
+  return false;
 }
 
 /**
@@ -206,6 +220,13 @@ async function revealAccessToRequester(
           resourceId,
           fieldName: context.fieldName,
         });
+      } else {
+        await dm.send(`✅ Your access request for field **${context.fieldName}** on **${resourceName}** was approved, but the field could not be found. It may have been deleted.`);
+        logger.warn('Approved field access request for a non-existent field', {
+          requesterId: context.requesterId,
+          resourceId,
+          fieldName: context.fieldName,
+        });
       }
     } else if (context.type === 'TOTP_ACCESS') {
       // Reveal TOTP code
@@ -228,6 +249,12 @@ async function revealAccessToRequester(
           requesterId: context.requesterId,
           resourceId,
           totpAccountId: linkedAccount.id,
+        });
+      } else {
+        await dm.send(`✅ Your access request for 2FA on **${resourceName}** was approved, but no 2FA account is linked to it. It may have been unlinked.`);
+        logger.warn('Approved 2FA access request for a resource with no linked account', {
+          requesterId: context.requesterId,
+          resourceId,
         });
       }
     }
