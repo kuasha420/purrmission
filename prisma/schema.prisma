@@ -33,7 +33,7 @@ model Resource {
 
   // Optional linked 2FA account (one-to-one)
   totpAccountId String?      @unique
-  totpAccount   TOTPAccount? @relation(fields: [totpAccountId], references: [id])
+  totpAccount   TOTPAccount? @relation(fields: [totpAccountId], references: [id], onDelete: SetNull)
 
   guardians        Guardian[]
   approvalRequests ApprovalRequest[]
