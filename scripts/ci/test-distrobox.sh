@@ -8,7 +8,7 @@ echo "🐳 Starting Distrobox Verification Suite"
 
 # Ensure we have a build artifact to test with
 echo "🏗️ Building project..."
-yarn build
+pnpm build
 
 # Create containers if they don't exist
 # We use the ini file

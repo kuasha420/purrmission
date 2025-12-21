@@ -12,34 +12,48 @@ echo "🔧 Simulating Deployment to $TARGET_DIR"
 echo "📦 Step 1: Cleaning target..."
 mkdir -p "$TARGET_DIR"
 
-# Simulate preserving .env
-if [ -f "$TARGET_DIR/.env" ]; then
-    echo "   Preserving .env..."
-    cp "$TARGET_DIR/.env" "$TARGET_DIR/.env.tmp"
-fi
+# Simulate preserving .env and persistent data (matching deploy.yml exactly)
+# Use the same find command as in deploy.yml
+echo "   Cleaning with preservation rules..."
+find "$TARGET_DIR" -mindepth 1 -maxdepth 1 \
+  ! -name '.env*' \
+  ! -name '*.db' \
+  ! -name '*.db-*' \
+  ! -name '*.sqlite' \
+  ! -name '*.sqlite3' \
+  ! -name '*.sqlite-*' \
+  ! -name '*.sqlite3-*' \
+  ! -name 'data' \
+  -exec rm -rf {} +
 
-# Simulate rm -rf (be careful with variables!)
-# We remove specific files as per deploy.yml
-rm -rf "$TARGET_DIR/apps" \
-       "$TARGET_DIR/dist" \
-       "$TARGET_DIR/package.json" \
-       "$TARGET_DIR/yarn.lock" \
-       "$TARGET_DIR/.yarnrc.yml" \
-       "$TARGET_DIR/ecosystem.config.cjs" \
-       "$TARGET_DIR/dist-checksums.txt" \
-       "$TARGET_DIR/prisma"
+# Verify preserved files still exist
+echo "   Verifying persistence..."
+PRESERVED_FILES=(
+    ".env"
+    "production.db"
+    "production.db-wal"
+    "production.db-shm"
+)
 
-if [ -f "$TARGET_DIR/.env.tmp" ]; then
-    mv "$TARGET_DIR/.env.tmp" "$TARGET_DIR/.env"
+for pf in "${PRESERVED_FILES[@]}"; do
+    if [ -e "$TARGET_DIR/$pf" ]; then
+        echo "   ✓ Preserved: $pf"
+    else
+        echo "   ⚠ Not found (may not have been created): $pf"
+    fi
+done
+
+if [ -d "$TARGET_DIR/data" ]; then
+    echo "   ✓ Preserved: data/"
 fi
 
 # 2. Copy files
 echo "📂 Step 2: Copying artifacts..."
 # We need to replicate the 'source' list from scp-action:
-# apps,package.json,yarn.lock,.yarnrc.yml,ecosystem.config.cjs,dist-checksums.txt,prisma
+# apps,package.json,pnpm-lock.yaml,pnpm-workspace.yaml,ecosystem.config.cjs,dist-checksums.txt,prisma
 # The source context in local runner is current dir.
 
-for item in apps package.json yarn.lock .yarnrc.yml ecosystem.config.cjs dist-checksums.txt prisma; do
+for item in apps package.json pnpm-lock.yaml pnpm-workspace.yaml ecosystem.config.cjs dist-checksums.txt prisma; do
     if [ -e "$item" ]; then
         cp -r "$item" "$TARGET_DIR/"
     else
@@ -58,13 +72,14 @@ else
 fi
 
 # 4. Install Dependencies
-echo "🧶 Step 4: Installing dependencies..."
-# Ensure we use the correct yarn
+echo "📦 Step 4: Installing dependencies..."
+# Ensure we use pnpm
 if ! command -v corepack &> /dev/null; then
   echo "Enabling corepack..."
   corepack enable
 fi
+corepack prepare pnpm@9.15.1 --activate
 
-yarn install --immutable
+pnpm install --frozen-lockfile
 
 echo "✅ Simulation Complete!"

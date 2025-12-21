@@ -13,12 +13,40 @@
    - *Note*: If `ecosystem.config.cjs` sets `cwd: "./"`, the `.env` must be in the root.
 
 ## Data Persistence
-The deployment script **flushes** the directory on each deploy, **EXCEPT** for:
-- `.env*` files
-- `*.db` / `*.sqlite` / `*.sqlite3` files
-- `data/` directory
 
-**Recommendation**: Set your `DATABASE_URL` to point to a file in the project root (e.g., `file:./prod.db`) or a path outside the deployment directory. If using SQLite, `production.db` in the root is safe.
+The deployment workflow **aggressively flushes** the target directory on each deploy to guarantee stateless code delivery. However, persistent state is explicitly carved out and preserved.
+
+### Preserved Files and Directories
+
+The following are **never deleted** during deployment:
+
+| Pattern | Description |
+|---------|-------------|
+| `.env*` | Environment files (`.env`, `.env.local`, etc.) |
+| `*.db` | SQLite database files |
+| `*.sqlite` | SQLite database files |
+| `*.sqlite3` | SQLite database files |
+| `*.db-*` | SQLite WAL mode sidecars (`-wal`, `-shm`) |
+| `*.sqlite-*` | SQLite WAL mode sidecars |
+| `*.sqlite3-*` | SQLite WAL mode sidecars |
+| `data/` | Persistent data directory (recursive) |
+
+### Recommended Database Location
+
+Store your SQLite database in the `data/` directory:
+
+```env
+DATABASE_URL="file:./data/prod.db"
+```
+
+This provides a clear separation between code artifacts (which get flushed) and persistent state (which survives).
+
+> [!WARNING]
+> **Never store databases in build artifacts** like `dist/`, `.next/`, `apps/*/dist/`, or `node_modules/`. These directories are completely replaced on each deploy.
+
+### External Databases
+
+If using PostgreSQL, MySQL, or other external databases, persistence is handled by the database server itself. The `DATABASE_URL` will point to the external service, so deployment flushes have no effect on your data.
 
 ## Running in Production
 You can use the provided script or PM2.

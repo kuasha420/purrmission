@@ -109,7 +109,17 @@ jobs:
             cd ${{ secrets.SSH_TARGET }}
             pm2 stop Purrmission || true
             # Flush target directory except .env files and persistent data
-            find . -mindepth 1 -maxdepth 1 -not -name '.env*' -not -name '*.db' -not -name '*.sqlite*' -not -name 'data' -exec rm -rf {} +
+            # Preserved: .env*, *.db, *.sqlite, *.sqlite3, WAL/SHM sidecars, data/
+            find . -mindepth 1 -maxdepth 1 \
+              ! -name '.env*' \
+              ! -name '*.db' \
+              ! -name '*.db-*' \
+              ! -name '*.sqlite' \
+              ! -name '*.sqlite3' \
+              ! -name '*.sqlite-*' \
+              ! -name '*.sqlite3-*' \
+              ! -name 'data' \
+              -exec rm -rf {} +
 
       - name: Copy files to server
         uses: appleboy/scp-action@v1

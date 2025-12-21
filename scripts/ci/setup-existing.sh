@@ -29,7 +29,18 @@ echo "files..." > "$TARGET_DIR/dist-checksums.txt"
 # Actually the rm -rf list is specific:
 # rm -rf apps dist package.json yarn.lock .yarnrc.yml ecosystem.config.cjs dist-checksums.txt prisma
 
-# So let's create something else that should survive, e.g. a separate config or db
-touch "$TARGET_DIR/production.sqlite"
+# Create SQLite databases that should survive deployment
+echo "Creating persistent database fixtures..."
+touch "$TARGET_DIR/production.db"
+touch "$TARGET_DIR/production.db-wal"   # WAL mode sidecar
+touch "$TARGET_DIR/production.db-shm"   # WAL mode sidecar
+touch "$TARGET_DIR/backup.sqlite3"
+touch "$TARGET_DIR/backup.sqlite3-wal"
+touch "$TARGET_DIR/backup.sqlite3-shm"
+
+# Create data directory with nested database
+mkdir -p "$TARGET_DIR/data"
+touch "$TARGET_DIR/data/app.sqlite"
+echo "test data" > "$TARGET_DIR/data/cache.json"
 
 echo "✅ Existing environment ready at $TARGET_DIR"
