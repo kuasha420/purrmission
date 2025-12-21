@@ -12,7 +12,6 @@
     "discord:deploy-commands": "tsx src/discord/registerCommands.ts"
   },
   "dependencies": {
-    "@prisma/client": "^6.0.0",
     "discord.js": "^14.16.3",
     "dotenv": "^16.4.7",
     "fastify": "^5.2.1",
