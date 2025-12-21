@@ -16,12 +16,7 @@ on:
       # Workflow itself
       - '.github/workflows/deploy.yml'
   workflow_dispatch:
-    inputs:
-      dry_run:
-        description: 'Simulate deployment without changes'
-        required: true
-        default: 'true'
-        type: boolean
+
 
 jobs:
   build:
@@ -43,16 +38,6 @@ jobs:
       - name: Install Dependencies
         run: yarn install --immutable
 
-      - name: Configure Deploy Mode
-        id: mode
-        run: |
-          if [[ "${{ github.event_name }}" == "workflow_dispatch" && "${{ inputs.dry_run }}" == "true" ]]; then
-            echo "DEPLOY_DRY_RUN=true" >> $GITHUB_ENV
-            echo "Dry run enabled."
-          else
-            echo "DEPLOY_DRY_RUN=false" >> $GITHUB_ENV
-            echo "Production deploy mode."
-          fi
 
       - name: Generate Prisma Client
         run: yarn prisma generate
@@ -67,7 +52,7 @@ jobs:
           cat dist-checksums.txt
 
       - name: Deploy Commands
-        if: env.DEPLOY_DRY_RUN != 'true' && github.ref == 'refs/heads/deploy'
+        if: github.ref == 'refs/heads/deploy'
         env:
           DISCORD_BOT_TOKEN: ${{ secrets.DISCORD_BOT_TOKEN }}
           DISCORD_CLIENT_ID: ${{ secrets.DISCORD_CLIENT_ID }}
@@ -99,15 +84,6 @@ jobs:
         with:
           name: bot-build
 
-      - name: Configure Deploy Mode
-        run: |
-          if [[ "${{ github.event_name }}" == "workflow_dispatch" && "${{ inputs.dry_run }}" == "true" ]]; then
-            echo "DEPLOY_DRY_RUN=true" >> $GITHUB_ENV
-            echo "Dry run enabled."
-          else
-            echo "DEPLOY_DRY_RUN=false" >> $GITHUB_ENV
-            echo "Production deploy mode."
-          fi
 
       - name: Verify checksums
         run: |
@@ -115,7 +91,6 @@ jobs:
           sha256sum -c dist-checksums.txt
 
       - name: Stop PM2 and clean target directory
-        if: env.DEPLOY_DRY_RUN != 'true'
         uses: appleboy/ssh-action@v1
         with:
           host: ${{ secrets.SSH_HOST }}
@@ -134,7 +109,6 @@ jobs:
             rm -rf apps dist package.json yarn.lock .yarnrc.yml ecosystem.config.cjs dist-checksums.txt prisma
 
       - name: Copy files to server
-        if: env.DEPLOY_DRY_RUN != 'true'
         uses: appleboy/scp-action@v1
         with:
           host: ${{ secrets.SSH_HOST }}
@@ -145,7 +119,6 @@ jobs:
           source: "apps,package.json,yarn.lock,.yarnrc.yml,ecosystem.config.cjs,dist-checksums.txt,prisma"
 
       - name: Verify deployment integrity
-        if: env.DEPLOY_DRY_RUN != 'true'
         uses: appleboy/ssh-action@v1
         with:
           host: ${{ secrets.SSH_HOST }}
@@ -159,7 +132,6 @@ jobs:
             sha256sum -c dist-checksums.txt
 
       - name: Install dependencies and restart
-        if: env.DEPLOY_DRY_RUN != 'true'
         uses: appleboy/ssh-action@v1
         with:
           host: ${{ secrets.SSH_HOST }}
@@ -187,8 +159,4 @@ jobs:
             yarn install --immutable
             pm2 startOrRestart ecosystem.config.cjs
 
-      - name: Simulate Deployment (Dry Run)
-        if: env.DEPLOY_DRY_RUN == 'true'
-        run: |
-          chmod +x scripts/ci/simulate-deploy.sh
-          ./scripts/ci/simulate-deploy.sh "apps/purrmission-bot/dist"
+
