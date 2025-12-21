@@ -18,7 +18,7 @@ import {
   handlePurrmissionCommand,
   purrmissionCommand,
   handlePurrmissionAutocomplete,
-} from './twoFaAdd.js';
+} from './twoFa.js';
 import { logger } from '../../logging/logger.js';
 
 /**
