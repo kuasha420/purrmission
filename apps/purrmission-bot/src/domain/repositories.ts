@@ -34,7 +34,7 @@ export interface ResourceRepository {
 
   findByApiKey(apiKey: string): Promise<Resource | null>;
 
-  update(id: string, data: Partial<Pick<Resource, 'totpAccountId'>>): Promise<Resource>;
+  update(id: string, data: { totpAccountId?: string | null }): Promise<Resource>;
 }
 
 /**
@@ -171,14 +171,15 @@ export class InMemoryResourceRepository implements ResourceRepository {
     return null;
   }
 
-  async update(id: string, data: Partial<Pick<Resource, 'totpAccountId'>>): Promise<Resource> {
+  async update(id: string, data: { totpAccountId?: string | null }): Promise<Resource> {
     const resource = this.resources.get(id);
     if (!resource) {
       throw new Error(`Resource not found: ${id}`);
     }
     const updated: Resource = {
       ...resource,
-      ...data,
+      // Convert null to undefined for domain model consistency
+      totpAccountId: data.totpAccountId === null ? undefined : (data.totpAccountId ?? resource.totpAccountId),
     };
     this.resources.set(id, updated);
     return updated;
@@ -606,11 +607,20 @@ export class PrismaResourceFieldRepository implements ResourceFieldRepository {
     createdAt: Date;
     updatedAt: Date;
   }): ResourceField {
+    let decryptedValue: string;
+    try {
+      decryptedValue = decryptValue(row.value);
+    } catch (error) {
+      // Re-throw with context about which field failed to decrypt
+      throw new Error(
+        `Failed to decrypt field '${row.name}' (id: ${row.id}) on resource '${row.resourceId}': ${error instanceof Error ? error.message : String(error)}`
+      );
+    }
     return {
       id: row.id,
       resourceId: row.resourceId,
       name: row.name,
-      value: decryptValue(row.value), // Decrypt on read
+      value: decryptedValue,
       createdAt: row.createdAt,
       updatedAt: row.updatedAt,
     };

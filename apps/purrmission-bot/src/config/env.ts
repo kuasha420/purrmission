@@ -22,7 +22,7 @@ const envSchema = z.object({
 
   // Encryption Configuration (required for resource field encryption)
   // 32-byte hex string (64 characters)
-  ENCRYPTION_KEY: z.string().length(64, 'ENCRYPTION_KEY must be 64 hex characters').optional(),
+  ENCRYPTION_KEY: z.string().regex(/^[0-9a-fA-F]{64}$/, 'ENCRYPTION_KEY must be a 64-character hexadecimal string').optional(),
 });
 
 /**

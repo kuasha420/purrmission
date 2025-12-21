@@ -373,7 +373,7 @@ export class ResourceService {
     }
 
     // Update the resource to remove the linked TOTP account
-    await repositories.resources.update(resourceId, { totpAccountId: undefined });
+    await repositories.resources.update(resourceId, { totpAccountId: null });
 
     logger.info('Unlinked TOTP account from resource', {
       resourceId,
