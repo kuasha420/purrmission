@@ -15,6 +15,8 @@ on:
       - '.nvmrc'
       # Workflow itself
       - '.github/workflows/deploy.yml'
+      # Database schema
+      - 'prisma/**'
   workflow_dispatch:
 
 
