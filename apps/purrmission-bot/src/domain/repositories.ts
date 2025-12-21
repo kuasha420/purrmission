@@ -178,7 +178,7 @@ export class InMemoryResourceRepository implements ResourceRepository {
     }
     const updated: Resource = {
       ...resource,
-      totpAccountId: data.totpAccountId === null ? undefined : (data.totpAccountId ?? resource.totpAccountId),
+      ...data,
     };
     this.resources.set(id, updated);
     return updated;

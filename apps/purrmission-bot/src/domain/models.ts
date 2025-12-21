@@ -175,6 +175,9 @@ export interface AccessRequestContext {
 
   /** Human-readable description of what's being requested */
   description: string;
+
+  /** Index signature for Record<string, unknown> compatibility */
+  [key: string]: unknown;
 }
 
 /**

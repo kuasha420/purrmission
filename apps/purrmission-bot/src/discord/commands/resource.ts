@@ -12,13 +12,13 @@ import {
 
 import type { CommandContext } from './context.js';
 import { logger } from '../../logging/logger.js';
+import { env } from '../../config/env.js';
 import { generateTOTPCode } from '../../domain/totp.js';
 import type { AccessRequestContext } from '../../domain/models.js';
 import {
     createApprovalButtons,
     createAccessRequestEmbed,
 } from '../interactions/approvalButtons.js';
-import crypto from 'node:crypto';
 
 /**
  * Build the 'resource' subcommand group for the /purrmission command.
@@ -147,6 +147,13 @@ export async function handleResourceCommand(
     interaction: ChatInputCommandInteraction,
     context: CommandContext
 ): Promise<void> {
+    if (!env.ENCRYPTION_KEY) {
+        await interaction.reply({
+            content: '❌ Resource commands are disabled. The `ENCRYPTION_KEY` is not configured.',
+            ephemeral: true,
+        });
+        return;
+    }
     const subcommand = interaction.options.getSubcommand();
 
     switch (subcommand) {
@@ -664,7 +671,7 @@ async function handleGet2FA(
     const resourceId = interaction.options.getString('resource-id', true);
     const userId = interaction.user.id;
 
-    const { resources, totp } = context.repositories;
+    const { resources } = context.repositories;
 
     // Check resource exists
     const resource = await resources.findById(resourceId);
@@ -758,7 +765,7 @@ async function createFieldAccessRequest(
     // Create the approval request
     const result = await approval.createApprovalRequest({
         resourceId,
-        context: accessContext as unknown as Record<string, unknown>,
+        context: accessContext,
         expiresInMs: 15 * 60 * 1000, // 15 minutes
     });
 
@@ -839,7 +846,7 @@ async function create2FAAccessRequest(
     // Create the approval request
     const result = await approval.createApprovalRequest({
         resourceId,
-        context: accessContext as unknown as Record<string, unknown>,
+        context: accessContext,
         expiresInMs: 5 * 60 * 1000, // 5 minutes (shorter for TOTP)
     });
 

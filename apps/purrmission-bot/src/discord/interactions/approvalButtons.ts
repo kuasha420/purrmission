@@ -19,6 +19,20 @@ import { generateTOTPCode } from '../../domain/totp.js';
 import { logger } from '../../logging/logger.js';
 
 /**
+ * Type guard for AccessRequestContext.
+ * Validates that the context has the expected shape for field/2FA access requests.
+ */
+function isAccessRequestContext(context: unknown): context is AccessRequestContext {
+  const ctx = context as AccessRequestContext;
+  return (
+    typeof ctx === 'object' &&
+    ctx !== null &&
+    (ctx.type === 'FIELD_ACCESS' || ctx.type === 'TOTP_ACCESS') &&
+    typeof ctx.requesterId === 'string'
+  );
+}
+
+/**
  * Parse the custom ID to extract action and request ID.
  *
  * Format: purrmission:<action>:<requestId>
@@ -50,8 +64,8 @@ function parseCustomId(customId: string): { action: ApprovalDecision; requestId:
 export async function handleApprovalButton(
   interaction: ButtonInteraction,
   services: Services,
-  repositories?: Repositories,
-  discordClient?: Client
+  repositories: Repositories,
+  discordClient: Client
 ): Promise<void> {
   const parsed = parseCustomId(interaction.customId);
   if (!parsed) {
@@ -123,9 +137,9 @@ export async function handleApprovalButton(
     });
 
     // If approved, reveal the data to the requester
-    if (action === 'APPROVE' && repositories && discordClient && result.request) {
-      const context = result.request.context as unknown as AccessRequestContext;
-      if (context.type && context.requesterId) {
+    if (action === 'APPROVE' && result.request) {
+      const context = result.request.context;
+      if (isAccessRequestContext(context)) {
         await revealAccessToRequester(
           context,
           result.request.resourceId,
