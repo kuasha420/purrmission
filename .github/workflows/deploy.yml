@@ -28,29 +28,31 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Enable Corepack
-        run: corepack enable
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v3
+        with:
+          version: 9
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version-file: '.nvmrc'
-          cache: 'yarn'
+          cache: 'pnpm'
 
       - name: Install Dependencies
-        run: yarn install --immutable
+        run: pnpm install --frozen-lockfile
 
 
       - name: Generate Prisma Client
-        run: yarn prisma generate
+        run: pnpm prisma generate
 
       - name: Build
-        run: yarn build
+        run: pnpm build
 
       - name: Generate checksums
         run: |
           find apps/purrmission-bot/dist -type f -exec sha256sum {} \; | sort > dist-checksums.txt
-          sha256sum package.json yarn.lock ecosystem.config.cjs >> dist-checksums.txt
+          sha256sum package.json pnpm-lock.yaml ecosystem.config.cjs >> dist-checksums.txt
           cat dist-checksums.txt
 
       - name: Deploy Commands
@@ -60,7 +62,7 @@ jobs:
           DISCORD_CLIENT_ID: ${{ secrets.DISCORD_CLIENT_ID }}
           DISCORD_GUILD_ID: ${{ secrets.DISCORD_GUILD_ID }}
           DATABASE_URL: "file:./dev.db" # Dummy value for validation, not used by script
-        run: yarn workspace @purrfecthq/purrmission-bot run discord:deploy-commands
+        run: pnpm --filter @purrfecthq/purrmission-bot run discord:deploy-commands
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
@@ -70,8 +72,8 @@ jobs:
             apps/purrmission-bot/dist
             apps/purrmission-bot/package.json
             package.json
-            yarn.lock
-            .yarnrc.yml
+            pnpm-lock.yaml
+            pnpm-workspace.yaml
             ecosystem.config.cjs
             prisma
             dist-checksums.txt
@@ -118,7 +120,7 @@ jobs:
           key: ${{ secrets.SSH_KEY }}
           port: ${{ secrets.SSH_PORT || 22 }}
           target: ${{ secrets.SSH_TARGET }}
-          source: "apps,package.json,yarn.lock,.yarnrc.yml,ecosystem.config.cjs,dist-checksums.txt,prisma"
+          source: "apps,package.json,pnpm-lock.yaml,pnpm-workspace.yaml,ecosystem.config.cjs,dist-checksums.txt,prisma"
 
       - name: Verify deployment integrity
         uses: appleboy/ssh-action@v1
@@ -152,19 +154,16 @@ jobs:
               corepack enable
             fi
 
-            # Ensure pm2 is installed
-            if ! command -v pm2 &> /dev/null; then
-              echo "pm2 not found, installing globally..."
-              yarn global add pm2
-            fi
+            # Ensure pnpm is installed via corepack
+            corepack prepare pnpm@9.15.1 --activate
 
-            yarn install --immutable
+            pnpm install --frozen-lockfile
             
             echo "Generating Prisma Client..."
-            yarn prisma:generate
+            pnpm prisma:generate
 
             echo "Running database migrations..."
-            yarn prisma:deploy
+            pnpm prisma:deploy
 
             pm2 startOrRestart ecosystem.config.cjs
 

@@ -12,9 +12,9 @@
     "lint:fix": "eslint . --fix",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
-    "build": "yarn workspace @purrfecthq/purrmission-bot build",
-    "dev:purrmission": "yarn workspace @purrfecthq/purrmission-bot dev",
-    "discord:deploy-commands": "yarn workspace @purrfecthq/purrmission-bot discord:deploy-commands",
+    "build": "pnpm --filter @purrfecthq/purrmission-bot build",
+    "dev:purrmission": "pnpm --filter @purrfecthq/purrmission-bot dev",
+    "discord:deploy-commands": "pnpm --filter @purrfecthq/purrmission-bot discord:deploy-commands",
     "prod:purrmission": "node apps/purrmission-bot/dist/index.js",
     "prisma:generate": "prisma generate",
     "prisma:deploy": "prisma migrate deploy",
@@ -22,9 +22,9 @@
     "prisma:studio": "prisma studio",
     "prisma:format": "prisma format"
   },
-  "packageManager": "yarn@4.12.0",
+  "packageManager": "pnpm@9.15.1",
   "dependencies": {
-    "@prisma/client": "6.0.0",
+    "@prisma/client": "6.19.1",
     "dotenv": "^17.2.3"
   },
   "devDependencies": {
@@ -32,7 +32,7 @@
     "@typescript-eslint/parser": "^8.49.0",
     "eslint": "^9.39.1",
     "prettier": "^3.7.4",
-    "prisma": "^6.0.0",
+    "prisma": "6.19.1",
     "typescript": "^5.9.3",
     "typescript-eslint": "^8.49.0"
   }
