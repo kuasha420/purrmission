@@ -14,7 +14,7 @@ import type { CommandContext } from './context.js';
 import { logger } from '../../logging/logger.js';
 import { env } from '../../config/env.js';
 import { generateTOTPCode } from '../../domain/totp.js';
-import type { AccessRequestContext } from '../../domain/models.js';
+import type { AccessRequestContext, AccessRequestContextWithExtras } from '../../domain/models.js';
 import {
     createApprovalButtons,
     createAccessRequestEmbed,
@@ -225,6 +225,24 @@ export async function handleResourceAutocomplete(
         return;
     }
 
+    if (focusedOption.name === 'account') {
+        // Autocomplete TOTP account names for link-2fa command
+        const userId = interaction.user.id;
+        const { totp } = context.repositories;
+        const accounts = await totp.findByOwnerDiscordUserId(userId);
+
+        const query = focusedOption.value.toLowerCase();
+        const filtered = accounts.filter((a) => a.accountName.toLowerCase().includes(query));
+
+        await interaction.respond(
+            filtered.slice(0, 25).map((a) => ({
+                name: a.accountName,
+                value: a.id,
+            }))
+        );
+        return;
+    }
+
     await interaction.respond([]);
 }
 
@@ -249,9 +267,35 @@ async function handleFieldsAdd(
     context: CommandContext
 ): Promise<void> {
     const resourceId = interaction.options.getString('resource-id', true);
-    const name = interaction.options.getString('name', true);
+    const rawName = interaction.options.getString('name', true);
+    const name = rawName.trim();
     const value = interaction.options.getString('value', true);
     const userId = interaction.user.id;
+
+    // Validate field name: 1-64 characters, alphanumeric, hyphens, underscores
+    const isValidName =
+        name.length > 0 &&
+        name.length <= 64 &&
+        /^[A-Za-z0-9_-]+$/.test(name);
+
+    if (!isValidName) {
+        await interaction.reply({
+            content:
+                '❌ Invalid field name. Use 1–64 characters: letters, numbers, hyphens, and underscores only.',
+            ephemeral: true,
+        });
+        return;
+    }
+
+    // Validate field value length (max 10KB to prevent abuse)
+    const MAX_VALUE_LENGTH = 10 * 1024; // 10KB
+    if (value.length > MAX_VALUE_LENGTH) {
+        await interaction.reply({
+            content: `❌ Field value is too long. Maximum length is ${MAX_VALUE_LENGTH} characters.`,
+            ephemeral: true,
+        });
+        return;
+    }
 
     const { resources, resourceFields } = context.repositories;
 
@@ -751,8 +795,18 @@ async function createFieldAccessRequest(
     fieldName: string,
     requesterId: string
 ): Promise<void> {
-    const { guardians } = context.repositories;
+    const { guardians, resourceFields } = context.repositories;
     const { approval } = context.services;
+
+    // Validate field still exists before creating approval request (prevent race condition)
+    const existingField = await resourceFields.findByResourceAndName(resourceId, fieldName);
+    if (!existingField) {
+        await interaction.reply({
+            content: `❌ Field \`${fieldName}\` no longer exists on this resource.`,
+            ephemeral: true,
+        });
+        return;
+    }
 
     // Create approval context
     const accessContext: AccessRequestContext = {
@@ -765,7 +819,7 @@ async function createFieldAccessRequest(
     // Create the approval request
     const result = await approval.createApprovalRequest({
         resourceId,
-        context: accessContext,
+        context: accessContext as AccessRequestContextWithExtras,
         expiresInMs: 15 * 60 * 1000, // 15 minutes
     });
 
@@ -780,26 +834,32 @@ async function createFieldAccessRequest(
     // Get guardians to notify
     const resourceGuardians = await guardians.findByResourceId(resourceId);
 
-    // Send approval requests to guardians via DM
+    // Send approval requests to guardians via DM (in parallel)
     const embed = createAccessRequestEmbed(resourceName, accessContext, result.request.expiresAt);
     const buttons = createApprovalButtons(result.request.id);
 
-    let notifiedCount = 0;
-    for (const guardian of resourceGuardians) {
-        try {
+    const results = await Promise.allSettled(
+        resourceGuardians.map(async (guardian) => {
             const user = await interaction.client.users.fetch(guardian.discordUserId);
             const dm = await user.createDM();
             await dm.send({
                 embeds: [embed],
                 components: [buttons],
             });
-            notifiedCount++;
-        } catch (error) {
-            logger.warn('Failed to DM guardian', {
-                guardianId: guardian.discordUserId,
-                error,
-            });
-        }
+            return guardian.discordUserId;
+        })
+    );
+
+    const notifiedCount = results.filter((r) => r.status === 'fulfilled').length;
+    const failedCount = results.filter((r) => r.status === 'rejected').length;
+
+    if (failedCount > 0) {
+        logger.warn('Some guardians could not be notified', {
+            requestId: result.request.id,
+            resourceId,
+            notified: notifiedCount,
+            failed: failedCount,
+        });
     }
 
     logger.info('Created field access request', {
@@ -809,6 +869,14 @@ async function createFieldAccessRequest(
         requesterId,
         notifiedGuardians: notifiedCount,
     });
+
+    if (notifiedCount === 0) {
+        await interaction.reply({
+            content: '❌ Failed to notify any guardians. They may have DMs disabled or are unreachable.',
+            ephemeral: true,
+        });
+        return;
+    }
 
     await interaction.reply({
         content: [
@@ -834,7 +902,17 @@ async function create2FAAccessRequest(
     requesterId: string
 ): Promise<void> {
     const { guardians } = context.repositories;
-    const { approval } = context.services;
+    const { approval, resource: resourceService } = context.services;
+
+    // Validate TOTP account still linked before creating approval request (prevent race condition)
+    const linkedAccount = await resourceService.getLinkedTOTPAccount(resourceId);
+    if (!linkedAccount) {
+        await interaction.reply({
+            content: '❌ No 2FA account is linked to this resource anymore.',
+            ephemeral: true,
+        });
+        return;
+    }
 
     // Create approval context
     const accessContext: AccessRequestContext = {
@@ -846,7 +924,7 @@ async function create2FAAccessRequest(
     // Create the approval request
     const result = await approval.createApprovalRequest({
         resourceId,
-        context: accessContext,
+        context: accessContext as AccessRequestContextWithExtras,
         expiresInMs: 5 * 60 * 1000, // 5 minutes (shorter for TOTP)
     });
 
@@ -861,26 +939,32 @@ async function create2FAAccessRequest(
     // Get guardians to notify
     const resourceGuardians = await guardians.findByResourceId(resourceId);
 
-    // Send approval requests to guardians via DM
+    // Send approval requests to guardians via DM (in parallel)
     const embed = createAccessRequestEmbed(resourceName, accessContext, result.request.expiresAt);
     const buttons = createApprovalButtons(result.request.id);
 
-    let notifiedCount = 0;
-    for (const guardian of resourceGuardians) {
-        try {
+    const results = await Promise.allSettled(
+        resourceGuardians.map(async (guardian) => {
             const user = await interaction.client.users.fetch(guardian.discordUserId);
             const dm = await user.createDM();
             await dm.send({
                 embeds: [embed],
                 components: [buttons],
             });
-            notifiedCount++;
-        } catch (error) {
-            logger.warn('Failed to DM guardian', {
-                guardianId: guardian.discordUserId,
-                error,
-            });
-        }
+            return guardian.discordUserId;
+        })
+    );
+
+    const notifiedCount = results.filter((r) => r.status === 'fulfilled').length;
+    const failedCount = results.filter((r) => r.status === 'rejected').length;
+
+    if (failedCount > 0) {
+        logger.warn('Some guardians could not be notified', {
+            requestId: result.request.id,
+            resourceId,
+            notified: notifiedCount,
+            failed: failedCount,
+        });
     }
 
     logger.info('Created 2FA access request', {
@@ -889,6 +973,14 @@ async function create2FAAccessRequest(
         requesterId,
         notifiedGuardians: notifiedCount,
     });
+
+    if (notifiedCount === 0) {
+        await interaction.reply({
+            content: '❌ Failed to notify any guardians. They may have DMs disabled or are unreachable.',
+            ephemeral: true,
+        });
+        return;
+    }
 
     await interaction.reply({
         content: [
