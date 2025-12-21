@@ -158,6 +158,9 @@ jobs:
 
             yarn install --immutable
             
+            echo "Generating Prisma Client..."
+            yarn prisma:generate
+
             echo "Running database migrations..."
             yarn prisma:deploy
 
