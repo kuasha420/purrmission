@@ -109,9 +109,8 @@ jobs:
             cd ${{ secrets.SSH_TARGET }}
             pm2 stop Purrmission || true
             # Remove old deployment files but preserve .env and potential sqlite db if in non-standard location
-            # However, standard practice dictates DB outside this folder.
-            # We explicitly remove known build artifacts.
-            rm -rf apps dist package.json yarn.lock .yarnrc.yml ecosystem.config.cjs dist-checksums.txt prisma .pnp.* .yarn
+            # Flush target directory except .env files to ensure clean state
+            find . -mindepth 1 -maxdepth 1 -not -name '.env*' -exec rm -rf {} +
 
       - name: Copy files to server
         uses: appleboy/scp-action@v1
