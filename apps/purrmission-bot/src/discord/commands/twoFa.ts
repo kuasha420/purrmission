@@ -12,13 +12,19 @@ import {
   generateTOTPCode,
 } from '../../domain/totp.js';
 import type { TOTPAccount } from '../../domain/models.js';
+import {
+  buildResourceSubcommandGroup,
+  handleResourceCommand,
+  handleResourceAutocomplete,
+} from './resource.js';
 
 const LAST_GET_REQUEST: Map<string, number> = new Map();
 const GET_RATE_LIMIT_MS = 10_000; // 10 seconds
 
 export const purrmissionCommand = new SlashCommandBuilder()
   .setName('purrmission')
-  .setDescription('Manage 2FA accounts')
+  .setDescription('Manage 2FA accounts and resources')
+  .addSubcommandGroup(buildResourceSubcommandGroup())
   .addSubcommandGroup((group) =>
     group
       .setName('2fa')
@@ -125,6 +131,11 @@ export async function handlePurrmissionCommand(
   const subcommandGroup = interaction.options.getSubcommandGroup(false);
   const subcommand = interaction.options.getSubcommand(false);
 
+  if (subcommandGroup === 'resource') {
+    await handleResourceCommand(interaction, context);
+    return;
+  }
+
   if (subcommandGroup !== '2fa') {
     await interaction.reply({
       content: 'Unsupported subcommand group for /purrmission.',
@@ -155,6 +166,11 @@ export async function handlePurrmissionAutocomplete(
 ): Promise<void> {
   const subcommandGroup = interaction.options.getSubcommandGroup(false);
   const subcommand = interaction.options.getSubcommand(false);
+
+  if (subcommandGroup === 'resource') {
+    await handleResourceAutocomplete(interaction, context);
+    return;
+  }
 
   if (subcommandGroup !== '2fa') {
     return;

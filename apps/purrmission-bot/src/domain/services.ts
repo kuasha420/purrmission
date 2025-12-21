@@ -14,6 +14,7 @@ import type {
   DecisionResult,
   Resource,
   Guardian,
+  TOTPAccount,
 } from './models.js';
 import type { Repositories } from './repositories.js';
 import { logger } from '../logging/logger.js';
@@ -329,6 +330,68 @@ export class ResourceService {
    */
   async getGuardians(resourceId: string): Promise<Guardian[]> {
     return this.deps.repositories.guardians.findByResourceId(resourceId);
+  }
+
+  /**
+   * Link a TOTP account to a resource.
+   * Note: Uses repository methods that may need Prisma for persistence.
+   */
+  async linkTOTPAccount(resourceId: string, totpAccountId: string): Promise<void> {
+    const { repositories } = this.deps;
+
+    // Verify resource exists
+    const resource = await repositories.resources.findById(resourceId);
+    if (!resource) {
+      throw new Error(`Resource not found: ${resourceId}`);
+    }
+
+    // Verify TOTP account exists
+    const totpAccount = await repositories.totp.findById(totpAccountId);
+    if (!totpAccount) {
+      throw new Error(`TOTP account not found: ${totpAccountId}`);
+    }
+
+    // Update the resource with the linked TOTP account ID
+    await repositories.resources.update(resourceId, { totpAccountId });
+
+    logger.info('Linked TOTP account to resource', {
+      resourceId,
+      totpAccountId,
+    });
+  }
+
+  /**
+   * Unlink TOTP account from a resource.
+   */
+  async unlinkTOTPAccount(resourceId: string): Promise<void> {
+    const { repositories } = this.deps;
+
+    // Verify resource exists
+    const resource = await repositories.resources.findById(resourceId);
+    if (!resource) {
+      throw new Error(`Resource not found: ${resourceId}`);
+    }
+
+    // Update the resource to remove the linked TOTP account
+    await repositories.resources.update(resourceId, { totpAccountId: undefined });
+
+    logger.info('Unlinked TOTP account from resource', {
+      resourceId,
+    });
+  }
+
+  /**
+   * Get the linked TOTP account for a resource.
+   */
+  async getLinkedTOTPAccount(resourceId: string): Promise<TOTPAccount | null> {
+    const { repositories } = this.deps;
+
+    const resource = await repositories.resources.findById(resourceId);
+    if (!resource || !resource.totpAccountId) {
+      return null;
+    }
+
+    return repositories.totp.findById(resource.totpAccountId);
   }
 }
 

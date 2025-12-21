@@ -36,9 +36,13 @@ export interface Resource {
    */
   apiKey: string;
 
+  /** Optional linked TOTP account ID (one-to-one) */
+  totpAccountId?: string;
+
   /** Timestamp when the resource was created */
   createdAt: Date;
 }
+
 
 /**
  * Role of a guardian for a resource.
@@ -152,6 +156,28 @@ export type AddGuardianInput = Omit<Guardian, 'createdAt'>;
 export type CreateApprovalRequestInput = Omit<ApprovalRequest, 'createdAt'>;
 
 /**
+ * Type of access being requested via approval flow.
+ */
+export type AccessRequestType = 'FIELD_ACCESS' | 'TOTP_ACCESS';
+
+/**
+ * Typed context for field/2FA access approval requests.
+ */
+export interface AccessRequestContext {
+  /** Type of access being requested */
+  type: AccessRequestType;
+
+  /** Discord user ID of the requester */
+  requesterId: string;
+
+  /** Name of the field being requested (for FIELD_ACCESS) */
+  fieldName?: string;
+
+  /** Human-readable description of what's being requested */
+  description: string;
+}
+
+/**
  * A TOTP account for generating 2FA codes.
  */
 export interface TOTPAccount {
@@ -185,3 +211,33 @@ export interface TOTPAccount {
   /** Timestamp when the account was last updated */
   updatedAt: Date;
 }
+
+/**
+ * A text field attached to a resource (e.g., password, API key, secret).
+ * Values are encrypted at rest in the database.
+ */
+export interface ResourceField {
+  /** Unique identifier for the field */
+  id: string;
+
+  /** The resource this field belongs to */
+  resourceId: string;
+
+  /** Field name (e.g., "password", "api_key") */
+  name: string;
+
+  /** Field value (decrypted in domain layer) */
+  value: string;
+
+  /** Timestamp when the field was created */
+  createdAt: Date;
+
+  /** Timestamp when the field was last updated */
+  updatedAt: Date;
+}
+
+/**
+ * Input for creating a new resource field.
+ */
+export type CreateResourceFieldInput = Omit<ResourceField, 'id' | 'createdAt' | 'updatedAt'>;
+

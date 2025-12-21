@@ -18,7 +18,10 @@ import type {
   CreateApprovalRequestInput,
   ApprovalStatus,
   TOTPAccount,
+  ResourceField,
+  CreateResourceFieldInput,
 } from './models.js';
+import { encryptValue, decryptValue } from '../infra/crypto.js';
 
 import crypto from 'node:crypto';
 
@@ -30,6 +33,8 @@ export interface ResourceRepository {
   findById(id: string): Promise<Resource | null>;
 
   findByApiKey(apiKey: string): Promise<Resource | null>;
+
+  update(id: string, data: Partial<Pick<Resource, 'totpAccountId'>>): Promise<Resource>;
 }
 
 /**
@@ -94,6 +99,44 @@ export interface TOTPRepository {
   findSharedVisibleTo(discordUserId: string): Promise<TOTPAccount[]>;
 }
 
+/**
+ * Repository for managing ResourceField entities.
+ * Values are encrypted at rest using AES-256-GCM.
+ */
+export interface ResourceFieldRepository {
+  /**
+   * Create a new field for a resource.
+   * The value will be encrypted before storage.
+   */
+  create(input: CreateResourceFieldInput): Promise<ResourceField>;
+
+  /**
+   * Find a field by its ID.
+   */
+  findById(id: string): Promise<ResourceField | null>;
+
+  /**
+   * Find all fields for a resource.
+   */
+  findByResourceId(resourceId: string): Promise<ResourceField[]>;
+
+  /**
+   * Find a field by resource ID and name.
+   */
+  findByResourceAndName(resourceId: string, name: string): Promise<ResourceField | null>;
+
+  /**
+   * Update a field's value.
+   * The value will be encrypted before storage.
+   */
+  update(id: string, value: string): Promise<ResourceField>;
+
+  /**
+   * Delete a field by ID.
+   */
+  delete(id: string): Promise<void>;
+}
+
 
 
 /**
@@ -126,6 +169,19 @@ export class InMemoryResourceRepository implements ResourceRepository {
       }
     }
     return null;
+  }
+
+  async update(id: string, data: Partial<Pick<Resource, 'totpAccountId'>>): Promise<Resource> {
+    const resource = this.resources.get(id);
+    if (!resource) {
+      throw new Error(`Resource not found: ${id}`);
+    }
+    const updated: Resource = {
+      ...resource,
+      totpAccountId: data.totpAccountId === null ? undefined : (data.totpAccountId ?? resource.totpAccountId),
+    };
+    this.resources.set(id, updated);
+    return updated;
   }
 }
 
@@ -414,6 +470,154 @@ export class PrismaTOTPRepository implements TOTPRepository {
 
 
 /**
+ * In-memory implementation of ResourceFieldRepository.
+ */
+export class InMemoryResourceFieldRepository implements ResourceFieldRepository {
+  private fields: Map<string, ResourceField> = new Map();
+
+  async create(input: CreateResourceFieldInput): Promise<ResourceField> {
+    const field: ResourceField = {
+      id: crypto.randomUUID(),
+      resourceId: input.resourceId,
+      name: input.name,
+      value: input.value, // In-memory: no encryption needed
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    };
+    this.fields.set(field.id, field);
+    return field;
+  }
+
+  async findById(id: string): Promise<ResourceField | null> {
+    return this.fields.get(id) ?? null;
+  }
+
+  async findByResourceId(resourceId: string): Promise<ResourceField[]> {
+    const results: ResourceField[] = [];
+    for (const field of this.fields.values()) {
+      if (field.resourceId === resourceId) {
+        results.push(field);
+      }
+    }
+    return results;
+  }
+
+  async findByResourceAndName(resourceId: string, name: string): Promise<ResourceField | null> {
+    for (const field of this.fields.values()) {
+      if (field.resourceId === resourceId && field.name === name) {
+        return field;
+      }
+    }
+    return null;
+  }
+
+  async update(id: string, value: string): Promise<ResourceField> {
+    const field = this.fields.get(id);
+    if (!field) {
+      throw new Error(`ResourceField with ID ${id} not found`);
+    }
+    field.value = value;
+    field.updatedAt = new Date();
+    return field;
+  }
+
+  async delete(id: string): Promise<void> {
+    this.fields.delete(id);
+  }
+}
+
+/**
+ * Prisma implementation of ResourceFieldRepository.
+ * Encrypts values at rest using AES-256-GCM.
+ */
+export class PrismaResourceFieldRepository implements ResourceFieldRepository {
+  private readonly prisma: PrismaClient;
+
+  constructor(prisma: PrismaClient) {
+    this.prisma = prisma;
+  }
+
+  async create(input: CreateResourceFieldInput): Promise<ResourceField> {
+    const encryptedValue = encryptValue(input.value);
+    const created = await this.prisma.resourceField.create({
+      data: {
+        resourceId: input.resourceId,
+        name: input.name,
+        value: encryptedValue,
+      },
+    });
+    return this.mapPrismaToDomain(created);
+  }
+
+  async findById(id: string): Promise<ResourceField | null> {
+    const row = await this.prisma.resourceField.findUnique({
+      where: { id },
+    });
+    return row ? this.mapPrismaToDomain(row) : null;
+  }
+
+  async findByResourceId(resourceId: string): Promise<ResourceField[]> {
+    const rows = await this.prisma.resourceField.findMany({
+      where: { resourceId },
+      orderBy: { name: 'asc' },
+    });
+    return rows.map((row) => this.mapPrismaToDomain(row));
+  }
+
+  async findByResourceAndName(resourceId: string, name: string): Promise<ResourceField | null> {
+    const row = await this.prisma.resourceField.findUnique({
+      where: {
+        resourceId_name: {
+          resourceId,
+          name,
+        },
+      },
+    });
+    return row ? this.mapPrismaToDomain(row) : null;
+  }
+
+  async update(id: string, value: string): Promise<ResourceField> {
+    const encryptedValue = encryptValue(value);
+    const updated = await this.prisma.resourceField.update({
+      where: { id },
+      data: { value: encryptedValue },
+    });
+    return this.mapPrismaToDomain(updated);
+  }
+
+  async delete(id: string): Promise<void> {
+    try {
+      await this.prisma.resourceField.delete({
+        where: { id },
+      });
+    } catch (e) {
+      if ((e as { code?: string }).code === 'P2025') {
+        return; // Already deleted
+      }
+      throw e;
+    }
+  }
+
+  private mapPrismaToDomain(row: {
+    id: string;
+    resourceId: string;
+    name: string;
+    value: string;
+    createdAt: Date;
+    updatedAt: Date;
+  }): ResourceField {
+    return {
+      id: row.id,
+      resourceId: row.resourceId,
+      name: row.name,
+      value: decryptValue(row.value), // Decrypt on read
+      createdAt: row.createdAt,
+      updatedAt: row.updatedAt,
+    };
+  }
+}
+
+/**
  * Container for all repositories.
  * Used for dependency injection throughout the application.
  */
@@ -422,6 +626,7 @@ export interface Repositories {
   guardians: GuardianRepository;
   approvalRequests: ApprovalRequestRepository;
   totp: TOTPRepository;
+  resourceFields: ResourceFieldRepository;
 }
 
 /**
@@ -433,5 +638,6 @@ export function createInMemoryRepositories(): Repositories {
     guardians: new InMemoryGuardianRepository(),
     approvalRequests: new InMemoryApprovalRequestRepository(),
     totp: new InMemoryTOTPRepository(),
+    resourceFields: new InMemoryResourceFieldRepository(),
   };
 }

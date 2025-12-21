@@ -19,6 +19,10 @@ const envSchema = z.object({
 
   // Database Configuration
   DATABASE_URL: z.string().min(1, 'DATABASE_URL is required'),
+
+  // Encryption Configuration (required for resource field encryption)
+  // 32-byte hex string (64 characters)
+  ENCRYPTION_KEY: z.string().length(64, 'ENCRYPTION_KEY must be 64 hex characters').optional(),
 });
 
 /**
