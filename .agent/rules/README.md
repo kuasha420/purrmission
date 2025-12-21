@@ -31,7 +31,7 @@ The `.agent/` directory contains:
 
 ## Critical Dependencies
 - Node.js v24.10.1 (specified in `.nvmrc`)
-- Yarn Berry (v4+) for package management
+- PNPM (v9+) for package management
 - discord.js v14 for Discord integration
 - Fastify for HTTP API
 - Zod for validation

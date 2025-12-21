@@ -69,7 +69,7 @@ This ensures the project remains open, resilient, supported, and future-proof wh
 ### Prerequisites
 
 - Node.js v24.10.1 (use `nvm use` if you have nvm)
-- Corepack enabled (`corepack enable`)
+- PNPM enabled (`corepack enable && corepack prepare pnpm@latest --activate`)
 - A Discord bot token ([Discord Developer Portal](https://discord.com/developers/applications))
 
 ### Installation
@@ -78,21 +78,25 @@ This ensures the project remains open, resilient, supported, and future-proof wh
 # 1. Use the correct Node version
 nvm use 24.10.1
 
-# 2. Enable Corepack for Yarn
+# 2. Enable PNPM
 corepack enable
+corepack prepare pnpm@latest --activate
 
 # 3. Install dependencies
-yarn install
+pnpm install
 
 # 4. Configure environment
 cp apps/purrmission-bot/.env.example apps/purrmission-bot/.env
 # Edit .env with your Discord credentials
 
-# 5. Deploy Discord slash commands
-yarn discord:deploy-commands
+# 5. Generate Prisma Client
+pnpm prisma:generate
 
-# 6. Start the bot
-yarn dev:purrmission
+# 6. Deploy Discord slash commands
+pnpm discord:deploy-commands
+
+# 7. Start the bot
+pnpm dev:purrmission
 ```
 
 ### 🔐 2FA Cheatsheet
@@ -211,11 +215,14 @@ purrmission/
 
 | Command                        | Description                          |
 | ------------------------------ | ------------------------------------ |
-| `yarn dev:purrmission`         | Start bot in development mode        |
-| `yarn build`                   | Build TypeScript to JavaScript       |
-| `yarn lint`                    | Run ESLint                           |
-| `yarn format`                  | Format code with Prettier            |
-| `yarn discord:deploy-commands` | Register slash commands with Discord |
+| Command                        | Description                                  |
+| ------------------------------ | -------------------------------------------- |
+| `pnpm dev:purrmission`         | Start bot in development mode (via Turbo)    |
+| `pnpm build`                   | Build workspace (via Turbo)                  |
+| `pnpm lint`                    | Run ESLint                                   |
+| `pnpm format`                  | Format code with Prettier                    |
+| `pnpm discord:deploy-commands` | Register slash commands with Discord         |
+| `pnpm prisma:generate`         | Generate Prisma Client                       |
 
 ## MVP Limitations
 

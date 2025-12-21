@@ -2,7 +2,7 @@
 
 ## Prerequisites
 - Node.js v24.10.1+
-- Yarn Berry (v4+)
+- PNPM (v9+) via Corepack
 - PM2 installed globally on the server
 
 ## Setup
@@ -17,13 +17,21 @@ You can use the provided script or PM2.
 
 ### Using Script
 ```bash
-yarn prod:purrmission
+pnpm install
+pnpm build
+pnpm prod:purrmission
 ```
 
 ### Using PM2 (Recommended)
 ```bash
+# Ensure deps are installed first
+pnpm install --frozen-lockfile
+pnpm prisma:generate
+pnpm prisma:deploy
 pm2 startOrRestart ecosystem.config.cjs
 ```
 
 ## Troubleshooting
-- **`MODULE_NOT_FOUND` (dotenv)**: Ensure `dotenv` is installed in the root `node_modules` (`yarn add dotenv` in root). Ensure your `.env` file exists in the root.
+- **`MODULE_NOT_FOUND` (dotenv)**: Ensure `dotenv` is installed in the root `node_modules`.
+- **`Prisma Client` errors**: Run `pnpm prisma:generate`.
+- **Deployment fails silently**: Check `pm2 logs Purrmission`.

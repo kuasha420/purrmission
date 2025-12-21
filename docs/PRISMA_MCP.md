@@ -9,7 +9,7 @@ You can run a local Prisma MCP server for this project so MCP-aware AI tools (Ch
 From the repo root:
 
 ```bash
-yarn dlx prisma mcp
+pnpm dlx prisma mcp
 ```
 
 This starts a local MCP server using the Prisma CLI. It will use the `DATABASE_URL` from your `.env` file by default.
@@ -24,7 +24,7 @@ See [`docs/mcp/prisma-local.json`](./mcp/prisma-local.json) for an example `mcpS
 {
   "mcpServers": {
     "prisma-local": {
-      "command": "yarn",
+      "command": "pnpm",
       "args": ["dlx", "prisma", "mcp"],
       "env": {
         "DATABASE_URL": "file:./prisma/purrmission.db"
@@ -42,7 +42,7 @@ High-level flow:
 
 1. Set up a Prisma Postgres project in the Prisma Console.
 2. Configure the Prisma MCP server as described in the official docs.
-3. Add an MCP configuration to your AI tool that points to `npx prisma mcp` (or `yarn dlx prisma mcp`) with the appropriate environment variables.
+3. Add an MCP configuration to your AI tool that points to `npx prisma mcp` (or `pnpm dlx prisma mcp`) with the appropriate environment variables.
 
 This repository includes a template at:
 

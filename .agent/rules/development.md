@@ -24,7 +24,7 @@ trigger: model_decision
    export default { data, execute } satisfies Command;
    ```
 3. Add to command index if needed
-4. Run `yarn deploy:commands` to register with Discord
+4. Run `pnpm discord:deploy-commands` to register with Discord
 5. Restart the bot
 
 ### Modifying Domain Logic
@@ -69,9 +69,9 @@ trigger: model_decision
 
 ### Running Tests
 ```bash
-yarn test              # Run all tests
-yarn test:watch        # Watch mode
-yarn test:coverage     # Coverage report
+pnpm test              # Run all tests
+pnpm test:watch        # Watch mode
+pnpm test:coverage     # Coverage report
 ```
 
 ### Writing Tests
@@ -94,7 +94,7 @@ yarn test:coverage     # Coverage report
 
 **Command not registered**
 - Slash command not deployed
-- Fix: Run `yarn deploy:commands`
+- Fix: Run `pnpm discord:deploy-commands`
 
 ### Logging
 - Use logger utility instead of `console.log`

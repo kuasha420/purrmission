@@ -13,7 +13,7 @@ trigger: model_decision
 - **Runtime**: Node.js (v24.10.1)
 - **Language**: TypeScript (strict mode)
 - **Module System**: ES Modules (`import`/`export`)
-- **Package Manager**: Yarn Berry (v4+)
+- **Package Manager**: PNPM (v9+)
 - **Framework**: discord.js v14
 - **Web Server**: Fastify
 - **Validation**: Zod
@@ -65,9 +65,9 @@ Required:
 ### Installation
 ```bash
 corepack enable
-yarn install
+pnpm install
 # Create .env from .env.example and fill in values
-yarn dev
+pnpm dev
 ```
 
 ## Key Features

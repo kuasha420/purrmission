@@ -44,7 +44,7 @@ To test the deployment logic against a realistic OS environment (simulating a fr
 ```
 
 This script will:
-1. Build the project (`yarn build`).
+1. Build the project (`pnpm build`).
 2. Create two containers: `purrmission-srv-fresh` and `purrmission-srv-existing` (defined in `distrobox.ini`).
 3. **Fresh Server Test**:
    - Cleans the target directory.

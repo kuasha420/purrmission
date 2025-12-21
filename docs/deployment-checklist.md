@@ -18,7 +18,7 @@
     - [ ] **Persistence Check**: Verify SQLite database file is not overwritten/deleted during deployment cleanup.
 
 - [ ] **Dependencies**:
-    - [ ] Verify `yarn install --immutable` runs successfully.
+    - [ ] Verify `pnpm install --immutable` runs successfully.
     - [ ] Ensure `openssl` is installed on the server (required for Prisma Engine).
 
 ## Deployment Steps
@@ -36,4 +36,4 @@
 
 -   **"Schema not found"**: The `prisma` directory was not uploaded. Copy it manually or update `deploy.yml`.
 -   **"Database is locked"**: Common with SQLite if multiple processes access it. Restart PM2.
--   **Missing Dependencies**: If `npx` or `prisma` not found, ensure they are in `dependencies` or `yarn install` installs dev deps (default for Yarn Berry).
+-   **Missing Dependencies**: If `npx` or `prisma` not found, ensure they are in `dependencies` or `pnpm install` installs dev deps (default for Yarn Berry).
