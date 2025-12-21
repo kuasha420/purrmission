@@ -157,6 +157,10 @@ jobs:
             fi
 
             yarn install --immutable
+            
+            echo "Running database migrations..."
+            yarn prisma:deploy
+
             pm2 startOrRestart ecosystem.config.cjs
 
 

@@ -3,7 +3,7 @@ module.exports = {
         {
             name: "Purrmission",
             script: "./apps/purrmission-bot/dist/index.js",
-            cwd: "./",
+            cwd: "./", // .env file must be in this directory (project root)
             env: {
                 NODE_ENV: "production",
             },

@@ -15,7 +15,9 @@
     "build": "yarn workspace @purrfecthq/purrmission-bot build",
     "dev:purrmission": "yarn workspace @purrfecthq/purrmission-bot dev",
     "discord:deploy-commands": "yarn workspace @purrfecthq/purrmission-bot discord:deploy-commands",
+    "prod:purrmission": "node apps/purrmission-bot/dist/index.js",
     "prisma:generate": "prisma generate",
+    "prisma:deploy": "prisma migrate deploy",
     "prisma:migrate:dev": "prisma migrate dev",
     "prisma:studio": "prisma studio",
     "prisma:format": "prisma format"
