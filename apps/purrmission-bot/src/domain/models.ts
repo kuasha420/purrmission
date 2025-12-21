@@ -37,7 +37,7 @@ export interface Resource {
   apiKey: string;
 
   /** Optional linked TOTP account ID (one-to-one) */
-  totpAccountId?: string;
+  totpAccountId?: string | null;
 
   /** Timestamp when the resource was created */
   createdAt: Date;
@@ -175,10 +175,13 @@ export interface AccessRequestContext {
 
   /** Human-readable description of what's being requested */
   description: string;
-
-  /** Index signature for Record<string, unknown> compatibility */
-  [key: string]: unknown;
 }
+
+/**
+ * Extended access request context for compatibility with JSON storage
+ * or Record<string, unknown> APIs where additional properties may be present.
+ */
+export type AccessRequestContextWithExtras = AccessRequestContext & Record<string, unknown>;
 
 /**
  * A TOTP account for generating 2FA codes.
