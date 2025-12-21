@@ -542,6 +542,13 @@ __metadata:
   languageName: node
   linkType: hard
 
+"@prisma/client-runtime-utils@npm:7.2.0":
+  version: 7.2.0
+  resolution: "@prisma/client-runtime-utils@npm:7.2.0"
+  checksum: 10c0/2d28cd04f3e8ef156d27bfc405d85603f9f4c604a54c935a9bbb8ace322c47f795223d168945e5f76ec1978dcdba10d2cef29853e91a93735fc654c69dd5deb4
+  languageName: node
+  linkType: hard
+
 "@prisma/client@npm:^6.0.0":
   version: 6.19.0
   resolution: "@prisma/client@npm:6.19.0"
@@ -554,6 +561,23 @@ __metadata:
     typescript:
       optional: true
   checksum: 10c0/c3173fae0195adc952ab47d30120b5ae397b71997b9b60c2ba78fb10a99d10bda2996869c311164a08311ae0bbde41b86806898e49648df3fe713fbe8cb4659e
+  languageName: node
+  linkType: hard
+
+"@prisma/client@npm:^7.2.0":
+  version: 7.2.0
+  resolution: "@prisma/client@npm:7.2.0"
+  dependencies:
+    "@prisma/client-runtime-utils": "npm:7.2.0"
+  peerDependencies:
+    prisma: "*"
+    typescript: ">=5.4.0"
+  peerDependenciesMeta:
+    prisma:
+      optional: true
+    typescript:
+      optional: true
+  checksum: 10c0/3c790af2bbfbbcdcaae0f0a8d33b17e8945daa0f731007d85d95ec1c726c7f8a8ed617802e39bde905613d302eaa8eaac804ab9bce5efc4ed174d9985cdf942a
   languageName: node
   linkType: hard
 
@@ -2422,6 +2446,7 @@ __metadata:
   version: 0.0.0-use.local
   resolution: "purrmission@workspace:."
   dependencies:
+    "@prisma/client": "npm:^7.2.0"
     "@typescript-eslint/eslint-plugin": "npm:^8.49.0"
     "@typescript-eslint/parser": "npm:^8.49.0"
     dotenv: "npm:^17.2.3"
