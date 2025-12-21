@@ -22,7 +22,7 @@
   },
   "packageManager": "yarn@4.12.0",
   "dependencies": {
-    "dotenv": "^16.4.7"
+    "dotenv": "^17.2.3"
   },
   "devDependencies": {
     "@typescript-eslint/eslint-plugin": "^8.49.0",
