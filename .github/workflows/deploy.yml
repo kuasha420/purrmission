@@ -62,8 +62,7 @@ jobs:
           DISCORD_BOT_TOKEN: ${{ secrets.DISCORD_BOT_TOKEN }}
           DISCORD_CLIENT_ID: ${{ secrets.DISCORD_CLIENT_ID }}
           DISCORD_GUILD_ID: ${{ secrets.DISCORD_GUILD_ID }}
-          DATABASE_URL: "file:./dev.db" # Dummy value for validation, not used by script
-          ENCRYPTION_KEY: ${{ secrets.ENCRYPTION_KEY }} # Required for app initialization
+          DATABASE_URL: "file:./dev.db" # Required for core validation
         run: pnpm discord:deploy-commands
 
       - name: Upload artifact
