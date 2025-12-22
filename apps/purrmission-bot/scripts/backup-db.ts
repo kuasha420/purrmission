@@ -17,14 +17,28 @@ export async function backupDatabase(): Promise<string> {
         throw new Error('Automated backup only supported for SQLite (file: protocol)');
     }
 
-    // Parse file path from URL
-    // e.g. "file:./dev.db" -> "./dev.db"
-    // e.g. "file:../prisma/dev.db"
-    let dbPath = dbUrl.slice(5);
+    // Parse file path from URL robustly for SQLite
+    if (!dbUrl.startsWith('file:')) {
+        throw new Error('backup-db script only supports SQLite (DATABASE_URL must start with file:)');
+    }
 
-    // Resolve absolute path relative to CWD (which should be app root or where env is loaded)
-    // We assume CWD is the app root (apps/purrmission-bot) or project root.
-    // The safest is to resolve relative to process.cwd()
+    // Remove 'file:' prefix. Handle both file:./path and file:///path
+    // Prisma uses file:./path for relative and file:/path or file:///path for absolute.
+    let dbPath = dbUrl.replace(/^file:/, '');
+
+    // If it starts with ///, it's an absolute path (e.g. file:///path/to/db)
+    if (dbPath.startsWith('///')) {
+        dbPath = dbPath.slice(2); // Keep one / for absolute path
+    } else if (dbPath.startsWith('//')) {
+        // file://localhost/path or file://path -> usually interpreted as absolute path /path
+        dbPath = dbPath.slice(1);
+    }
+    // Otherwise it's something like ./path or ../path or /path
+
+    // Remove query parameters (Prisma supports them, e.g. ?connection_limit=1)
+    dbPath = dbPath.split('?')[0];
+
+    // Resolve absolute path relative to CWD
     const absoluteDbPath = path.resolve(process.cwd(), dbPath);
 
     if (!fs.existsSync(absoluteDbPath)) {
@@ -43,7 +57,7 @@ export async function backupDatabase(): Promise<string> {
 
     logger.info(`📦 Backing up database to: ${backupPath}`);
     fs.copyFileSync(absoluteDbPath, backupPath);
-    logger.info('✅ Backup check successful.');
+    logger.info('✅ Backup completed successfully.');
 
     return backupPath;
 }

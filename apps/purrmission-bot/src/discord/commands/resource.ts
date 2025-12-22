@@ -471,6 +471,14 @@ async function handleFieldsGet(
 
     // Access denied (if not requiring approval, and not allowed)
     if (!accessResult.allowed) {
+        await context.services.audit.log({
+            action: 'FIELD_ACCESSED',
+            resourceId,
+            actorId: userId,
+            status: 'DENIED',
+            context: JSON.stringify({ fieldName: name, reason: accessResult.reason }),
+        });
+
         await interaction.reply({
             content: `❌ Access denied: ${accessResult.reason ?? 'You do not have permission.'}`,
             ephemeral: true,
@@ -501,6 +509,14 @@ async function handleFieldsGet(
                 '_Keep this value secure._',
             ].join('\n')
         );
+
+        await context.services.audit.log({
+            action: 'FIELD_ACCESSED',
+            resourceId,
+            actorId: userId,
+            status: 'SUCCESS',
+            context: JSON.stringify({ fieldName: name }),
+        });
 
         logger.info('Field value sent via DM', {
             resourceId,
@@ -650,7 +666,7 @@ async function handleLink2FA(
 
     try {
         // Use the services to link
-        await context.services.resource.linkTOTPAccount(resourceId, account.id);
+        await context.services.resource.linkTOTPAccount(resourceId, account.id, userId);
 
         logger.info('Linked 2FA account to resource', {
             resourceId,
@@ -771,8 +787,25 @@ async function handleGet2FA(
 
     // Access denied
     if (!accessResult.allowed) {
+        await context.services.audit.log({
+            action: 'TOTP_RETRIEVED',
+            resourceId,
+            actorId: userId,
+            status: 'DENIED',
+            context: JSON.stringify({ reason: accessResult.reason }),
+        });
+
         await interaction.reply({
             content: `❌ Access denied: ${accessResult.reason ?? 'You do not have permission.'}`,
+            ephemeral: true,
+        });
+        return;
+    }
+
+    // Rate limiting
+    if (!rateLimiter.check(`${userId}:${resourceId}:get-2fa`)) {
+        await interaction.reply({
+            content: '❌ Rate limit exceeded. Please wait a few seconds before requesting another code.',
             ephemeral: true,
         });
         return;
@@ -810,6 +843,14 @@ async function handleGet2FA(
             resourceId,
             totpAccountId: linkedAccount.id,
             userId,
+        });
+
+        await context.services.audit.log({
+            action: 'TOTP_RETRIEVED',
+            resourceId,
+            actorId: userId,
+            status: 'SUCCESS',
+            context: JSON.stringify({ totpAccountId: linkedAccount.id }),
         });
 
         await interaction.reply({

@@ -18,10 +18,6 @@ import {
   handleResourceAutocomplete,
 } from './resource.js';
 import { rateLimiter } from '../../infra/rateLimit.js';
-
-// const LAST_GET_REQUEST: Map<string, number> = new Map();
-// const GET_RATE_LIMIT_MS = 10_000; // 10 seconds
-
 export const purrmissionCommand = new SlashCommandBuilder()
   .setName('purrmission')
   .setDescription('Manage 2FA accounts and resources')

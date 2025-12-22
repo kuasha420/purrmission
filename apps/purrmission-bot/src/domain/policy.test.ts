@@ -10,7 +10,6 @@ describe('Access Policy', () => {
         mode: 'ONE_OF_N',
         apiKey: 'key',
         createdAt: new Date(),
-        updatedAt: new Date(),
     };
 
     const owner: Guardian = {
@@ -19,7 +18,6 @@ describe('Access Policy', () => {
         discordUserId: 'user-owner',
         role: 'OWNER',
         createdAt: new Date(),
-        updatedAt: new Date(),
     };
 
     const guardian: Guardian = {
@@ -28,7 +26,6 @@ describe('Access Policy', () => {
         discordUserId: 'user-guardian',
         role: 'GUARDIAN',
         createdAt: new Date(),
-        updatedAt: new Date(),
     };
 
     const guardians = [owner, guardian];

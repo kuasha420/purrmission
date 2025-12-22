@@ -28,7 +28,8 @@ export class RateLimiter {
         this.config = { windowMs, maxRequests };
 
         // Cleanup interval to remove stale buckets
-        setInterval(() => this.cleanup(), 60000 * 5); // Every 5 min
+        const interval = setInterval(() => this.cleanup(), 60000 * 5); // Every 5 min
+        interval.unref(); // Allow process to exit if only the interval is active
     }
 
     /**
@@ -62,18 +63,9 @@ export class RateLimiter {
     private refill(bucket: TokenBucket, now: number): void {
         const elapsed = now - bucket.lastRefill;
         if (elapsed > this.config.windowMs) {
-            // Full refill after window passes
+            // Full refill after window passes (simple fixed window reset)
             bucket.tokens = this.config.maxRequests;
             bucket.lastRefill = now;
-        } else {
-            // Gradual refill (optional, but for simple window we just reset if window passed.
-            // Wait, standard window usually means "in the last N seconds".
-            // Let's implement a simpler "fixed window" reset if time > window.
-            // Or token bucket with rate = max / window.
-
-            // Let's stick to: if (now - lastRefill > window) reset.
-            // This is effective "fixed window starting from first request".
-            // Simple and predictable.
         }
     }
 

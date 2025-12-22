@@ -1,4 +1,3 @@
-import { z } from 'zod';
 import { getPrismaClient } from '../src/infra/prismaClient.js';
 import { decryptValue, encryptValue } from '../src/infra/crypto.js';
 import { backupDatabase } from './backup-db.js';
@@ -21,7 +20,17 @@ function parseArgs(): RotateConfig {
 
     // Parse batch size
     const batchIndex = args.indexOf('--batch-size');
-    const batchSize = batchIndex !== -1 ? parseInt(args[batchIndex + 1], 10) : 100;
+    let batchSize = 100;
+    if (batchIndex !== -1) {
+        const val = args[batchIndex + 1];
+        if (!val || val.startsWith('--')) {
+            throw new Error('Missing or invalid value for --batch-size');
+        }
+        batchSize = parseInt(val, 10);
+        if (isNaN(batchSize) || batchSize <= 0) {
+            throw new Error('Invalid value for --batch-size. Must be a positive number.');
+        }
+    }
 
     // Determine keys
     // Priority: Command line args > Env vars > Current Env (for old key only)
@@ -29,10 +38,15 @@ function parseArgs(): RotateConfig {
     // Old Key
     let oldKeyHex = process.env.ENCRYPTION_KEY_OLD;
     const fromKeyIndex = args.indexOf('--from-key');
-    if (fromKeyIndex !== -1) oldKeyHex = args[fromKeyIndex + 1];
+    if (fromKeyIndex !== -1) {
+        const val = args[fromKeyIndex + 1];
+        if (!val || val.startsWith('--')) {
+            throw new Error('Missing or invalid value for --from-key');
+        }
+        oldKeyHex = val;
+    }
 
     // If no old key specified, assume simple re-encryption with CURRENT key 
-    // (e.g. migrating legacy format to v1 format using same key)
     if (!oldKeyHex && env.ENCRYPTION_KEY) {
         logger.info('ℹ️ No old key specified, using current ENCRYPTION_KEY as old key.');
         oldKeyHex = env.ENCRYPTION_KEY;
@@ -41,13 +55,15 @@ function parseArgs(): RotateConfig {
     // New Key
     let newKeyHex = process.env.ENCRYPTION_KEY_NEW;
     const toKeyIndex = args.indexOf('--to-key');
-    if (toKeyIndex !== -1) newKeyHex = args[toKeyIndex + 1];
+    if (toKeyIndex !== -1) {
+        const val = args[toKeyIndex + 1];
+        if (!val || val.startsWith('--')) {
+            throw new Error('Missing or invalid value for --to-key');
+        }
+        newKeyHex = val;
+    }
 
     if (!newKeyHex) {
-        // If we are just migrating formats, new key could be same as old key
-        // BUT for rotation we usually want explicit new key.
-        // If user wants to re-encrypt with SAME key (format migration), they should pass it.
-        // We will fallback to current env key if not specified, assuming this is a format upgrade.
         logger.info('ℹ️ No new key specified, using current ENCRYPTION_KEY as new key.');
         newKeyHex = env.ENCRYPTION_KEY;
     }
@@ -65,6 +81,91 @@ function parseArgs(): RotateConfig {
         oldKey: Buffer.from(oldKeyHex, 'hex'),
         newKey: Buffer.from(newKeyHex, 'hex'),
     };
+}
+
+/**
+ * Generic function to rotate encrypted fields on a Prisma model.
+ */
+async function rotateEncryptedModel(
+    modelDelegate: any,
+    modelName: string,
+    encryptedFieldName: string,
+    displayFieldName: string,
+    config: RotateConfig
+): Promise<number> {
+    logger.info(`🔄 Processing ${modelName}...`);
+    const total = await modelDelegate.count();
+    let processed = 0;
+    let updated = 0;
+    let verified = 0;
+    let failed = 0;
+
+    for (let i = 0; i < total; i += config.batchSize) {
+        const batch = await modelDelegate.findMany({
+            take: config.batchSize,
+            skip: i,
+        });
+
+        for (const item of batch) {
+            try {
+                const ciphertext = item[encryptedFieldName];
+                if (!ciphertext) {
+                    processed++;
+                    continue;
+                }
+
+                let plaintext: string;
+                try {
+                    plaintext = decryptValue(ciphertext, config.oldKey);
+                } catch (err) {
+                    // Refined plaintext detection:
+                    // 1. Doesn't look like v1 format (v1:iv:tag:data)
+                    // 2. Or is explicitly an otpauth URI (which has colons but is plaintext)
+                    const looksLikeV1 = ciphertext.startsWith('v1:') && ciphertext.split(':').length === 4;
+                    const isExplicitPlaintext = ciphertext.startsWith('otpauth://');
+
+                    if (!looksLikeV1 || isExplicitPlaintext) {
+                        logger.warn(`⚠️  Found likely unencrypted data for ${modelName} ${item.id} (${item[displayFieldName]}). Encrypting now.`);
+                        plaintext = ciphertext;
+                    } else {
+                        throw err;
+                    }
+                }
+
+                // Always re-encrypt to ensure latest format (v1) and target key
+                const newCiphertext = encryptValue(plaintext, config.newKey);
+
+                if (newCiphertext !== ciphertext) {
+                    updated++;
+                    if (!config.dryRun) {
+                        await modelDelegate.update({
+                            where: { id: item.id },
+                            data: { [encryptedFieldName]: newCiphertext },
+                        });
+
+                        // Verification
+                        const check = await modelDelegate.findUnique({ where: { id: item.id } });
+                        if (check && decryptValue(check[encryptedFieldName], config.newKey) === plaintext) {
+                            verified++;
+                        } else {
+                            logger.error(`❌ Verification failed for ${modelName} ${item.id}`);
+                            failed++;
+                        }
+                    }
+                } else {
+                    // Already in sync
+                    verified++;
+                }
+            } catch (err) {
+                logger.error(`❌ Failed to process ${modelName} ${item.id}: ${err}`);
+                failed++;
+            }
+            processed++;
+        }
+    }
+
+    logger.info(`✅ ${modelName}: Scanned ${processed}, Updated ${updated}, Verified ${verified}, Failed ${failed}`);
+    return failed;
 }
 
 async function main() {
@@ -87,117 +188,32 @@ async function main() {
 
         const prisma = getPrismaClient();
 
+        let totalFailures = 0;
+
         // 1. Rotate TOTP Accounts
-        logger.info('🔄 Processing TOTP Accounts...');
-        const totpCount = await prisma.tOTPAccount.count();
-        let processedTotp = 0;
-        let diffsTotp = 0;
-        let verifiedTotp = 0;
-
-        for (let i = 0; i < totpCount; i += config.batchSize) {
-            const batch = await prisma.tOTPAccount.findMany({
-                take: config.batchSize,
-                skip: i,
-            });
-
-            for (const account of batch) {
-                try {
-                    let plaintext: string;
-                    try {
-                        plaintext = decryptValue(account.secret, config.oldKey);
-                    } catch (err) {
-                        // Fallback: If not v1/legacy ciphertext, assume plaintext (bug fix)
-                        if (!account.secret.startsWith('v1:') && !account.secret.includes(':')) {
-                            logger.warn(`⚠️  Found unencrypted secret for account ${account.id} (${account.accountName}). Encrypting it now.`);
-                            plaintext = account.secret;
-                        } else {
-                            throw err;
-                        }
-                    }
-
-                    // Always re-encrypt to ensure v1 format and/or new key
-                    const newCiphertext = encryptValue(plaintext, config.newKey);
-
-                    if (newCiphertext !== account.secret) {
-                        diffsTotp++;
-                        if (!config.dryRun) {
-                            await prisma.tOTPAccount.update({
-                                where: { id: account.id },
-                                data: { secret: newCiphertext },
-                            });
-                            // Verify immediately
-                            const check = await prisma.tOTPAccount.findUnique({ where: { id: account.id } });
-                            if (check && decryptValue(check.secret, config.newKey) === plaintext) {
-                                verifiedTotp++;
-                            } else {
-                                logger.error(`❌ Verification failed for TOTP Account ${account.id}`);
-                            }
-                        }
-                    }
-                } catch (err) {
-                    logger.error(`❌ Failed to process TOTP Account ${account.id}: ${err}`);
-                }
-                processedTotp++;
-            }
-        }
-        logger.info(`✅ TOTP Accounts: Scanned ${processedTotp}, Needed Update ${diffsTotp}, Verified ${verifiedTotp}`);
-
+        totalFailures += await rotateEncryptedModel(
+            prisma.tOTPAccount,
+            'TOTPAccount',
+            'secret',
+            'accountName',
+            config
+        );
 
         // 2. Rotate Resource Fields
-        logger.info('🔄 Processing Resource Fields...');
-        const fieldCount = await prisma.resourceField.count();
-        let processedFields = 0;
-        let diffsFields = 0;
-        let verifiedFields = 0;
+        totalFailures += await rotateEncryptedModel(
+            prisma.resourceField,
+            'ResourceField',
+            'value',
+            'name',
+            config
+        );
 
-        for (let i = 0; i < fieldCount; i += config.batchSize) {
-            const batch = await prisma.resourceField.findMany({
-                take: config.batchSize,
-                skip: i,
-            });
-
-            for (const field of batch) {
-                try {
-                    let plaintext: string;
-                    try {
-                        plaintext = decryptValue(field.value, config.oldKey);
-                    } catch (err) {
-                        // Fallback: If not v1/legacy ciphertext, assume plaintext (bug fix)
-                        if (!field.value.startsWith('v1:') && !field.value.includes(':')) {
-                            logger.warn(`⚠️  Found unencrypted value for field ${field.id} (${field.name}). Encrypting it now.`);
-                            plaintext = field.value;
-                        } else {
-                            throw err;
-                        }
-                    }
-
-                    const newCiphertext = encryptValue(plaintext, config.newKey);
-
-                    if (newCiphertext !== field.value) {
-                        diffsFields++;
-                        if (!config.dryRun) {
-                            await prisma.resourceField.update({
-                                where: { id: field.id },
-                                data: { value: newCiphertext },
-                            });
-                            // Verify
-                            const check = await prisma.resourceField.findUnique({ where: { id: field.id } });
-                            if (check && decryptValue(check.value, config.newKey) === plaintext) {
-                                verifiedFields++;
-                            } else {
-                                logger.error(`❌ Verification failed for Resource Field ${field.id}`);
-                            }
-                        }
-                    }
-                } catch (err) {
-                    logger.error(`❌ Failed to process Resource Field ${field.id}: ${err}`);
-                }
-                processedFields++;
-            }
+        if (totalFailures > 0) {
+            logger.error(`🚨 Rotation completed with ${totalFailures} failures. Please check logs and intervene manually.`);
+            process.exit(1);
         }
-        logger.info(`✅ Resource Fields: Scanned ${processedFields}, Needed Update ${diffsFields}, Verified ${verifiedFields}`);
 
-        logger.info('✨ Rotation complete.');
+        logger.info('✨ Rotation completed successfully.');
     } catch (error) {
         logger.error('Fatal Rotation Error:', error);
         process.exit(1);

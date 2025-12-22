@@ -196,11 +196,18 @@ export class ApprovalService {
       newStatus,
     });
 
+    // Extract requester (actor) ID from the original request context, if available
+    let requesterId: string | null = null;
+    const requestContext = request.context as any;
+    if (requestContext && typeof requestContext === 'object' && 'requesterId' in requestContext) {
+      requesterId = String(requestContext.requesterId);
+    }
+
     // Audit log
     await this.deps.audit?.log({
       action: 'APPROVAL_DECISION',
       resourceId: request.resourceId,
-      actorId: null, // Requester unknown here easily? Actually we know context.requesterId but typed loosely.
+      actorId: requesterId,
       resolverId: byGuardianDiscordId,
       status: newStatus,
       context: JSON.stringify({ requestId, decision, originalContext: request.context }),
@@ -348,7 +355,7 @@ export class ResourceService {
    * Link a TOTP account to a resource.
    * Note: Uses repository methods that may need Prisma for persistence.
    */
-  async linkTOTPAccount(resourceId: string, totpAccountId: string): Promise<void> {
+  async linkTOTPAccount(resourceId: string, totpAccountId: string, actorId: string): Promise<void> {
     const { repositories } = this.deps;
 
     // Verify resource exists
@@ -381,6 +388,7 @@ export class ResourceService {
     await this.deps.audit?.log({
       action: 'TOTP_LINKED',
       resourceId,
+      actorId,
       status: 'SUCCESS',
       context: JSON.stringify({ totpAccountId }),
     });

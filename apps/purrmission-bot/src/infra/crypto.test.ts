@@ -1,7 +1,6 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert';
 import { encryptValue, decryptValue, validateEncryptionConfig } from './crypto.js';
-import { env } from '../config/env.js';
 
 describe('Crypto Infra', () => {
     it('should encrypt and decrypt a value correctly (v1)', () => {
