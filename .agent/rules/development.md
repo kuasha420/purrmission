@@ -114,3 +114,7 @@ pnpm test:coverage     # Coverage report
 - **Workspace Hygiene**: Never save temporary files in the root or source directories.
 - **Location**: Always use the `tmp/` directory (create if needed).
 - **Cleanup**: Delete temporary files when no longer needed.
+
+## Prisma Rules
+1. **Regenerate Client on Schema Change**: Whenever you modify `prisma/schema.prisma` (manually or via migration), you MUST run `npx prisma generate` immediately afterwards to update the TypeScript definitions.
+2. **Migration Workflow**: Use `npx prisma migrate dev --name <descriptive-name>` to apply schema changes in development.
