@@ -19,6 +19,8 @@ import {
     createApprovalButtons,
     createAccessRequestEmbed,
 } from '../interactions/approvalButtons.js';
+import { rateLimiter } from '../../infra/rateLimit.js';
+import { checkAccessPolicy, requiresApproval } from '../../domain/policy.js';
 
 /**
  * Build the 'resource' subcommand group for the /purrmission command.
@@ -457,16 +459,26 @@ async function handleFieldsGet(
         return;
     }
 
-    // Check if user is owner/guardian
-    const isGuardian = await isOwnerOrGuardian(context, resourceId, userId);
+    // Check access policy
+    const guardians = await context.repositories.guardians.findByResourceId(resourceId);
+    const accessResult = await checkAccessPolicy(resource, guardians, userId);
 
-    if (!isGuardian) {
+    if (requiresApproval(accessResult)) {
         // Create approval request for field access
         await createFieldAccessRequest(interaction, context, resource.name, resourceId, name, userId);
         return;
     }
 
-    // Owner/Guardian: Direct access
+    // Access denied (if not requiring approval, and not allowed)
+    if (!accessResult.allowed) {
+        await interaction.reply({
+            content: `❌ Access denied: ${accessResult.reason ?? 'You do not have permission.'}`,
+            ephemeral: true,
+        });
+        return;
+    }
+
+    // Direct access allowed
     const field = await resourceFields.findByResourceAndName(resourceId, name);
 
     if (!field) {
@@ -747,12 +759,22 @@ async function handleGet2FA(
         return;
     }
 
-    // Check if user is owner/guardian
-    const isGuardian = await isOwnerOrGuardian(context, resourceId, userId);
+    // Check access policy
+    const guardians = await context.repositories.guardians.findByResourceId(resourceId);
+    const accessResult = await checkAccessPolicy(resource, guardians, userId);
 
-    if (!isGuardian) {
+    if (requiresApproval(accessResult)) {
         // Create approval request for 2FA access
         await create2FAAccessRequest(interaction, context, resource.name, resourceId, userId);
+        return;
+    }
+
+    // Access denied
+    if (!accessResult.allowed) {
+        await interaction.reply({
+            content: `❌ Access denied: ${accessResult.reason ?? 'You do not have permission.'}`,
+            ephemeral: true,
+        });
         return;
     }
 

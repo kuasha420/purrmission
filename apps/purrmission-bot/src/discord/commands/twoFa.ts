@@ -17,9 +17,10 @@ import {
   handleResourceCommand,
   handleResourceAutocomplete,
 } from './resource.js';
+import { rateLimiter } from '../../infra/rateLimit.js';
 
-const LAST_GET_REQUEST: Map<string, number> = new Map();
-const GET_RATE_LIMIT_MS = 10_000; // 10 seconds
+// const LAST_GET_REQUEST: Map<string, number> = new Map();
+// const GET_RATE_LIMIT_MS = 10_000; // 10 seconds
 
 export const purrmissionCommand = new SlashCommandBuilder()
   .setName('purrmission')
@@ -225,16 +226,20 @@ async function handleGet2FA(
   const requesterId = interaction.user.id;
   const { totp: totpRepository } = context.repositories;
 
-  // Simple rate limit per user+account
-  const key = `${requesterId}:${accountName}`;
-  const now = Date.now();
-  const last = LAST_GET_REQUEST.get(key) ?? 0;
-
-  if (now - last < GET_RATE_LIMIT_MS) {
-    const remaining = Math.ceil((GET_RATE_LIMIT_MS - (now - last)) / 1000);
+  // Rate Limit Check
+  const rateLimitKey = `req:2fa:${requesterId}`;
+  if (!rateLimiter.check(rateLimitKey)) {
     await interaction.reply({
-      content: `⏱️ You're requesting codes too quickly for this account. Please wait ~${remaining}s and try again.`,
+      content: '⏱️ You are requesting 2FA codes too quickly. Please wait a moment.',
       ephemeral: true,
+    });
+
+    await context.services.audit.log({
+      action: 'TOTP_ACCESS_THROTTLED',
+      resourceId: null, // No resource ID for direct TOTP access
+      actorId: requesterId,
+      status: 'DENIED',
+      context: JSON.stringify({ reason: 'Rate limit exceeded', accountName }),
     });
     return;
   }
@@ -277,8 +282,6 @@ async function handleGet2FA(
         ].join('\n')
       );
 
-      LAST_GET_REQUEST.set(key, now);
-
       await interaction.reply({
         content: '✅ Backup key sent to your DMs.',
         ephemeral: true,
@@ -309,8 +312,6 @@ async function handleGet2FA(
         '_Code is time-based and will expire soon._',
       ].join('\n')
     );
-
-    LAST_GET_REQUEST.set(key, now);
 
     await interaction.reply({
       content: '✅ TOTP code sent to your DMs.',
