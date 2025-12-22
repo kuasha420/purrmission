@@ -23,6 +23,7 @@ import type {
   CreateResourceFieldInput,
 } from './models.js';
 import { encryptValue, decryptValue } from '../infra/crypto.js';
+import { logger } from '../logging/logger.js';
 
 import crypto from 'node:crypto';
 
@@ -542,18 +543,26 @@ export class PrismaTOTPRepository implements TOTPRepository {
     try {
       decryptedSecret = decryptValue(row.secret);
     } catch (error) {
-      throw new Error(
-        `Failed to decrypt TOTP secret for account '${row.accountName}' (id: ${row.id}): ${error instanceof Error ? error.message : String(error)}`
-      );
+      // Log detailed error for debugging, but throw generic error to avoid information disclosure
+      logger.error('Failed to decrypt TOTP secret', {
+        accountId: row.id,
+        accountName: row.accountName,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      throw new Error('Failed to decrypt TOTP secret. Check encryption key configuration.');
     }
 
     if (row.backupKey) {
       try {
         decryptedBackupKey = decryptValue(row.backupKey);
       } catch (error) {
-        throw new Error(
-          `Failed to decrypt TOTP backup key for account '${row.accountName}' (id: ${row.id}): ${error instanceof Error ? error.message : String(error)}`
-        );
+        // Log detailed error for debugging, but throw generic error to avoid information disclosure
+        logger.error('Failed to decrypt TOTP backup key', {
+          accountId: row.id,
+          accountName: row.accountName,
+          error: error instanceof Error ? error.message : String(error),
+        });
+        throw new Error('Failed to decrypt TOTP backup key. Check encryption key configuration.');
       }
     }
 

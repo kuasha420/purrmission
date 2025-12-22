@@ -26,18 +26,6 @@ dotenv.config();
 
 const APPLY_CHANGES = process.argv.includes('--apply');
 
-interface TOTPAccountRow {
-  id: string;
-  ownerDiscordUserId: string;
-  accountName: string;
-  secret: string;
-  issuer: string | null;
-  shared: boolean;
-  backupKey: string | null;
-  createdAt: Date;
-  updatedAt: Date;
-}
-
 /**
  * Check if a value is already encrypted by attempting to decrypt it.
  */
@@ -52,6 +40,14 @@ function isEncrypted(value: string): boolean {
 
 /**
  * Check if a value looks like a valid Base32 TOTP secret (plaintext).
+ * 
+ * This is a heuristic check with limitations:
+ * - Base32 alphabet consists of A-Z, 2-7, and optional padding (=)
+ * - Typical TOTP secrets are 16-32 characters (80-160 bits)
+ * - May produce false negatives for very short or long secrets
+ * - May produce false positives for encrypted data that happens to contain only Base32 chars
+ * 
+ * Used in conjunction with isEncrypted() to determine migration needs.
  */
 function looksLikePlaintextSecret(value: string): boolean {
   // Base32 alphabet: A-Z, 2-7, and optional padding =
@@ -64,6 +60,30 @@ function looksLikePlaintextSecret(value: string): boolean {
   }
   
   return base32Regex.test(value);
+}
+
+/**
+ * Encrypt secret and optional backup key, with validation.
+ * Returns encrypted values or throws on validation failure.
+ */
+function encryptAndValidate(
+  secret: string,
+  backupKey: string | null,
+  secretIsEncrypted: boolean,
+  backupIsEncrypted: boolean
+): { encryptedSecret: string; encryptedBackupKey: string | null } {
+  const encryptedSecret = secretIsEncrypted ? secret : encryptValue(secret);
+  const encryptedBackupKey = backupKey 
+    ? (backupIsEncrypted ? backupKey : encryptValue(backupKey))
+    : null;
+  
+  // Validate by decrypting
+  decryptValue(encryptedSecret);
+  if (backupKey && encryptedBackupKey) {
+    decryptValue(encryptedBackupKey);
+  }
+  
+  return { encryptedSecret, encryptedBackupKey };
 }
 
 async function main() {
@@ -124,18 +144,14 @@ async function main() {
         console.log(`🔓 ${accountLabel}: Found plaintext data`);
         plaintextCount++;
         
-        // Encrypt the secret and backup key
-        const encryptedSecret = secretIsEncrypted ? account.secret : encryptValue(account.secret);
-        const encryptedBackupKey = account.backupKey 
-          ? (backupIsEncrypted ? account.backupKey : encryptValue(account.backupKey))
-          : null;
-        
-        // Validate by decrypting
+        // Encrypt the secret and backup key with validation
         try {
-          const decryptedSecret = decryptValue(encryptedSecret);
-          if (account.backupKey && encryptedBackupKey) {
-            decryptValue(encryptedBackupKey);
-          }
+          const { encryptedSecret, encryptedBackupKey } = encryptAndValidate(
+            account.secret,
+            account.backupKey,
+            secretIsEncrypted,
+            backupIsEncrypted
+          );
           
           console.log(`   ✓ Validated encryption/decryption`);
           
