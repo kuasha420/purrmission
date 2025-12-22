@@ -162,8 +162,8 @@ async function main() {
             encryptedSecret,
             encryptedBackupKey,
           });
-        } catch {
-          console.error(`   ✗ Encryption validation failed`);
+        } catch (error) {
+          console.error(`   ✗ Encryption validation failed for ${accountLabel}:`, error);
           skippedCount++;
         }
       } else {
