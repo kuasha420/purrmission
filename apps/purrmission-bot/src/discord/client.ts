@@ -148,7 +148,12 @@ async function handleButtonInteraction(
       userId: interaction.user.id,
     });
 
-    await handleApprovalButton(interaction, deps.services);
+    await handleApprovalButton(
+      interaction,
+      deps.services,
+      deps.repositories,
+      interaction.client
+    );
     return;
   }
 
@@ -157,3 +162,4 @@ async function handleButtonInteraction(
     customId: interaction.customId,
   });
 }
+

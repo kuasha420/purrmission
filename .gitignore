@@ -42,3 +42,6 @@ coverage/
 # SQLite
 *.db
 *.db-journal
+
+# Turbo cache
+.turbo/

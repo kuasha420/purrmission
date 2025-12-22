@@ -31,11 +31,33 @@ model Resource {
   apiKey    String
   createdAt DateTime     @default(now())
 
+  // Optional linked 2FA account (one-to-one)
+  totpAccountId String?      @unique
+  totpAccount   TOTPAccount? @relation(fields: [totpAccountId], references: [id], onDelete: SetNull)
+
   guardians        Guardian[]
   approvalRequests ApprovalRequest[]
+  fields           ResourceField[]
 
   @@index([apiKey])
 }
+
+/// A text field attached to a resource (e.g., password, API key).
+/// Values are encrypted at rest using AES-256-GCM.
+model ResourceField {
+  id         String   @id @default(uuid())
+  resourceId String
+  name       String
+  value      String   // Encrypted at rest
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  resource Resource @relation(fields: [resourceId], references: [id], onDelete: Cascade)
+
+  @@unique([resourceId, name])
+  @@index([resourceId])
+}
+
 
 model Guardian {
   id            String       @id @default(uuid())
@@ -76,6 +98,9 @@ model TOTPAccount {
   backupKey          String?
   createdAt          DateTime @default(now())
   updatedAt          DateTime @updatedAt
+
+  // Backlink from Resource (one-to-one)
+  linkedResource Resource?
 
   @@unique([ownerDiscordUserId, accountName])
   @@index([ownerDiscordUserId])
