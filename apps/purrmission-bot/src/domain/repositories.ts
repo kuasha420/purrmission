@@ -428,8 +428,18 @@ export class PrismaTOTPRepository implements TOTPRepository {
 
   async create(account: Omit<TOTPAccount, 'id' | 'createdAt' | 'updatedAt'>): Promise<TOTPAccount> {
     // Encrypt secret and backupKey before storing
-    const encryptedSecret = encryptValue(account.secret);
-    const encryptedBackupKey = account.backupKey ? encryptValue(account.backupKey) : null;
+    let encryptedSecret: string;
+    let encryptedBackupKey: string | null;
+
+    try {
+      encryptedSecret = encryptValue(account.secret);
+      encryptedBackupKey = account.backupKey ? encryptValue(account.backupKey) : null;
+    } catch (error) {
+      logger.error('Failed to encrypt TOTP data during creation', {
+        error: error instanceof Error ? error.message : String(error),
+      });
+      throw new Error('Failed to encrypt TOTP data. Check encryption key configuration.');
+    }
 
     const created = await this.prisma.tOTPAccount.create({
       data: {
@@ -447,8 +457,19 @@ export class PrismaTOTPRepository implements TOTPRepository {
 
   async update(account: TOTPAccount): Promise<TOTPAccount> {
     // Encrypt secret and backupKey before storing
-    const encryptedSecret = encryptValue(account.secret);
-    const encryptedBackupKey = account.backupKey ? encryptValue(account.backupKey) : null;
+    let encryptedSecret: string;
+    let encryptedBackupKey: string | null;
+
+    try {
+      encryptedSecret = encryptValue(account.secret);
+      encryptedBackupKey = account.backupKey ? encryptValue(account.backupKey) : null;
+    } catch (error) {
+      logger.error('Failed to encrypt TOTP data during update', {
+        accountId: account.id,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      throw new Error('Failed to encrypt TOTP data. Check encryption key configuration.');
+    }
 
     const updated = await this.prisma.tOTPAccount.update({
       where: { id: account.id },
