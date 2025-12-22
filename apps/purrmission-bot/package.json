@@ -9,7 +9,8 @@
     "dev": "tsx src/index.ts",
     "start": "node dist/index.js",
     "build": "tsc -p tsconfig.json",
-    "discord:deploy-commands": "tsx src/discord/registerCommands.ts"
+    "discord:deploy-commands": "tsx src/discord/registerCommands.ts",
+    "test": "node --import tsx --test src/**/*.test.ts"
   },
   "dependencies": {
     "discord.js": "^14.16.3",

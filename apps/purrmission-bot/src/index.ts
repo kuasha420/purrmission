@@ -4,17 +4,26 @@
 
 import { env } from './config/env.js';
 import { logger } from './logging/logger.js';
-import { createInMemoryRepositories, PrismaTOTPRepository, PrismaResourceRepository } from './domain/repositories.js';
+import { createInMemoryRepositories, PrismaTOTPRepository, PrismaResourceRepository, PrismaAuditRepository } from './domain/repositories.js';
 import { createServices } from './domain/services.js';
 import { createDiscordClient } from './discord/client.js';
 import { startHttpServer } from './http/server.js';
 import { getPrismaClient } from './infra/prismaClient.js';
+import { validateEncryptionConfig } from './infra/crypto.js';
 
 /**
  * Main application bootstrap.
  */
 async function main(): Promise<void> {
   logger.info('🐱 Starting Purrmission Bot...');
+
+  try {
+    validateEncryptionConfig();
+    logger.info('✅ Encryption configuration validated');
+  } catch (error) {
+    logger.error('❌ Critical security failure:', error);
+    process.exit(1);
+  }
 
   logger.info('Initializing repositories...');
   const repositories = createInMemoryRepositories();
@@ -23,6 +32,7 @@ async function main(): Promise<void> {
   const prisma = getPrismaClient();
   repositories.totp = new PrismaTOTPRepository(prisma);
   repositories.resources = new PrismaResourceRepository(prisma);
+  repositories.audit = new PrismaAuditRepository(prisma);
 
   logger.info('Initializing services...');
   const services = createServices({ repositories });
