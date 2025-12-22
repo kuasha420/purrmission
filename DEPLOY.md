@@ -110,7 +110,7 @@ pnpm ops:rotate-keys -- --from-key $ENCRYPTION_KEY_OLD --to-key $ENCRYPTION_KEY_
 ## Audit Logs
 
 Sensitive application flows (field access, TOTP code retrieval, approval decisions) emit audit events to the `AuditLog` table.
-- **Viewing Logs**: Access via Prisma Studio: `npx prisma studio`
+- **Viewing Logs**: Access via Prisma Studio: `pnpm prisma:studio`
 - **Actions Logged**: `APPROVAL_DECISION`, `TOTP_LINKED`, `FIELD_ACCESS_THROTTLED`, `TOTP_ACCESS_THROTTLED`.
 
 ## Troubleshooting
