@@ -27,7 +27,7 @@ const encryptionSchema = z.object({
   ENCRYPTION_KEY: z.string().regex(/^[0-9a-fA-F]{64}$/, 'ENCRYPTION_KEY must be a 64-character hexadecimal string'),
 });
 
-const fullSchema = coreSchema.merge(encryptionSchema);
+export const fullSchema = coreSchema.merge(encryptionSchema);
 
 /**
  * Validated environment configuration.

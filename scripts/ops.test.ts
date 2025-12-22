@@ -6,7 +6,7 @@ import { env } from '../apps/purrmission-bot/src/config/env.js';
 import { backupDatabase } from './backup-db.js';
 
 describe('Operations Scripts', () => {
-    const backupDir = path.resolve(process.cwd(), 'backups');
+
 
     before(() => {
         // Find where the script thinks the DB is

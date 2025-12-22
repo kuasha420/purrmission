@@ -1,17 +1,15 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
 import { describe, it, beforeEach } from 'node:test';
 import assert from 'node:assert';
 import { handleResourceAutocomplete } from './resource.js';
 import type { CommandContext } from './context.js';
 import type { AutocompleteInteraction } from 'discord.js';
 
-// Type-safe mock helper compatible with strict mode
-function createMock<T>(impl: Partial<T> = {}): T {
-    return impl as T;
-}
+
 
 describe('handleResourceAutocomplete', () => {
-    let mockInteraction: Partial<AutocompleteInteraction>;
-    let mockContext: Partial<CommandContext>;
+    let mockInteraction: AutocompleteInteraction;
+    let mockContext: CommandContext;
     let respondCalls: any[] = [];
     let findByUserIdOverrides: any[] = [];
     let findManyByIdsOverrides: any[] = [];
@@ -26,11 +24,11 @@ describe('handleResourceAutocomplete', () => {
         mockInteraction = {
             user: { id: 'user-1' } as any,
             options: {
-                getFocused: ((full: boolean) => {
+                getFocused: ((_full: boolean) => {
                     // Default implementation, overridden in tests
                     return { name: 'unknown', value: '' };
                 }) as any,
-                getString: ((name: string) => {
+                getString: ((_name: string) => {
                     return '';
                 }) as any,
             } as any,
@@ -38,28 +36,28 @@ describe('handleResourceAutocomplete', () => {
                 respondCalls.push(options);
                 return Promise.resolve();
             }) as any,
-        };
+        } as unknown as AutocompleteInteraction;
 
         mockContext = {
             repositories: {
                 guardians: {
-                    findByUserId: async (userId: string) => {
+                    findByUserId: async (_userId: string) => {
                         return findByUserIdOverrides;
                     },
                 } as any,
                 resources: {
-                    findManyByIds: async (ids: string[]) => {
+                    findManyByIds: async (_ids: string[]) => {
                         return findManyByIdsOverrides;
                     },
                 } as any,
                 resourceFields: {
-                    findByResourceId: async (resourceId: string) => {
+                    findByResourceId: async (_resourceId: string) => {
                         return findByResourceIdOverrides;
                     },
                 } as any,
                 totp: {} as any, // Not used in these tests
             } as any,
-        };
+        } as unknown as CommandContext;
     });
 
     it('should return matching resources for resource-id autocomplete', async () => {
