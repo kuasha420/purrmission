@@ -74,31 +74,44 @@ pnpm prisma:deploy
 
 # If upgrading from a version without encryption, run the migration script
 # (Dry run first to see what will be encrypted)
-ENCRYPTION_KEY=<your-key> tsx scripts/encrypt-totp-secrets.ts
-# Then apply the changes
-ENCRYPTION_KEY=<your-key> tsx scripts/encrypt-totp-secrets.ts --apply
+npx tsx scripts/rotate-keys.ts --dry-run
+# Then apply the changes (it uses the same key by default to migrate legacy formats)
+npx tsx scripts/rotate-keys.ts
 
 pm2 startOrRestart ecosystem.config.cjs
 ```
 
-## Migration from Pre-Encryption Versions
+## Key Rotation & Format Migration
 
-If you're upgrading from a version that stored TOTP secrets in plaintext, you **must** run the migration script after deploying:
+The bot supports rotating encryption keys or migrating legacy ciphertext to the new `v1:` format.
 
+### Dry Run (Recommended)
+Always run a dry run first to see how many records need updating:
 ```bash
-# 1. Ensure ENCRYPTION_KEY is set in your .env file
-# 2. Dry run to see what will be encrypted (recommended first)
-ENCRYPTION_KEY=<your-key> tsx scripts/encrypt-totp-secrets.ts
-
-# 3. Review the output, then apply the changes
-ENCRYPTION_KEY=<your-key> tsx scripts/encrypt-totp-secrets.ts --apply
+npx tsx scripts/rotate-keys.ts --dry-run
 ```
 
-The script will:
-- Detect which secrets are already encrypted
-- Encrypt any plaintext secrets found
-- Validate encryption/decryption before committing changes
-- Provide a detailed summary of changes
+### Rotating to a New Key
+To rotate to a completely new key:
+1. Generate a new key: `node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"`
+2. Run rotation:
+```bash
+# Pass old and new keys via CLI or ENV
+export ENCRYPTION_KEY_OLD=<current-key>
+export ENCRYPTION_KEY_NEW=<new-key>
+npx tsx scripts/rotate-keys.ts --from-key $ENCRYPTION_KEY_OLD --to-key $ENCRYPTION_KEY_NEW
+```
+3. Update `.env` with the `ENCRYPTION_KEY_NEW` value as `ENCRYPTION_KEY`.
+4. Restart the bot.
+
+> [!IMPORTANT]
+> **Database Backups**: The rotation script automatically creates a timestamped backup in `apps/purrmission-bot/backups/` before performing any writes (unless in `--dry-run` mode).
+
+## Audit Logs
+
+Sensitive application flows (field access, TOTP code retrieval, approval decisions) emit audit events to the `AuditLog` table.
+- **Viewing Logs**: Access via Prisma Studio: `npx prisma studio`
+- **Actions Logged**: `APPROVAL_DECISION`, `TOTP_LINKED`, `FIELD_ACCESS_THROTTLED`, `TOTP_ACCESS_THROTTLED`.
 
 ## Troubleshooting
 - **`MODULE_NOT_FOUND` (dotenv)**: Ensure `dotenv` is installed in the root `node_modules`.

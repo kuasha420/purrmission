@@ -204,4 +204,7 @@ async function main() {
     }
 }
 
-main();
+// Allow running directly
+if (process.argv[1] === import.meta.filename) {
+    main();
+}
