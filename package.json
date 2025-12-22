@@ -20,7 +20,11 @@
     "prisma:deploy": "prisma migrate deploy",
     "prisma:migrate:dev": "prisma migrate dev",
     "prisma:studio": "prisma studio",
-    "prisma:format": "prisma format"
+    "prisma:format": "prisma format",
+    "ops:backup": "tsx scripts/backup-db.ts",
+    "ops:rotate-keys": "tsx scripts/rotate-keys.ts",
+    "ops:encrypt-totp": "tsx scripts/encrypt-totp-secrets.ts",
+    "ops:test": "node --import tsx --test scripts/ops.test.ts"
   },
   "packageManager": "pnpm@9.15.1",
   "dependencies": {

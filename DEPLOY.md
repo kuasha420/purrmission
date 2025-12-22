@@ -74,9 +74,9 @@ pnpm prisma:deploy
 
 # If upgrading from a version without encryption, run the migration script
 # (Dry run first to see what will be encrypted)
-npx tsx scripts/rotate-keys.ts --dry-run
+pnpm ops:rotate-keys -- --dry-run
 # Then apply the changes (it uses the same key by default to migrate legacy formats)
-npx tsx scripts/rotate-keys.ts
+pnpm ops:rotate-keys
 
 pm2 startOrRestart ecosystem.config.cjs
 ```
@@ -88,7 +88,7 @@ The bot supports rotating encryption keys or migrating legacy ciphertext to the 
 ### Dry Run (Recommended)
 Always run a dry run first to see how many records need updating:
 ```bash
-npx tsx scripts/rotate-keys.ts --dry-run
+pnpm ops:rotate-keys -- --dry-run
 ```
 
 ### Rotating to a New Key
@@ -99,13 +99,13 @@ To rotate to a completely new key:
 # Pass old and new keys via CLI or ENV
 export ENCRYPTION_KEY_OLD=<current-key>
 export ENCRYPTION_KEY_NEW=<new-key>
-npx tsx scripts/rotate-keys.ts --from-key $ENCRYPTION_KEY_OLD --to-key $ENCRYPTION_KEY_NEW
+pnpm ops:rotate-keys -- --from-key $ENCRYPTION_KEY_OLD --to-key $ENCRYPTION_KEY_NEW
 ```
 3. Update `.env` with the `ENCRYPTION_KEY_NEW` value as `ENCRYPTION_KEY`.
 4. Restart the bot.
 
 > [!IMPORTANT]
-> **Database Backups**: The rotation script automatically creates a timestamped backup in `apps/purrmission-bot/backups/` before performing any writes (unless in `--dry-run` mode).
+> **Database Backups**: The rotation script automatically creates a timestamped backup in `backups/` before performing any writes (unless in `--dry-run` mode).
 
 ## Audit Logs
 
