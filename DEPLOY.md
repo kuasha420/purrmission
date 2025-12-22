@@ -74,9 +74,9 @@ pnpm prisma:deploy
 
 # If upgrading from a version without encryption, run the migration script
 # (Dry run first to see what will be encrypted)
-pnpm ops:rotate-keys -- --dry-run
+pnpm prod:ops:rotate-keys -- --dry-run
 # Then apply the changes (it uses the same key by default to migrate legacy formats)
-pnpm ops:rotate-keys
+pnpm prod:ops:rotate-keys
 
 pm2 startOrRestart ecosystem.config.cjs
 ```
@@ -88,7 +88,7 @@ The bot supports rotating encryption keys or migrating legacy ciphertext to the 
 ### Dry Run (Recommended)
 Always run a dry run first to see how many records need updating:
 ```bash
-pnpm ops:rotate-keys -- --dry-run
+pnpm prod:ops:rotate-keys -- --dry-run
 ```
 
 ### Rotating to a New Key
@@ -99,7 +99,7 @@ To rotate to a completely new key:
 # Pass old and new keys via CLI or ENV
 export ENCRYPTION_KEY_OLD=<current-key>
 export ENCRYPTION_KEY_NEW=<new-key>
-pnpm ops:rotate-keys -- --from-key $ENCRYPTION_KEY_OLD --to-key $ENCRYPTION_KEY_NEW
+pnpm prod:ops:rotate-keys -- --from-key $ENCRYPTION_KEY_OLD --to-key $ENCRYPTION_KEY_NEW
 ```
 3. Update `.env` with the `ENCRYPTION_KEY_NEW` value as `ENCRYPTION_KEY`.
 4. Restart the bot.
