@@ -77,7 +77,7 @@ jobs:
             pnpm-workspace.yaml
             ecosystem.config.cjs
             prisma
-            scripts/encrypt-totp-secrets.ts
+            scripts
             dist-checksums.txt
 
   deploy:
