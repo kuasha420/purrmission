@@ -20,9 +20,9 @@ const envSchema = z.object({
   // Database Configuration
   DATABASE_URL: z.string().min(1, 'DATABASE_URL is required'),
 
-  // Encryption Configuration (required for resource field encryption)
+  // Encryption Configuration (required for encrypting TOTP secrets and resource fields at rest)
   // 32-byte hex string (64 characters)
-  ENCRYPTION_KEY: z.string().regex(/^[0-9a-fA-F]{64}$/, 'ENCRYPTION_KEY must be a 64-character hexadecimal string').optional(),
+  ENCRYPTION_KEY: z.string().regex(/^[0-9a-fA-F]{64}$/, 'ENCRYPTION_KEY must be a 64-character hexadecimal string'),
 });
 
 /**

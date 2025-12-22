@@ -198,7 +198,7 @@ export interface TOTPAccount {
 
   /**
    * Raw TOTP secret (BASE32).
-   * TODO: Encrypt this at rest.
+   * Encrypted at rest in the database using AES-256-GCM.
    */
   secret: string;
 

@@ -426,14 +426,18 @@ export class PrismaTOTPRepository implements TOTPRepository {
   }
 
   async create(account: Omit<TOTPAccount, 'id' | 'createdAt' | 'updatedAt'>): Promise<TOTPAccount> {
+    // Encrypt secret and backupKey before storing
+    const encryptedSecret = encryptValue(account.secret);
+    const encryptedBackupKey = account.backupKey ? encryptValue(account.backupKey) : null;
+
     const created = await this.prisma.tOTPAccount.create({
       data: {
         ownerDiscordUserId: account.ownerDiscordUserId,
         accountName: account.accountName,
-        secret: account.secret,
+        secret: encryptedSecret,
         issuer: account.issuer ?? null,
         shared: account.shared,
-        backupKey: account.backupKey ?? null,
+        backupKey: encryptedBackupKey,
       },
     });
 
@@ -441,15 +445,19 @@ export class PrismaTOTPRepository implements TOTPRepository {
   }
 
   async update(account: TOTPAccount): Promise<TOTPAccount> {
+    // Encrypt secret and backupKey before storing
+    const encryptedSecret = encryptValue(account.secret);
+    const encryptedBackupKey = account.backupKey ? encryptValue(account.backupKey) : null;
+
     const updated = await this.prisma.tOTPAccount.update({
       where: { id: account.id },
       data: {
         ownerDiscordUserId: account.ownerDiscordUserId,
         accountName: account.accountName,
-        secret: account.secret,
+        secret: encryptedSecret,
         issuer: account.issuer ?? null,
         shared: account.shared,
-        backupKey: account.backupKey ?? null,
+        backupKey: encryptedBackupKey,
       },
     });
 
@@ -527,14 +535,36 @@ export class PrismaTOTPRepository implements TOTPRepository {
     createdAt: Date;
     updatedAt: Date;
   }): TOTPAccount {
+    // Decrypt secret and backupKey when reading
+    let decryptedSecret: string;
+    let decryptedBackupKey: string | undefined;
+
+    try {
+      decryptedSecret = decryptValue(row.secret);
+    } catch (error) {
+      throw new Error(
+        `Failed to decrypt TOTP secret for account '${row.accountName}' (id: ${row.id}): ${error instanceof Error ? error.message : String(error)}`
+      );
+    }
+
+    if (row.backupKey) {
+      try {
+        decryptedBackupKey = decryptValue(row.backupKey);
+      } catch (error) {
+        throw new Error(
+          `Failed to decrypt TOTP backup key for account '${row.accountName}' (id: ${row.id}): ${error instanceof Error ? error.message : String(error)}`
+        );
+      }
+    }
+
     return {
       id: row.id,
       ownerDiscordUserId: row.ownerDiscordUserId,
       accountName: row.accountName,
-      secret: row.secret,
+      secret: decryptedSecret,
       issuer: row.issuer ?? undefined,
       shared: row.shared,
-      backupKey: row.backupKey ?? undefined,
+      backupKey: decryptedBackupKey,
       createdAt: row.createdAt,
       updatedAt: row.updatedAt,
     };
