@@ -117,6 +117,26 @@ pnpm dev:purrmission
 | `DISCORD_CLIENT_ID` | Your Discord application client ID              |
 | `DISCORD_GUILD_ID`  | Guild ID for development (commands deploy here) |
 | `APP_PORT`          | HTTP server port (default: 3000)                |
+| `DATABASE_URL`      | Database connection URL (e.g., SQLite file path) |
+| `ENCRYPTION_KEY`    | **Required** - 32-byte hex string (64 chars) for encrypting TOTP secrets and resource fields at rest. Generate with: `node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"` |
+
+### Migration for Existing Installations
+
+If you're upgrading from a version that stored TOTP secrets in plaintext, run the migration script to encrypt existing secrets:
+
+```bash
+# Dry run (recommended first)
+ENCRYPTION_KEY=<your-key> tsx scripts/encrypt-totp-secrets.ts
+
+# Apply changes
+ENCRYPTION_KEY=<your-key> tsx scripts/encrypt-totp-secrets.ts --apply
+```
+
+The script will:
+- Detect which secrets are already encrypted
+- Encrypt any plaintext secrets found
+- Validate encryption/decryption before committing changes
+- Provide a detailed summary of changes
 
 ## Usage
 

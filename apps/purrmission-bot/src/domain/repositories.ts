@@ -23,6 +23,7 @@ import type {
   CreateResourceFieldInput,
 } from './models.js';
 import { encryptValue, decryptValue } from '../infra/crypto.js';
+import { logger } from '../logging/logger.js';
 
 import crypto from 'node:crypto';
 
@@ -425,15 +426,72 @@ export class PrismaTOTPRepository implements TOTPRepository {
     this.prisma = prisma;
   }
 
+  /**
+   * Encrypt secret and optional backupKey for storage.
+   * @param secret - The TOTP secret to encrypt
+   * @param backupKey - Optional backup key to encrypt
+   * @param context - Context for logging (e.g., 'creation', 'update')
+   * @param accountId - Optional account ID for update context
+   */
+  private encryptAccountData(
+    secret: string,
+    backupKey: string | undefined,
+    context: string,
+    accountId?: string
+  ): { encryptedSecret: string; encryptedBackupKey: string | null } {
+    try {
+      const encryptedSecret = encryptValue(secret);
+      const encryptedBackupKey = backupKey ? encryptValue(backupKey) : null;
+      return { encryptedSecret, encryptedBackupKey };
+    } catch (error) {
+      logger.error(`Failed to encrypt TOTP data during ${context}`, {
+        ...(accountId && { accountId }),
+        error: error instanceof Error ? error.message : String(error),
+      });
+      throw new Error('Failed to encrypt TOTP data. Check encryption key configuration.');
+    }
+  }
+
+  /**
+   * Decrypt a field value with context-aware error handling.
+   * @param encryptedValue - The encrypted value to decrypt
+   * @param fieldName - Name of the field for error messages
+   * @param accountId - Account ID for logging
+   * @param accountName - Account name for logging
+   */
+  private decryptField(
+    encryptedValue: string,
+    fieldName: string,
+    accountId: string,
+    accountName: string
+  ): string {
+    try {
+      return decryptValue(encryptedValue);
+    } catch (error) {
+      logger.error(`Failed to decrypt TOTP ${fieldName}`, {
+        accountId,
+        accountName,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      throw new Error(`Failed to decrypt TOTP ${fieldName}. Check encryption key configuration.`);
+    }
+  }
+
   async create(account: Omit<TOTPAccount, 'id' | 'createdAt' | 'updatedAt'>): Promise<TOTPAccount> {
+    const { encryptedSecret, encryptedBackupKey } = this.encryptAccountData(
+      account.secret,
+      account.backupKey,
+      'creation'
+    );
+
     const created = await this.prisma.tOTPAccount.create({
       data: {
         ownerDiscordUserId: account.ownerDiscordUserId,
         accountName: account.accountName,
-        secret: account.secret,
+        secret: encryptedSecret,
         issuer: account.issuer ?? null,
         shared: account.shared,
-        backupKey: account.backupKey ?? null,
+        backupKey: encryptedBackupKey,
       },
     });
 
@@ -441,15 +499,22 @@ export class PrismaTOTPRepository implements TOTPRepository {
   }
 
   async update(account: TOTPAccount): Promise<TOTPAccount> {
+    const { encryptedSecret, encryptedBackupKey } = this.encryptAccountData(
+      account.secret,
+      account.backupKey,
+      'update',
+      account.id
+    );
+
     const updated = await this.prisma.tOTPAccount.update({
       where: { id: account.id },
       data: {
         ownerDiscordUserId: account.ownerDiscordUserId,
         accountName: account.accountName,
-        secret: account.secret,
+        secret: encryptedSecret,
         issuer: account.issuer ?? null,
         shared: account.shared,
-        backupKey: account.backupKey ?? null,
+        backupKey: encryptedBackupKey,
       },
     });
 
@@ -527,14 +592,19 @@ export class PrismaTOTPRepository implements TOTPRepository {
     createdAt: Date;
     updatedAt: Date;
   }): TOTPAccount {
+    const decryptedSecret = this.decryptField(row.secret, 'secret', row.id, row.accountName);
+    const decryptedBackupKey = row.backupKey
+      ? this.decryptField(row.backupKey, 'backup key', row.id, row.accountName)
+      : undefined;
+
     return {
       id: row.id,
       ownerDiscordUserId: row.ownerDiscordUserId,
       accountName: row.accountName,
-      secret: row.secret,
+      secret: decryptedSecret,
       issuer: row.issuer ?? undefined,
       shared: row.shared,
-      backupKey: row.backupKey ?? undefined,
+      backupKey: decryptedBackupKey,
       createdAt: row.createdAt,
       updatedAt: row.updatedAt,
     };

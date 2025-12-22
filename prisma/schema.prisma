@@ -91,7 +91,7 @@ model TOTPAccount {
   id                 String   @id @default(uuid())
   ownerDiscordUserId String
   accountName        String
-  /// TODO: Encrypt TOTP secrets at rest in the application layer before writing to DB.
+  /// TOTP secret - encrypted at rest using AES-256-GCM in the application layer
   secret             String
   issuer             String?
   shared             Boolean  @default(false)
