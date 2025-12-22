@@ -39,6 +39,8 @@ export interface ResourceRepository {
   findByApiKey(apiKey: string): Promise<Resource | null>;
 
   update(id: string, data: { totpAccountId?: string | null }): Promise<Resource>;
+
+  findManyByIds(ids: string[]): Promise<Resource[]>;
 }
 
 /**
@@ -196,6 +198,15 @@ export class PrismaResourceRepository implements ResourceRepository {
     return this.mapPrismaToDomain(updated);
   }
 
+  async findManyByIds(ids: string[]): Promise<Resource[]> {
+    const rows = await this.prisma.resource.findMany({
+      where: {
+        id: { in: ids },
+      },
+    });
+    return rows.map((row) => this.mapPrismaToDomain(row));
+  }
+
   private mapPrismaToDomain(row: {
     id: string;
     name: string;
@@ -265,6 +276,18 @@ export class InMemoryResourceRepository implements ResourceRepository {
     this.resources.set(id, updated);
     return updated;
   }
+
+  async findManyByIds(ids: string[]): Promise<Resource[]> {
+    // In-memory implementation: filter map values
+    const result: Resource[] = [];
+    for (const id of ids) {
+      const resource = this.resources.get(id);
+      if (resource) {
+        result.push(resource);
+      }
+    }
+    return result;
+  }
 }
 
 /**
@@ -305,13 +328,9 @@ export class InMemoryGuardianRepository implements GuardianRepository {
   }
 
   async findByUserId(discordUserId: string): Promise<Guardian[]> {
-    const result: Guardian[] = [];
-    for (const guardian of this.guardians.values()) {
-      if (guardian.discordUserId === discordUserId) {
-        result.push(guardian);
-      }
-    }
-    return result;
+    return Array.from(this.guardians.values()).filter(
+      (guardian) => guardian.discordUserId === discordUserId
+    );
   }
 }
 

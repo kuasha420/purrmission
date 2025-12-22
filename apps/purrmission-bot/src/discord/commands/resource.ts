@@ -206,20 +206,18 @@ export async function handleResourceAutocomplete(
 
         // Find all resources where the user is a guardian
         const userGuardianships = await guardians.findByUserId(userId);
+        const resourceIds = userGuardianships.map((g) => g.resourceId);
 
-        // Fetch resource details
-        const userResources = await Promise.all(
-            userGuardianships.map((g) => resources.findById(g.resourceId))
-        );
+        // Fetch resource details optimized
+        const validResources = await resources.findManyByIds(resourceIds);
 
         // Filter valid resources and match query
-        const query = focusedOption.value.toLowerCase();
-        const validResources = userResources
-            .filter((r): r is NonNullable<typeof r> => r !== null)
+        const query = String(focusedOption.value).toLowerCase();
+        const filteredResources = validResources
             .filter((r) => r.name.toLowerCase().includes(query));
 
         await interaction.respond(
-            validResources.slice(0, 25).map((r) => ({
+            filteredResources.slice(0, 25).map((r) => ({
                 name: r.name,
                 value: r.id,
             }))
