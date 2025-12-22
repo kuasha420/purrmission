@@ -37,16 +37,16 @@ describe('RateLimiter', () => {
         // by waiting for cleanup and checking if it refills correctly.
         // Actually, cleanup just deletes the entry from the map.
 
-        // @ts-ignore - accessing private member for testing
+        // @ts-expect-error - testing cleanup - accessing private member for testing
         assert.equal(limiter.buckets.size, 1);
 
         await new Promise(resolve => setTimeout(resolve, 150));
 
         // Manual trigger cleanup since the interval is 5 mins
-        // @ts-ignore
+        // @ts-expect-error - testing cleanup
         limiter.cleanup();
 
-        // @ts-ignore
+        // @ts-expect-error - testing cleanup
         assert.equal(limiter.buckets.size, 0);
     });
 });
