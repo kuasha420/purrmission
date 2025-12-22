@@ -59,6 +59,11 @@ export interface GuardianRepository {
    * Find a specific guardian by resource and Discord user ID.
    */
   findByResourceAndUser(resourceId: string, discordUserId: string): Promise<Guardian | null>;
+
+  /**
+   * Find all guardianships for a specific user.
+   */
+  findByUserId(discordUserId: string): Promise<Guardian[]>;
 }
 
 /**
@@ -297,6 +302,16 @@ export class InMemoryGuardianRepository implements GuardianRepository {
       }
     }
     return null;
+  }
+
+  async findByUserId(discordUserId: string): Promise<Guardian[]> {
+    const result: Guardian[] = [];
+    for (const guardian of this.guardians.values()) {
+      if (guardian.discordUserId === discordUserId) {
+        result.push(guardian);
+      }
+    }
+    return result;
   }
 }
 

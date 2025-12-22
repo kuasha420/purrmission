@@ -201,9 +201,29 @@ export async function handleResourceAutocomplete(
     const focusedOption = interaction.options.getFocused(true);
 
     if (focusedOption.name === 'resource-id') {
-        // TODO: Implement resource autocomplete
-        // For now, just return empty (user needs to paste resource ID)
-        await interaction.respond([]);
+        const userId = interaction.user.id;
+        const { guardians, resources } = context.repositories;
+
+        // Find all resources where the user is a guardian
+        const userGuardianships = await guardians.findByUserId(userId);
+
+        // Fetch resource details
+        const userResources = await Promise.all(
+            userGuardianships.map((g) => resources.findById(g.resourceId))
+        );
+
+        // Filter valid resources and match query
+        const query = focusedOption.value.toLowerCase();
+        const validResources = userResources
+            .filter((r): r is NonNullable<typeof r> => r !== null)
+            .filter((r) => r.name.toLowerCase().includes(query));
+
+        await interaction.respond(
+            validResources.slice(0, 25).map((r) => ({
+                name: r.name,
+                value: r.id,
+            }))
+        );
         return;
     }
 
