@@ -17,6 +17,7 @@ import type {
   AddGuardianInput,
   CreateApprovalRequestInput,
   ApprovalStatus,
+  ApprovalMode,
   TOTPAccount,
   ResourceField,
   CreateResourceFieldInput,
@@ -138,6 +139,73 @@ export interface ResourceFieldRepository {
 }
 
 
+
+/**
+ * Prisma implementation of ResourceRepository.
+ * Persists resources to the database for production use.
+ */
+export class PrismaResourceRepository implements ResourceRepository {
+  private readonly prisma: PrismaClient;
+
+  constructor(prisma: PrismaClient) {
+    this.prisma = prisma;
+  }
+
+  async create(input: CreateResourceInput): Promise<Resource> {
+    const created = await this.prisma.resource.create({
+      data: {
+        id: input.id,
+        name: input.name,
+        mode: input.mode,
+        apiKey: input.apiKey,
+        totpAccountId: input.totpAccountId ?? null,
+      },
+    });
+    return this.mapPrismaToDomain(created);
+  }
+
+  async findById(id: string): Promise<Resource | null> {
+    const row = await this.prisma.resource.findUnique({
+      where: { id },
+    });
+    return row ? this.mapPrismaToDomain(row) : null;
+  }
+
+  async findByApiKey(apiKey: string): Promise<Resource | null> {
+    const row = await this.prisma.resource.findFirst({
+      where: { apiKey },
+    });
+    return row ? this.mapPrismaToDomain(row) : null;
+  }
+
+  async update(id: string, data: { totpAccountId?: string | null }): Promise<Resource> {
+    const updated = await this.prisma.resource.update({
+      where: { id },
+      data: {
+        totpAccountId: data.totpAccountId === undefined ? undefined : data.totpAccountId,
+      },
+    });
+    return this.mapPrismaToDomain(updated);
+  }
+
+  private mapPrismaToDomain(row: {
+    id: string;
+    name: string;
+    mode: string;
+    apiKey: string;
+    totpAccountId: string | null;
+    createdAt: Date;
+  }): Resource {
+    return {
+      id: row.id,
+      name: row.name,
+      mode: row.mode as ApprovalMode,
+      apiKey: row.apiKey,
+      totpAccountId: row.totpAccountId ?? undefined,
+      createdAt: row.createdAt,
+    };
+  }
+}
 
 /**
  * In-memory implementation of ResourceRepository.
