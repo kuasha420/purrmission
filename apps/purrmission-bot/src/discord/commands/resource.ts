@@ -147,14 +147,17 @@ export async function handleResourceCommand(
     interaction: ChatInputCommandInteraction,
     context: CommandContext
 ): Promise<void> {
-    if (!env.ENCRYPTION_KEY) {
+    const subcommand = interaction.options.getSubcommand();
+
+    // Only field commands require ENCRYPTION_KEY
+    const isFieldCommand = ['fields-add', 'fields-list', 'fields-get', 'fields-remove'].includes(subcommand);
+    if (isFieldCommand && !env.ENCRYPTION_KEY) {
         await interaction.reply({
-            content: '❌ Resource commands are disabled. The `ENCRYPTION_KEY` is not configured.',
+            content: '❌ Resource field commands are disabled. The `ENCRYPTION_KEY` is not configured.',
             ephemeral: true,
         });
         return;
     }
-    const subcommand = interaction.options.getSubcommand();
 
     switch (subcommand) {
         case 'fields-add':
@@ -226,17 +229,29 @@ export async function handleResourceAutocomplete(
     }
 
     if (focusedOption.name === 'account') {
-        // Autocomplete TOTP account names for link-2fa command
+        // Autocomplete TOTP account names for link-2fa command (personal + shared)
         const userId = interaction.user.id;
         const { totp } = context.repositories;
-        const accounts = await totp.findByOwnerDiscordUserId(userId);
+
+        const personalAccounts = await totp.findByOwnerDiscordUserId(userId);
+        const sharedAccounts = await totp.findSharedVisibleTo(userId);
+
+        // Merge and deduplicate accounts
+        const accountMap = new Map<string, typeof personalAccounts[0]>();
+        personalAccounts.forEach((acc) => accountMap.set(acc.id, acc));
+        sharedAccounts.forEach((acc) => {
+            if (!accountMap.has(acc.id)) {
+                accountMap.set(acc.id, acc);
+            }
+        });
+        const allAccounts = Array.from(accountMap.values());
 
         const query = focusedOption.value.toLowerCase();
-        const filtered = accounts.filter((a) => a.accountName.toLowerCase().includes(query));
+        const filtered = allAccounts.filter((a) => a.accountName.toLowerCase().includes(query));
 
         await interaction.respond(
             filtered.slice(0, 25).map((a) => ({
-                name: a.accountName,
+                name: a.shared ? `${a.accountName} (shared)` : a.accountName,
                 value: a.id,
             }))
         );
@@ -572,7 +587,7 @@ async function handleLink2FA(
     context: CommandContext
 ): Promise<void> {
     const resourceId = interaction.options.getString('resource-id', true);
-    const accountName = interaction.options.getString('account', true);
+    const accountId = interaction.options.getString('account', true);
     const userId = interaction.user.id;
 
     const { resources, totp } = context.repositories;
@@ -596,16 +611,21 @@ async function handleLink2FA(
         return;
     }
 
-    // Find the TOTP account (personal or shared)
-    let account = await totp.findByOwnerAndName(userId, accountName);
-    if (!account) {
-        const sharedAccounts = await totp.findSharedVisibleTo(userId);
-        account = sharedAccounts.find((a) => a.accountName === accountName) ?? null;
-    }
+    // Find the TOTP account by ID (from autocomplete)
+    const account = await totp.findById(accountId);
 
     if (!account) {
         await interaction.reply({
-            content: `❌ 2FA account \`${accountName}\` not found.`,
+            content: '❌ 2FA account not found.',
+            ephemeral: true,
+        });
+        return;
+    }
+
+    // Verify the user has permission to use this account
+    if (account.ownerDiscordUserId !== userId && !account.shared) {
+        await interaction.reply({
+            content: `❌ You do not have permission to use the 2FA account \`${account.accountName}\`.`,
             ephemeral: true,
         });
         return;
@@ -623,7 +643,7 @@ async function handleLink2FA(
         logger.info('Linked 2FA account to resource', {
             resourceId,
             totpAccountId: account.id,
-            accountName,
+            accountName: account.accountName,
             userId,
         });
 
