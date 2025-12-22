@@ -351,6 +351,13 @@ export class ResourceService {
       throw new Error(`TOTP account not found: ${totpAccountId}`);
     }
 
+    // Check if TOTP account is already linked to another resource
+    // Since totpAccountId is unique in schema, attempting to link will fail with DB error
+    // But we provide a better error message by checking first if resource already has one
+    if (resource.totpAccountId && resource.totpAccountId !== totpAccountId) {
+      throw new Error('Resource already has a linked 2FA account. Unlink it first.');
+    }
+
     // Update the resource with the linked TOTP account ID
     await repositories.resources.update(resourceId, { totpAccountId });
 
