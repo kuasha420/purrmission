@@ -52,7 +52,7 @@ function isEncrypted(value: string): boolean {
 function looksLikePlaintextSecret(value: string): boolean {
   // Base32 alphabet: A-Z (uppercase), 2-7, and optional padding =
   // Note: Base32 is case-insensitive but typically uppercase by convention
-  const base32Regex = /^[A-Z2-7]+=*$/;
+  const base32Regex = /^[A-Z2-7]+=*$/i;
 
   // Typical TOTP secrets are 16-32 characters (without padding)
   // Too short or too long is suspicious
@@ -162,8 +162,8 @@ async function main() {
             encryptedSecret,
             encryptedBackupKey,
           });
-        } catch {
-          console.error(`   ✗ Encryption validation failed`);
+        } catch (error) {
+          console.error(`   ✗ Encryption validation failed for ${accountLabel}:`, error);
           skippedCount++;
         }
       } else {

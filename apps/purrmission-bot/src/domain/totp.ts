@@ -91,8 +91,8 @@ export function createTOTPAccountFromSecret(
     throw new Error('Secret cannot be empty');
   }
 
-  // Basic Base32 check (A-Z, 2-7, =)
-  const base32Regex = /^[A-Z2-7=]+$/i;
+  // Stricter Base32 check: A-Z, 2-7, with optional padding only at the end (per RFC 4648)
+  const base32Regex = /^[A-Z2-7]+=*$/i;
   if (!base32Regex.test(secret)) {
     throw new Error('Invalid TOTP secret format (Base32 expected)');
   }
