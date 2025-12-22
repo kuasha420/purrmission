@@ -197,10 +197,10 @@ export class PrismaResourceRepository implements ResourceRepository {
     createdAt: Date;
   }): Resource {
     // Validate mode is a valid ApprovalMode
-    if (row.mode !== 'ONE_OF_N') {
+    if (!(['ONE_OF_N'] as string[]).includes(row.mode)) {
       throw new Error(`Invalid resource mode in database: ${row.mode}`);
     }
-    
+
     return {
       id: row.id,
       name: row.name,
