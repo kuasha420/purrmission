@@ -182,7 +182,7 @@ export class PrismaResourceRepository implements ResourceRepository {
     const updated = await this.prisma.resource.update({
       where: { id },
       data: {
-        totpAccountId: data.totpAccountId === undefined ? undefined : data.totpAccountId,
+        totpAccountId: data.totpAccountId,
       },
     });
     return this.mapPrismaToDomain(updated);
@@ -196,6 +196,11 @@ export class PrismaResourceRepository implements ResourceRepository {
     totpAccountId: string | null;
     createdAt: Date;
   }): Resource {
+    // Validate mode is a valid ApprovalMode
+    if (row.mode !== 'ONE_OF_N') {
+      throw new Error(`Invalid resource mode in database: ${row.mode}`);
+    }
+    
     return {
       id: row.id,
       name: row.name,
