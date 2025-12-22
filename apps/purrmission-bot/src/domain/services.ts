@@ -18,12 +18,14 @@ import type {
 } from './models.js';
 import type { Repositories } from './repositories.js';
 import { logger } from '../logging/logger.js';
+import { AuditService } from './audit.js';
 
 /**
  * Service dependencies.
  */
 export interface ServiceDependencies {
   repositories: Repositories;
+  audit?: AuditService; // Optional to avoid circular dep during creation if not careful, but intended to be present
 }
 
 /**
@@ -192,6 +194,16 @@ export class ApprovalService {
       decision,
       byGuardianDiscordId,
       newStatus,
+    });
+
+    // Audit log
+    await this.deps.audit?.log({
+      action: 'APPROVAL_DECISION',
+      resourceId: request.resourceId,
+      actorId: null, // Requester unknown here easily? Actually we know context.requesterId but typed loosely.
+      resolverId: byGuardianDiscordId,
+      status: newStatus,
+      context: JSON.stringify({ requestId, decision, originalContext: request.context }),
     });
 
     // Prepare callback action if URL is configured
@@ -365,6 +377,13 @@ export class ResourceService {
       resourceId,
       totpAccountId,
     });
+
+    await this.deps.audit?.log({
+      action: 'TOTP_LINKED',
+      resourceId,
+      status: 'SUCCESS',
+      context: JSON.stringify({ totpAccountId }),
+    });
   }
 
   /**
@@ -408,14 +427,22 @@ export class ResourceService {
 export interface Services {
   approval: ApprovalService;
   resource: ResourceService;
+  audit: AuditService;
 }
 
 /**
  * Create all services with the given dependencies.
  */
-export function createServices(deps: ServiceDependencies): Services {
+export function createServices(baseDeps: { repositories: Repositories }): Services {
+  const audit = new AuditService(baseDeps);
+  const fullDeps: ServiceDependencies = {
+    ...baseDeps,
+    audit,
+  };
+
   return {
-    approval: new ApprovalService(deps),
-    resource: new ResourceService(deps),
+    approval: new ApprovalService(fullDeps),
+    resource: new ResourceService(fullDeps),
+    audit,
   };
 }

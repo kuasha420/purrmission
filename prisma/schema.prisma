@@ -106,3 +106,18 @@ model TOTPAccount {
   @@index([ownerDiscordUserId])
   @@index([shared])
 }
+
+model AuditLog {
+  id          String   @id @default(uuid())
+  action      String
+  resourceId  String?
+  actorId     String?
+  resolverId  String?
+  status      String
+  context     String?
+  createdAt   DateTime @default(now())
+
+  @@index([resourceId])
+  @@index([actorId])
+  @@index([createdAt])
+}

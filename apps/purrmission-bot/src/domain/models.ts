@@ -247,3 +247,19 @@ export interface ResourceField {
  */
 export type CreateResourceFieldInput = Omit<ResourceField, 'id' | 'createdAt' | 'updatedAt'>;
 
+/**
+ * Audit Log entry for sensitive actions.
+ */
+export interface AuditLog {
+  id: string;
+  action: string;
+  resourceId?: string | null;
+  actorId?: string | null;
+  resolverId?: string | null;
+  status: string;
+  context?: string | null; // JSON string
+  createdAt: Date;
+}
+
+export type CreateAuditLogInput = Omit<AuditLog, 'id' | 'createdAt'>;
+
