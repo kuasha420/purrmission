@@ -63,6 +63,7 @@ jobs:
           DISCORD_CLIENT_ID: ${{ secrets.DISCORD_CLIENT_ID }}
           DISCORD_GUILD_ID: ${{ secrets.DISCORD_GUILD_ID }}
           DATABASE_URL: "file:./dev.db" # Dummy value for validation, not used by script
+          ENCRYPTION_KEY: ${{ secrets.ENCRYPTION_KEY }} # Required for app initialization
         run: pnpm discord:deploy-commands
 
       - name: Upload artifact
@@ -77,6 +78,7 @@ jobs:
             pnpm-workspace.yaml
             ecosystem.config.cjs
             prisma
+            scripts/encrypt-totp-secrets.ts
             dist-checksums.txt
 
   deploy:
@@ -129,7 +131,7 @@ jobs:
           key: ${{ secrets.SSH_KEY }}
           port: ${{ secrets.SSH_PORT || 22 }}
           target: ${{ secrets.SSH_TARGET }}
-          source: "apps,package.json,pnpm-lock.yaml,pnpm-workspace.yaml,ecosystem.config.cjs,dist-checksums.txt,prisma"
+          source: "apps,package.json,pnpm-lock.yaml,pnpm-workspace.yaml,ecosystem.config.cjs,dist-checksums.txt,prisma,scripts"
 
       - name: Verify deployment integrity
         uses: appleboy/ssh-action@v1
@@ -176,6 +178,11 @@ jobs:
 
             echo "Running database migrations..."
             pnpm prisma:deploy
+
+            echo "Checking for TOTP migration needs..."
+            # Note: Migration script requires ENCRYPTION_KEY in .env
+            # Run manually if upgrading from pre-encryption version:
+            # ENCRYPTION_KEY=<key> tsx scripts/encrypt-totp-secrets.ts --apply
 
             pm2 startOrRestart ecosystem.config.cjs
 

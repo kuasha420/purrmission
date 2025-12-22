@@ -9,8 +9,15 @@
 1. **Clone/Copy Project**: Ensure the project files are on the server (usually via CI/CD `deploy.yml`).
 2. **Environment Variables**:
    - Create a `.env` file in the **project root directory** (where `package.json` is).
-   - This file must contain `DISCORD_BOT_TOKEN`, `DISCORD_CLIENT_ID`, `DISCORD_GUILD_ID`, `DATABASE_URL`.
+   - This file must contain:
+     - `DISCORD_BOT_TOKEN` - Your Discord bot token
+     - `DISCORD_CLIENT_ID` - Your Discord application client ID
+     - `DISCORD_GUILD_ID` - Guild ID for development (commands deploy here)
+     - `DATABASE_URL` - Database connection URL (e.g., `file:./data/prod.db`)
+     - `ENCRYPTION_KEY` - **Required** - 32-byte hex string (64 hexadecimal characters) for encrypting TOTP secrets and resource fields at rest
+   - Generate an encryption key with: `node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"`
    - *Note*: If `ecosystem.config.cjs` sets `cwd: "./"`, the `.env` must be in the root.
+   - **Security**: Keep your `ENCRYPTION_KEY` secure and backed up. Without it, encrypted data cannot be recovered.
 
 ## Data Persistence
 
@@ -64,10 +71,38 @@ pnpm prod:purrmission
 pnpm install --frozen-lockfile
 pnpm prisma:generate
 pnpm prisma:deploy
+
+# If upgrading from a version without encryption, run the migration script
+# (Dry run first to see what will be encrypted)
+ENCRYPTION_KEY=<your-key> tsx scripts/encrypt-totp-secrets.ts
+# Then apply the changes
+ENCRYPTION_KEY=<your-key> tsx scripts/encrypt-totp-secrets.ts --apply
+
 pm2 startOrRestart ecosystem.config.cjs
 ```
+
+## Migration from Pre-Encryption Versions
+
+If you're upgrading from a version that stored TOTP secrets in plaintext, you **must** run the migration script after deploying:
+
+```bash
+# 1. Ensure ENCRYPTION_KEY is set in your .env file
+# 2. Dry run to see what will be encrypted (recommended first)
+ENCRYPTION_KEY=<your-key> tsx scripts/encrypt-totp-secrets.ts
+
+# 3. Review the output, then apply the changes
+ENCRYPTION_KEY=<your-key> tsx scripts/encrypt-totp-secrets.ts --apply
+```
+
+The script will:
+- Detect which secrets are already encrypted
+- Encrypt any plaintext secrets found
+- Validate encryption/decryption before committing changes
+- Provide a detailed summary of changes
 
 ## Troubleshooting
 - **`MODULE_NOT_FOUND` (dotenv)**: Ensure `dotenv` is installed in the root `node_modules`.
 - **`Prisma Client` errors**: Run `pnpm prisma:generate`.
 - **Deployment fails silently**: Check `pm2 logs Purrmission`.
+- **`ENCRYPTION_KEY is not set` error**: Ensure `ENCRYPTION_KEY` is defined in your `.env` file with a valid 64-character hex string.
+- **Decryption errors after upgrade**: Ensure you're using the same `ENCRYPTION_KEY` that was used to encrypt the data. If you lost the key, encrypted data cannot be recovered.
