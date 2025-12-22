@@ -2,7 +2,7 @@ import { describe, it, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
-import { env } from '../src/config/env.js';
+import { env } from '../apps/purrmission-bot/src/config/env.js';
 import { backupDatabase } from './backup-db.js';
 
 describe('Operations Scripts', () => {

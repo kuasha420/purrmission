@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { env } from '../src/config/env.js';
-import { logger } from '../src/logging/logger.js';
+import { env } from '../apps/purrmission-bot/src/config/env.js';
+import { logger } from '../apps/purrmission-bot/src/logging/logger.js';
 
 /**
  * Backup the SQLite database.

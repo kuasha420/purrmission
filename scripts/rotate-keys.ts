@@ -1,8 +1,8 @@
-import { getPrismaClient } from '../src/infra/prismaClient.js';
-import { decryptValue, encryptValue } from '../src/infra/crypto.js';
+import { getPrismaClient } from '../apps/purrmission-bot/src/infra/prismaClient.js';
+import { decryptValue, encryptValue } from '../apps/purrmission-bot/src/infra/crypto.js';
 import { backupDatabase } from './backup-db.js';
-import { logger } from '../src/logging/logger.js';
-import { env } from '../src/config/env.js';
+import { logger } from '../apps/purrmission-bot/src/logging/logger.js';
+import { env } from '../apps/purrmission-bot/src/config/env.js';
 
 const HEX_REGEX = /^[0-9a-fA-F]{64}$/;
 
