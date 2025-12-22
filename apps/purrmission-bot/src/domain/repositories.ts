@@ -21,6 +21,8 @@ import type {
   TOTPAccount,
   ResourceField,
   CreateResourceFieldInput,
+  AuditLog,
+  CreateAuditLogInput,
 } from './models.js';
 import { encryptValue, decryptValue } from '../infra/crypto.js';
 import { logger } from '../logging/logger.js';
@@ -780,6 +782,7 @@ export interface Repositories {
   approvalRequests: ApprovalRequestRepository;
   totp: TOTPRepository;
   resourceFields: ResourceFieldRepository;
+  audit: AuditRepository;
 }
 
 /**
@@ -792,5 +795,68 @@ export function createInMemoryRepositories(): Repositories {
     approvalRequests: new InMemoryApprovalRequestRepository(),
     totp: new InMemoryTOTPRepository(),
     resourceFields: new InMemoryResourceFieldRepository(),
+    audit: new InMemoryAuditRepository(),
   };
+}
+
+/**
+ * Repository for logging audit events.
+ */
+export interface AuditRepository {
+  create(input: CreateAuditLogInput): Promise<AuditLog>;
+  findByResourceId(resourceId: string): Promise<AuditLog[]>;
+}
+
+/**
+ * In-memory implementation of AuditRepository.
+ */
+export class InMemoryAuditRepository implements AuditRepository {
+  private logs: AuditLog[] = [];
+
+  async create(input: CreateAuditLogInput): Promise<AuditLog> {
+    const log: AuditLog = {
+      id: crypto.randomUUID(),
+      ...input,
+      createdAt: new Date(),
+    };
+    this.logs.push(log);
+    return log;
+  }
+
+  async findByResourceId(resourceId: string): Promise<AuditLog[]> {
+    return this.logs.filter((log) => log.resourceId === resourceId);
+  }
+}
+
+/**
+ * Prisma implementation of AuditRepository.
+ */
+export class PrismaAuditRepository implements AuditRepository {
+  private readonly prisma: PrismaClient;
+
+  constructor(prisma: PrismaClient) {
+    this.prisma = prisma;
+  }
+
+  async create(input: CreateAuditLogInput): Promise<AuditLog> {
+    const created = await this.prisma.auditLog.create({
+      data: {
+        action: input.action,
+        resourceId: input.resourceId,
+        actorId: input.actorId,
+        resolverId: input.resolverId,
+        status: input.status,
+        context: input.context,
+      },
+    });
+    return created;
+  }
+
+  async findByResourceId(resourceId: string): Promise<AuditLog[]> {
+    const rows = await this.prisma.auditLog.findMany({
+      where: { resourceId },
+      orderBy: { createdAt: 'desc' },
+    });
+    return rows;
+  }
 }

@@ -19,6 +19,8 @@ import {
     createApprovalButtons,
     createAccessRequestEmbed,
 } from '../interactions/approvalButtons.js';
+import { rateLimiter } from '../../infra/rateLimit.js';
+import { checkAccessPolicy, requiresApproval } from '../../domain/policy.js';
 
 /**
  * Build the 'resource' subcommand group for the /purrmission command.
@@ -457,16 +459,34 @@ async function handleFieldsGet(
         return;
     }
 
-    // Check if user is owner/guardian
-    const isGuardian = await isOwnerOrGuardian(context, resourceId, userId);
+    // Check access policy
+    const guardians = await context.repositories.guardians.findByResourceId(resourceId);
+    const accessResult = await checkAccessPolicy(resource, guardians, userId);
 
-    if (!isGuardian) {
+    if (requiresApproval(accessResult)) {
         // Create approval request for field access
         await createFieldAccessRequest(interaction, context, resource.name, resourceId, name, userId);
         return;
     }
 
-    // Owner/Guardian: Direct access
+    // Access denied (if not requiring approval, and not allowed)
+    if (!accessResult.allowed) {
+        await context.services.audit.log({
+            action: 'FIELD_ACCESSED',
+            resourceId,
+            actorId: userId,
+            status: 'DENIED',
+            context: JSON.stringify({ fieldName: name, reason: accessResult.reason }),
+        });
+
+        await interaction.reply({
+            content: `❌ Access denied: ${accessResult.reason ?? 'You do not have permission.'}`,
+            ephemeral: true,
+        });
+        return;
+    }
+
+    // Direct access allowed
     const field = await resourceFields.findByResourceAndName(resourceId, name);
 
     if (!field) {
@@ -489,6 +509,14 @@ async function handleFieldsGet(
                 '_Keep this value secure._',
             ].join('\n')
         );
+
+        await context.services.audit.log({
+            action: 'FIELD_ACCESSED',
+            resourceId,
+            actorId: userId,
+            status: 'SUCCESS',
+            context: JSON.stringify({ fieldName: name }),
+        });
 
         logger.info('Field value sent via DM', {
             resourceId,
@@ -638,7 +666,7 @@ async function handleLink2FA(
 
     try {
         // Use the services to link
-        await context.services.resource.linkTOTPAccount(resourceId, account.id);
+        await context.services.resource.linkTOTPAccount(resourceId, account.id, userId);
 
         logger.info('Linked 2FA account to resource', {
             resourceId,
@@ -747,12 +775,39 @@ async function handleGet2FA(
         return;
     }
 
-    // Check if user is owner/guardian
-    const isGuardian = await isOwnerOrGuardian(context, resourceId, userId);
+    // Check access policy
+    const guardians = await context.repositories.guardians.findByResourceId(resourceId);
+    const accessResult = await checkAccessPolicy(resource, guardians, userId);
 
-    if (!isGuardian) {
+    if (requiresApproval(accessResult)) {
         // Create approval request for 2FA access
         await create2FAAccessRequest(interaction, context, resource.name, resourceId, userId);
+        return;
+    }
+
+    // Access denied
+    if (!accessResult.allowed) {
+        await context.services.audit.log({
+            action: 'TOTP_RETRIEVED',
+            resourceId,
+            actorId: userId,
+            status: 'DENIED',
+            context: JSON.stringify({ reason: accessResult.reason }),
+        });
+
+        await interaction.reply({
+            content: `❌ Access denied: ${accessResult.reason ?? 'You do not have permission.'}`,
+            ephemeral: true,
+        });
+        return;
+    }
+
+    // Rate limiting
+    if (!rateLimiter.check(`${userId}:${resourceId}:get-2fa`)) {
+        await interaction.reply({
+            content: '❌ Rate limit exceeded. Please wait a few seconds before requesting another code.',
+            ephemeral: true,
+        });
         return;
     }
 
@@ -788,6 +843,14 @@ async function handleGet2FA(
             resourceId,
             totpAccountId: linkedAccount.id,
             userId,
+        });
+
+        await context.services.audit.log({
+            action: 'TOTP_RETRIEVED',
+            resourceId,
+            actorId: userId,
+            status: 'SUCCESS',
+            context: JSON.stringify({ totpAccountId: linkedAccount.id }),
         });
 
         await interaction.reply({

@@ -1,0 +1,26 @@
+# Task: Security Hardening + Ops Readiness Pack v1
+
+- [x] Startup Encryption Guardrails
+    - [x] Implement hard startup validation of `ENCRYPTION_KEY`
+    - [x] Update `apps/purrmission-bot` bootstrap to fail fast on invalid key
+- [x] Ciphertext Format Versioning
+    - [x] Introduce versioning format (e.g., `v1:...`)
+    - [x] Update `encrypt` to output versioned format
+    - [x] Update `decrypt` to handle versioned and legacy formats
+- [x] Key Rotation Hooks
+    - [x] Create DB Backup Utility (`scripts/backup-db.ts`)
+    - [x] Create Key Rotation CLI script
+    - [x] Implement `--dry-run` and batch processing
+    - [x] Integrate Backup Utility into Rotation Script
+    - [x] Test rotation logic (Updated to handle legacy plaintext)
+- [x] Audit Logging
+    - [x] Design Audit Log schema or structure
+    - [x] Implement `AuditService` or similar
+    - [x] Instrument sensitive flows (Field Access, TOTP Access, Link/Unlink, CRUD)
+- [x] Rate Limiting / Abuse Protection
+    - [x] Implement Rate Limiter (in-memory or DB/Redis)
+    - [x] Apply to approval pipeline and sensitive commands
+- [x] Freeze Access Semantics
+    - [x] implement centralized policy `canDirectAccess` / `requiresApproval`
+    - [x] Refactor commands to use policy
+    - [x] Add tests for policy
