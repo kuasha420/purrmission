@@ -31,6 +31,11 @@ export function buildResourceSubcommandGroup(): SlashCommandSubcommandGroupBuild
         .setDescription('Manage resource fields')
         .addSubcommand((subcommand) =>
             subcommand
+                .setName('list')
+                .setDescription('List all resources you own or represent')
+        )
+        .addSubcommand((subcommand) =>
+            subcommand
                 .setName('fields-add')
                 .setDescription('Add a field to a resource')
                 .addStringOption((option) =>
@@ -162,6 +167,9 @@ export async function handleResourceCommand(
     }
 
     switch (subcommand) {
+        case 'list':
+            await handleResourceList(interaction, context);
+            break;
         case 'fields-add':
             await handleFieldsAdd(interaction, context);
             break;
@@ -395,6 +403,61 @@ async function handleFieldsAdd(
             ephemeral: true,
         });
     }
+}
+
+/**
+ * List all resources where the user is an Owner or Guardian.
+ */
+async function handleResourceList(
+    interaction: ChatInputCommandInteraction,
+    context: CommandContext
+): Promise<void> {
+    const userId = interaction.user.id;
+    const { guardians, resources } = context.repositories;
+
+    const userGuardianships = await guardians.findByUserId(userId);
+
+    if (userGuardianships.length === 0) {
+        await interaction.reply({
+            content: 'You do not own or guard any resources yet.',
+            ephemeral: true,
+        });
+        return;
+    }
+
+    const resourceIds = userGuardianships.map((g) => g.resourceId);
+    const validResources = await resources.findManyByIds(resourceIds);
+
+    if (validResources.length === 0) {
+        // This might happen if guardianships exist but resources were deleted (orphan records)
+        // Ideally shouldn't happen with proper cascade delete, but good to handle.
+        await interaction.reply({
+            content: 'You do not own or guard any resources (orphaned records found).',
+            ephemeral: true,
+        });
+        return;
+    }
+
+    // Create a map to look up guardian role for each resource
+    const roleMap = new Map<string, string>();
+    userGuardianships.forEach(g => {
+        roleMap.set(g.resourceId, g.role);
+    });
+
+    const lines = [
+        '**📋 Your Resources:**',
+        '',
+        ...validResources.map((r) => {
+            const role = roleMap.get(r.id);
+            const roleBadge = role === 'OWNER' ? '👑 Owner' : '🛡️ Guardian';
+            return `• **${r.name}** (\`${r.id}\`) — ${roleBadge}`;
+        }),
+    ];
+
+    await interaction.reply({
+        content: lines.join('\n'),
+        ephemeral: true,
+    });
 }
 
 /**
