@@ -14,7 +14,7 @@
  * 
  * Safety:
  * - Dry run by default (use --apply to actually update the database)
- * - Creates a backup before making changes
+ * - IMPORTANT: Back up your database manually before using the --apply flag.
  * - Validates encryption/decryption before committing changes
  */
 
@@ -53,13 +53,13 @@ function looksLikePlaintextSecret(value: string): boolean {
   // Base32 alphabet: A-Z (uppercase), 2-7, and optional padding =
   // Note: Base32 is case-insensitive but typically uppercase by convention
   const base32Regex = /^[A-Z2-7]+=*$/;
-  
+
   // Typical TOTP secrets are 16-32 characters (without padding)
   // Too short or too long is suspicious
   if (value.length < 10 || value.length > 100) {
     return false;
   }
-  
+
   return base32Regex.test(value);
 }
 
@@ -74,62 +74,62 @@ function encryptAndValidate(
   backupIsEncrypted: boolean
 ): { encryptedSecret: string; encryptedBackupKey: string | null } {
   const encryptedSecret = secretIsEncrypted ? secret : encryptValue(secret);
-  const encryptedBackupKey = backupKey 
+  const encryptedBackupKey = backupKey
     ? (backupIsEncrypted ? backupKey : encryptValue(backupKey))
     : null;
-  
+
   // Validate by decrypting
   decryptValue(encryptedSecret);
   if (backupKey && encryptedBackupKey) {
     decryptValue(encryptedBackupKey);
   }
-  
+
   return { encryptedSecret, encryptedBackupKey };
 }
 
 async function main() {
   console.log('🔐 TOTP Secret Encryption Migration Script\n');
-  
+
   if (!process.env.ENCRYPTION_KEY) {
     console.error('❌ Error: ENCRYPTION_KEY environment variable is not set');
     console.error('   Please set ENCRYPTION_KEY before running this script');
     process.exit(1);
   }
-  
+
   console.log(`Mode: ${APPLY_CHANGES ? '✍️  APPLY (will modify database)' : '👁️  DRY RUN (read-only)'}\n`);
-  
+
   const prisma = new PrismaClient();
-  
+
   try {
     // Fetch all TOTP accounts
     const accounts = await prisma.tOTPAccount.findMany();
-    
+
     console.log(`Found ${accounts.length} TOTP account(s) in database\n`);
-    
+
     if (accounts.length === 0) {
       console.log('✅ No accounts to process');
       return;
     }
-    
+
     let encryptedCount = 0;
     let plaintextCount = 0;
     let skippedCount = 0;
-    
+
     const accountsToUpdate: Array<{
       id: string;
       accountName: string;
       encryptedSecret: string;
       encryptedBackupKey: string | null;
     }> = [];
-    
+
     // Analyze each account
     for (const account of accounts) {
       const accountLabel = `${account.accountName} (${account.id})`;
-      
+
       // Check secret
       const secretIsEncrypted = isEncrypted(account.secret);
       const secretIsPlaintext = !secretIsEncrypted && looksLikePlaintextSecret(account.secret);
-      
+
       // Check backup key if present
       let backupIsEncrypted = false;
       let backupIsPlaintext = false;
@@ -137,14 +137,14 @@ async function main() {
         backupIsEncrypted = isEncrypted(account.backupKey);
         backupIsPlaintext = !backupIsEncrypted && looksLikePlaintextSecret(account.backupKey);
       }
-      
+
       if (secretIsEncrypted && (!account.backupKey || backupIsEncrypted)) {
         console.log(`✅ ${accountLabel}: Already encrypted`);
         encryptedCount++;
       } else if (secretIsPlaintext || backupIsPlaintext) {
         console.log(`🔓 ${accountLabel}: Found plaintext data`);
         plaintextCount++;
-        
+
         // Encrypt the secret and backup key with validation
         try {
           const { encryptedSecret, encryptedBackupKey } = encryptAndValidate(
@@ -153,9 +153,9 @@ async function main() {
             secretIsEncrypted,
             backupIsEncrypted
           );
-          
+
           console.log(`   ✓ Validated encryption/decryption`);
-          
+
           accountsToUpdate.push({
             id: account.id,
             accountName: account.accountName,
@@ -171,40 +171,46 @@ async function main() {
         skippedCount++;
       }
     }
-    
+
     console.log(`\n📊 Summary:`);
     console.log(`   Already encrypted: ${encryptedCount}`);
     console.log(`   Plaintext found:   ${plaintextCount}`);
     console.log(`   Skipped:           ${skippedCount}`);
     console.log(`   To update:         ${accountsToUpdate.length}`);
-    
+
     if (accountsToUpdate.length === 0) {
       console.log('\n✅ Nothing to update');
       return;
     }
-    
+
     if (!APPLY_CHANGES) {
-      console.log('\n💡 This was a dry run. Use --apply flag to actually update the database:');
+      console.log('\n🚨 WARNING: This operation can be destructive. Please back up your database before proceeding.');
+      console.log('💡 This was a dry run. Use --apply flag to actually update the database:');
       console.log('   ENCRYPTION_KEY=<your-key> tsx scripts/encrypt-totp-secrets.ts --apply');
       return;
     }
-    
-    // Apply changes
-    console.log('\n🔄 Applying changes to database...');
-    
-    for (const update of accountsToUpdate) {
-      await prisma.tOTPAccount.update({
-        where: { id: update.id },
-        data: {
-          secret: update.encryptedSecret,
-          backupKey: update.encryptedBackupKey,
-        },
-      });
+
+    // Apply changes atomically using a transaction
+    console.log('\n🔄 Applying changes to database (atomic transaction)...');
+
+    await prisma.$transaction(
+      accountsToUpdate.map((update) =>
+        prisma.tOTPAccount.update({
+          where: { id: update.id },
+          data: {
+            secret: update.encryptedSecret,
+            backupKey: update.encryptedBackupKey,
+          },
+        })
+      )
+    );
+
+    accountsToUpdate.forEach((update) => {
       console.log(`   ✓ Updated: ${update.accountName}`);
-    }
-    
+    });
+
     console.log(`\n✅ Successfully encrypted ${accountsToUpdate.length} TOTP account(s)`);
-    
+
   } catch (error) {
     console.error('\n❌ Error during migration:', error);
     process.exit(1);

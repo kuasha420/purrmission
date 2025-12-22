@@ -426,20 +426,63 @@ export class PrismaTOTPRepository implements TOTPRepository {
     this.prisma = prisma;
   }
 
-  async create(account: Omit<TOTPAccount, 'id' | 'createdAt' | 'updatedAt'>): Promise<TOTPAccount> {
-    // Encrypt secret and backupKey before storing
-    let encryptedSecret: string;
-    let encryptedBackupKey: string | null;
-
+  /**
+   * Encrypt secret and optional backupKey for storage.
+   * @param secret - The TOTP secret to encrypt
+   * @param backupKey - Optional backup key to encrypt
+   * @param context - Context for logging (e.g., 'creation', 'update')
+   * @param accountId - Optional account ID for update context
+   */
+  private encryptAccountData(
+    secret: string,
+    backupKey: string | undefined,
+    context: string,
+    accountId?: string
+  ): { encryptedSecret: string; encryptedBackupKey: string | null } {
     try {
-      encryptedSecret = encryptValue(account.secret);
-      encryptedBackupKey = account.backupKey ? encryptValue(account.backupKey) : null;
+      const encryptedSecret = encryptValue(secret);
+      const encryptedBackupKey = backupKey ? encryptValue(backupKey) : null;
+      return { encryptedSecret, encryptedBackupKey };
     } catch (error) {
-      logger.error('Failed to encrypt TOTP data during creation', {
+      logger.error(`Failed to encrypt TOTP data during ${context}`, {
+        ...(accountId && { accountId }),
         error: error instanceof Error ? error.message : String(error),
       });
       throw new Error('Failed to encrypt TOTP data. Check encryption key configuration.');
     }
+  }
+
+  /**
+   * Decrypt a field value with context-aware error handling.
+   * @param encryptedValue - The encrypted value to decrypt
+   * @param fieldName - Name of the field for error messages
+   * @param accountId - Account ID for logging
+   * @param accountName - Account name for logging
+   */
+  private decryptField(
+    encryptedValue: string,
+    fieldName: string,
+    accountId: string,
+    accountName: string
+  ): string {
+    try {
+      return decryptValue(encryptedValue);
+    } catch (error) {
+      logger.error(`Failed to decrypt TOTP ${fieldName}`, {
+        accountId,
+        accountName,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      throw new Error(`Failed to decrypt TOTP ${fieldName}. Check encryption key configuration.`);
+    }
+  }
+
+  async create(account: Omit<TOTPAccount, 'id' | 'createdAt' | 'updatedAt'>): Promise<TOTPAccount> {
+    const { encryptedSecret, encryptedBackupKey } = this.encryptAccountData(
+      account.secret,
+      account.backupKey,
+      'creation'
+    );
 
     const created = await this.prisma.tOTPAccount.create({
       data: {
@@ -456,20 +499,12 @@ export class PrismaTOTPRepository implements TOTPRepository {
   }
 
   async update(account: TOTPAccount): Promise<TOTPAccount> {
-    // Encrypt secret and backupKey before storing
-    let encryptedSecret: string;
-    let encryptedBackupKey: string | null;
-
-    try {
-      encryptedSecret = encryptValue(account.secret);
-      encryptedBackupKey = account.backupKey ? encryptValue(account.backupKey) : null;
-    } catch (error) {
-      logger.error('Failed to encrypt TOTP data during update', {
-        accountId: account.id,
-        error: error instanceof Error ? error.message : String(error),
-      });
-      throw new Error('Failed to encrypt TOTP data. Check encryption key configuration.');
-    }
+    const { encryptedSecret, encryptedBackupKey } = this.encryptAccountData(
+      account.secret,
+      account.backupKey,
+      'update',
+      account.id
+    );
 
     const updated = await this.prisma.tOTPAccount.update({
       where: { id: account.id },
@@ -557,35 +592,10 @@ export class PrismaTOTPRepository implements TOTPRepository {
     createdAt: Date;
     updatedAt: Date;
   }): TOTPAccount {
-    // Decrypt secret and backupKey when reading
-    let decryptedSecret: string;
-    let decryptedBackupKey: string | undefined;
-
-    try {
-      decryptedSecret = decryptValue(row.secret);
-    } catch (error) {
-      // Log detailed error for debugging, but throw generic error to avoid information disclosure
-      logger.error('Failed to decrypt TOTP secret', {
-        accountId: row.id,
-        accountName: row.accountName,
-        error: error instanceof Error ? error.message : String(error),
-      });
-      throw new Error('Failed to decrypt TOTP secret. Check encryption key configuration.');
-    }
-
-    if (row.backupKey) {
-      try {
-        decryptedBackupKey = decryptValue(row.backupKey);
-      } catch (error) {
-        // Log detailed error for debugging, but throw generic error to avoid information disclosure
-        logger.error('Failed to decrypt TOTP backup key', {
-          accountId: row.id,
-          accountName: row.accountName,
-          error: error instanceof Error ? error.message : String(error),
-        });
-        throw new Error('Failed to decrypt TOTP backup key. Check encryption key configuration.');
-      }
-    }
+    const decryptedSecret = this.decryptField(row.secret, 'secret', row.id, row.accountName);
+    const decryptedBackupKey = row.backupKey
+      ? this.decryptField(row.backupKey, 'backup key', row.id, row.accountName)
+      : undefined;
 
     return {
       id: row.id,
