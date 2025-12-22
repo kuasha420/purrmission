@@ -53,6 +53,7 @@ jobs:
       - name: Generate checksums
         run: |
           find apps/purrmission-bot/dist -type f -exec sha256sum {} \; | sort > dist-checksums.txt
+          find dist-scripts -type f -exec sha256sum {} \; | sort >> dist-checksums.txt
           sha256sum package.json pnpm-lock.yaml ecosystem.config.cjs >> dist-checksums.txt
           cat dist-checksums.txt
 
@@ -130,7 +131,7 @@ jobs:
           key: ${{ secrets.SSH_KEY }}
           port: ${{ secrets.SSH_PORT || 22 }}
           target: ${{ secrets.SSH_TARGET }}
-          source: "apps,package.json,pnpm-lock.yaml,pnpm-workspace.yaml,ecosystem.config.cjs,dist-checksums.txt,prisma,scripts"
+          source: "apps,package.json,pnpm-lock.yaml,pnpm-workspace.yaml,ecosystem.config.cjs,dist-checksums.txt,prisma,dist-scripts"
 
       - name: Verify deployment integrity
         uses: appleboy/ssh-action@v1
