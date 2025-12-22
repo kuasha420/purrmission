@@ -28,7 +28,8 @@ function isAccessRequestContext(context: unknown): context is AccessRequestConte
     typeof ctx !== 'object' ||
     ctx === null ||
     typeof ctx.requesterId !== 'string' ||
-    typeof ctx.description !== 'string'
+    typeof ctx.description !== 'string' ||
+    typeof ctx.type !== 'string'
   ) {
     return false;
   }
@@ -161,6 +162,23 @@ export async function handleApprovalButton(
           services,
           discordClient
         );
+      }
+    }
+
+    // If denied, notify the requester via DM
+    if (action === 'DENY' && result.request) {
+      const context = result.request.context;
+      if (isAccessRequestContext(context)) {
+        try {
+          const user = await discordClient.users.fetch(context.requesterId);
+          const dm = await user.createDM();
+          await dm.send('❌ Your access request was denied by a guardian.');
+        } catch (dmError) {
+          logger.warn('Failed to send denial DM to requester', {
+            requestId,
+            error: dmError,
+          });
+        }
       }
     }
 
