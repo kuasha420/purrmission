@@ -209,7 +209,7 @@ export async function handleResourceAutocomplete(
         const resourceIds = userGuardianships.map((g) => g.resourceId);
 
         // Fetch resource details optimized
-        const validResources = await resources.findManyByIds(resourceIds);
+        const validResources = resourceIds.length > 0 ? await resources.findManyByIds(resourceIds) : [];
 
         // Filter valid resources and match query
         const query = String(focusedOption.value).toLowerCase();
