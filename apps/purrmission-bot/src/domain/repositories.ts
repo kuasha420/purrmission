@@ -12,6 +12,7 @@ import type { PrismaClient } from '@prisma/client';
 import type {
   Resource,
   Guardian,
+  GuardianRole,
   ApprovalRequest,
   CreateResourceInput,
   AddGuardianInput,
@@ -892,5 +893,151 @@ export class PrismaAuditRepository implements AuditRepository {
       orderBy: { createdAt: 'desc' },
     });
     return rows;
+  }
+}
+
+/**
+ * Prisma implementation of GuardianRepository.
+ */
+export class PrismaGuardianRepository implements GuardianRepository {
+  private readonly prisma: PrismaClient;
+
+  constructor(prisma: PrismaClient) {
+    this.prisma = prisma;
+  }
+
+  async add(input: AddGuardianInput): Promise<Guardian> {
+    const created = await this.prisma.guardian.create({
+      data: {
+        resourceId: input.resourceId,
+        discordUserId: input.discordUserId,
+        role: input.role,
+      },
+    });
+    return this.mapPrismaToDomain(created);
+  }
+
+  async findByResourceId(resourceId: string): Promise<Guardian[]> {
+    const rows = await this.prisma.guardian.findMany({
+      where: { resourceId },
+    });
+    return rows.map((row) => this.mapPrismaToDomain(row));
+  }
+
+  async findByResourceAndUser(resourceId: string, discordUserId: string): Promise<Guardian | null> {
+    const row = await this.prisma.guardian.findFirst({
+      where: {
+        resourceId,
+        discordUserId,
+      },
+    });
+    return row ? this.mapPrismaToDomain(row) : null;
+  }
+
+  async findByUserId(discordUserId: string): Promise<Guardian[]> {
+    const rows = await this.prisma.guardian.findMany({
+      where: { discordUserId },
+    });
+    return rows.map((row) => this.mapPrismaToDomain(row));
+  }
+
+  private mapPrismaToDomain(row: {
+    id: string;
+    resourceId: string;
+    discordUserId: string;
+    role: string; // Prisma returns string for enums by default unless typed
+    createdAt: Date;
+  }): Guardian {
+    return {
+      id: row.id,
+      resourceId: row.resourceId,
+      discordUserId: row.discordUserId,
+      role: row.role as GuardianRole,
+      createdAt: row.createdAt,
+    };
+  }
+}
+
+/**
+ * Prisma implementation of ApprovalRequestRepository.
+ */
+export class PrismaApprovalRequestRepository implements ApprovalRequestRepository {
+  private readonly prisma: PrismaClient;
+
+  constructor(prisma: PrismaClient) {
+    this.prisma = prisma;
+  }
+
+  async create(input: CreateApprovalRequestInput): Promise<ApprovalRequest> {
+    const created = await this.prisma.approvalRequest.create({
+      data: {
+        resourceId: input.resourceId,
+        status: input.status,
+        context: input.context as any, // Prisma expects specific JSON type
+        callbackUrl: input.callbackUrl,
+        expiresAt: input.expiresAt,
+        discordMessageId: input.discordMessageId,
+        discordChannelId: input.discordChannelId,
+      },
+    });
+    return this.mapPrismaToDomain(created);
+  }
+
+  async updateStatus(id: string, status: ApprovalStatus, resolvedBy?: string): Promise<void> {
+    const data: any = { status };
+    if (resolvedBy) {
+      data.resolvedBy = resolvedBy;
+      data.resolvedAt = new Date();
+    }
+
+    await this.prisma.approvalRequest.update({
+      where: { id },
+      data,
+    });
+  }
+
+  async findById(id: string): Promise<ApprovalRequest | null> {
+    const row = await this.prisma.approvalRequest.findUnique({
+      where: { id },
+    });
+    return row ? this.mapPrismaToDomain(row) : null;
+  }
+
+  async findPendingByResourceId(resourceId: string): Promise<ApprovalRequest[]> {
+    const rows = await this.prisma.approvalRequest.findMany({
+      where: {
+        resourceId,
+        status: 'PENDING',
+      },
+    });
+    return rows.map((row) => this.mapPrismaToDomain(row));
+  }
+
+  private mapPrismaToDomain(row: {
+    id: string;
+    resourceId: string;
+    status: string;
+    context: any;
+    callbackUrl: string | null;
+    createdAt: Date;
+    expiresAt: Date | null;
+    resolvedBy: string | null;
+    resolvedAt: Date | null;
+    discordMessageId: string | null;
+    discordChannelId: string | null;
+  }): ApprovalRequest {
+    return {
+      id: row.id,
+      resourceId: row.resourceId,
+      status: row.status as ApprovalStatus,
+      context: row.context,
+      callbackUrl: row.callbackUrl ?? undefined,
+      createdAt: row.createdAt,
+      expiresAt: row.expiresAt,
+      resolvedBy: row.resolvedBy ?? undefined,
+      resolvedAt: row.resolvedAt ?? undefined,
+      discordMessageId: row.discordMessageId ?? undefined,
+      discordChannelId: row.discordChannelId ?? undefined,
+    };
   }
 }

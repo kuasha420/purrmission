@@ -4,7 +4,15 @@
 
 import { env } from './config/env.js';
 import { logger } from './logging/logger.js';
-import { createInMemoryRepositories, PrismaTOTPRepository, PrismaResourceRepository, PrismaAuditRepository } from './domain/repositories.js';
+import {
+  createInMemoryRepositories,
+  PrismaTOTPRepository,
+  PrismaResourceRepository,
+  PrismaAuditRepository,
+  PrismaGuardianRepository,
+  PrismaApprovalRequestRepository,
+  PrismaResourceFieldRepository,
+} from './domain/repositories.js';
 import { createServices } from './domain/services.js';
 import { createDiscordClient } from './discord/client.js';
 import { startHttpServer } from './http/server.js';
@@ -33,6 +41,9 @@ async function main(): Promise<void> {
   repositories.totp = new PrismaTOTPRepository(prisma);
   repositories.resources = new PrismaResourceRepository(prisma);
   repositories.audit = new PrismaAuditRepository(prisma);
+  repositories.guardians = new PrismaGuardianRepository(prisma);
+  repositories.approvalRequests = new PrismaApprovalRequestRepository(prisma);
+  repositories.resourceFields = new PrismaResourceFieldRepository(prisma);
 
   logger.info('Initializing services...');
   const services = createServices({ repositories });
