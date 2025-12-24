@@ -78,8 +78,12 @@ model ApprovalRequest {
   status      ApprovalRequestStatus @default(PENDING)
   context     Json
   callbackUrl String? // nullable
-  createdAt   DateTime              @default(now())
-  expiresAt   DateTime?
+  createdAt        DateTime              @default(now())
+  expiresAt        DateTime?
+  resolvedBy       String?
+  resolvedAt       DateTime?
+  discordMessageId String?
+  discordChannelId String?
 
   resource Resource @relation(fields: [resourceId], references: [id], onDelete: Cascade)
 
