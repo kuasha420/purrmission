@@ -65,8 +65,6 @@ export async function handleSlashCommand(
       await handleRegisterResource(interaction, services);
       break;
 
-
-
     case 'purrmission':
       await handlePurrmissionCommand(interaction, context);
       break;

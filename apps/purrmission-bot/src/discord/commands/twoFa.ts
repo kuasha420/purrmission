@@ -134,6 +134,7 @@ export const purrmissionCommand = new SlashCommandBuilder()
               .setName('resource-id')
               .setDescription('ID of the resource')
               .setRequired(true)
+              .setAutocomplete(true)
           )
           .addUserOption((option) =>
             option
@@ -157,9 +158,16 @@ export async function handlePurrmissionCommand(
   }
 
   if (subcommandGroup === 'guardian') {
-    if (subcommand === 'add') {
-      await handleAddGuardian(interaction, context.services);
-      return;
+    switch (subcommand) {
+      case 'add':
+        await handleAddGuardian(interaction, context.services);
+        return;
+      default:
+        await interaction.reply({
+          content: 'Unsupported subcommand for /purrmission guardian.',
+          ephemeral: true,
+        });
+        return;
     }
   }
 
