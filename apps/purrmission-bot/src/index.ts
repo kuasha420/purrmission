@@ -5,7 +5,7 @@
 import { env } from './config/env.js';
 import { logger } from './logging/logger.js';
 import {
-  createInMemoryRepositories,
+
   PrismaTOTPRepository,
   PrismaResourceRepository,
   PrismaAuditRepository,
@@ -34,16 +34,18 @@ async function main(): Promise<void> {
   }
 
   logger.info('Initializing repositories...');
-  const repositories = createInMemoryRepositories();
 
   // Wire up Prisma for production persistence
   const prisma = getPrismaClient();
-  repositories.totp = new PrismaTOTPRepository(prisma);
-  repositories.resources = new PrismaResourceRepository(prisma);
-  repositories.audit = new PrismaAuditRepository(prisma);
-  repositories.guardians = new PrismaGuardianRepository(prisma);
-  repositories.approvalRequests = new PrismaApprovalRequestRepository(prisma);
-  repositories.resourceFields = new PrismaResourceFieldRepository(prisma);
+
+  const repositories = {
+    resources: new PrismaResourceRepository(prisma),
+    guardians: new PrismaGuardianRepository(prisma),
+    approvalRequests: new PrismaApprovalRequestRepository(prisma),
+    totp: new PrismaTOTPRepository(prisma),
+    resourceFields: new PrismaResourceFieldRepository(prisma),
+    audit: new PrismaAuditRepository(prisma),
+  };
 
   logger.info('Initializing services...');
   const services = createServices({ repositories });

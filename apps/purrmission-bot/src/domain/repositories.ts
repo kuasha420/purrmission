@@ -232,229 +232,13 @@ export class PrismaResourceRepository implements ResourceRepository {
   }
 }
 
-/**
- * In-memory implementation of ResourceRepository.
- *
- * TODO: Replace with Prisma/Postgres implementation for production.
- * This implementation stores all data in memory and is lost on restart.
- */
-export class InMemoryResourceRepository implements ResourceRepository {
-  private resources: Map<string, Resource> = new Map();
 
-  async create(input: CreateResourceInput): Promise<Resource> {
-    const resource: Resource = {
-      ...input,
-      createdAt: new Date(),
-    };
-    this.resources.set(resource.id, resource);
-    return resource;
-  }
 
-  async findById(id: string): Promise<Resource | null> {
-    return this.resources.get(id) ?? null;
-  }
 
-  async findByApiKey(apiKey: string): Promise<Resource | null> {
-    for (const resource of this.resources.values()) {
-      // TODO: Use constant-time comparison for security
-      if (resource.apiKey === apiKey) {
-        return resource;
-      }
-    }
-    return null;
-  }
 
-  async update(id: string, data: { totpAccountId?: string | null }): Promise<Resource> {
-    const resource = this.resources.get(id);
-    if (!resource) {
-      throw new Error(`Resource not found: ${id}`);
-    }
-    const updated: Resource = {
-      ...resource,
-      // Convert null to undefined for domain model consistency
-      totpAccountId: data.totpAccountId === null ? undefined : (data.totpAccountId ?? resource.totpAccountId),
-    };
-    this.resources.set(id, updated);
-    return updated;
-  }
 
-  async findManyByIds(ids: string[]): Promise<Resource[]> {
-    // In-memory implementation: filter map values
-    const result: Resource[] = [];
-    for (const id of ids) {
-      const resource = this.resources.get(id);
-      if (resource) {
-        result.push(resource);
-      }
-    }
-    return result;
-  }
-}
 
-/**
- * In-memory implementation of GuardianRepository.
- *
- * TODO: Replace with Prisma/Postgres implementation for production.
- * This implementation stores all data in memory and is lost on restart.
- */
-export class InMemoryGuardianRepository implements GuardianRepository {
-  private guardians: Map<string, Guardian> = new Map();
 
-  async add(input: AddGuardianInput): Promise<Guardian> {
-    const guardian: Guardian = {
-      ...input,
-      createdAt: new Date(),
-    };
-    this.guardians.set(guardian.id, guardian);
-    return guardian;
-  }
-
-  async findByResourceId(resourceId: string): Promise<Guardian[]> {
-    const result: Guardian[] = [];
-    for (const guardian of this.guardians.values()) {
-      if (guardian.resourceId === resourceId) {
-        result.push(guardian);
-      }
-    }
-    return result;
-  }
-
-  async findByResourceAndUser(resourceId: string, discordUserId: string): Promise<Guardian | null> {
-    for (const guardian of this.guardians.values()) {
-      if (guardian.resourceId === resourceId && guardian.discordUserId === discordUserId) {
-        return guardian;
-      }
-    }
-    return null;
-  }
-
-  async findByUserId(discordUserId: string): Promise<Guardian[]> {
-    return Array.from(this.guardians.values()).filter(
-      (guardian) => guardian.discordUserId === discordUserId
-    );
-  }
-}
-
-/**
- * In-memory implementation of ApprovalRequestRepository.
- *
- * TODO: Replace with Prisma/Postgres implementation for production.
- * This implementation stores all data in memory and is lost on restart.
- */
-export class InMemoryApprovalRequestRepository implements ApprovalRequestRepository {
-  private requests: Map<string, ApprovalRequest> = new Map();
-
-  async create(input: CreateApprovalRequestInput): Promise<ApprovalRequest> {
-    const request: ApprovalRequest = {
-      ...input,
-      createdAt: new Date(),
-    };
-    this.requests.set(request.id, request);
-    return request;
-  }
-
-  async updateStatus(id: string, status: ApprovalStatus, resolvedBy?: string): Promise<void> {
-    const request = this.requests.get(id);
-    if (request) {
-      request.status = status;
-      if (resolvedBy) {
-        request.resolvedBy = resolvedBy;
-        request.resolvedAt = new Date();
-      }
-    }
-  }
-
-  async findById(id: string): Promise<ApprovalRequest | null> {
-    return this.requests.get(id) ?? null;
-  }
-
-  async findPendingByResourceId(resourceId: string): Promise<ApprovalRequest[]> {
-    const result: ApprovalRequest[] = [];
-    for (const request of this.requests.values()) {
-      if (request.resourceId === resourceId && request.status === 'PENDING') {
-        result.push(request);
-      }
-    }
-    return result;
-  }
-}
-
-/**
- * In-memory implementation of TOTPRepository.
- */
-export class InMemoryTOTPRepository implements TOTPRepository {
-  private accounts: Map<string, TOTPAccount> = new Map();
-
-  async create(account: Omit<TOTPAccount, 'id' | 'createdAt' | 'updatedAt'>): Promise<TOTPAccount> {
-    const newAccount: TOTPAccount = {
-      ...account,
-      id: crypto.randomUUID(),
-      backupKey: account.backupKey,
-      createdAt: new Date(),
-      updatedAt: new Date(),
-    };
-    this.accounts.set(newAccount.id, newAccount);
-    return newAccount;
-  }
-
-  async update(account: TOTPAccount): Promise<TOTPAccount> {
-    const existing = this.accounts.get(account.id);
-    if (!existing) {
-      throw new Error(`TOTPAccount with ID ${account.id} not found`);
-    }
-    const updated: TOTPAccount = {
-      ...account,
-      backupKey: account.backupKey,
-      updatedAt: new Date(),
-    };
-    this.accounts.set(updated.id, updated);
-    return updated;
-  }
-
-  async deleteById(id: string): Promise<void> {
-    this.accounts.delete(id);
-  }
-
-  async findById(id: string): Promise<TOTPAccount | null> {
-    return this.accounts.get(id) ?? null;
-  }
-
-  async findByOwnerDiscordUserId(ownerDiscordUserId: string): Promise<TOTPAccount[]> {
-    const results: TOTPAccount[] = [];
-    for (const account of this.accounts.values()) {
-      if (account.ownerDiscordUserId === ownerDiscordUserId) {
-        results.push(account);
-      }
-    }
-    return results;
-  }
-
-  async findByOwnerAndName(
-    ownerDiscordUserId: string,
-    accountName: string
-  ): Promise<TOTPAccount | null> {
-    for (const account of this.accounts.values()) {
-      if (
-        account.ownerDiscordUserId === ownerDiscordUserId &&
-        account.accountName === accountName
-      ) {
-        return account;
-      }
-    }
-    return null;
-  }
-
-  async findSharedVisibleTo(_discordUserId: string): Promise<TOTPAccount[]> {
-    // TODO: Implement fine-grained ACLs
-    const results: TOTPAccount[] = [];
-    for (const account of this.accounts.values()) {
-      if (account.shared) {
-        results.push(account);
-      }
-    }
-    return results;
-  }
-}
 
 export class PrismaTOTPRepository implements TOTPRepository {
   private readonly prisma: PrismaClient;
@@ -650,62 +434,7 @@ export class PrismaTOTPRepository implements TOTPRepository {
 
 
 
-/**
- * In-memory implementation of ResourceFieldRepository.
- */
-export class InMemoryResourceFieldRepository implements ResourceFieldRepository {
-  private fields: Map<string, ResourceField> = new Map();
 
-  async create(input: CreateResourceFieldInput): Promise<ResourceField> {
-    const field: ResourceField = {
-      id: crypto.randomUUID(),
-      resourceId: input.resourceId,
-      name: input.name,
-      value: input.value, // In-memory: no encryption needed
-      createdAt: new Date(),
-      updatedAt: new Date(),
-    };
-    this.fields.set(field.id, field);
-    return field;
-  }
-
-  async findById(id: string): Promise<ResourceField | null> {
-    return this.fields.get(id) ?? null;
-  }
-
-  async findByResourceId(resourceId: string): Promise<ResourceField[]> {
-    const results: ResourceField[] = [];
-    for (const field of this.fields.values()) {
-      if (field.resourceId === resourceId) {
-        results.push(field);
-      }
-    }
-    return results;
-  }
-
-  async findByResourceAndName(resourceId: string, name: string): Promise<ResourceField | null> {
-    for (const field of this.fields.values()) {
-      if (field.resourceId === resourceId && field.name === name) {
-        return field;
-      }
-    }
-    return null;
-  }
-
-  async update(id: string, value: string): Promise<ResourceField> {
-    const field = this.fields.get(id);
-    if (!field) {
-      throw new Error(`ResourceField with ID ${id} not found`);
-    }
-    field.value = value;
-    field.updatedAt = new Date();
-    return field;
-  }
-
-  async delete(id: string): Promise<void> {
-    this.fields.delete(id);
-  }
-}
 
 /**
  * Prisma implementation of ResourceFieldRepository.
@@ -823,44 +552,12 @@ export interface Repositories {
 /**
  * Create in-memory repositories for MVP.
  */
-export function createInMemoryRepositories(): Repositories {
-  return {
-    resources: new InMemoryResourceRepository(),
-    guardians: new InMemoryGuardianRepository(),
-    approvalRequests: new InMemoryApprovalRequestRepository(),
-    totp: new InMemoryTOTPRepository(),
-    resourceFields: new InMemoryResourceFieldRepository(),
-    audit: new InMemoryAuditRepository(),
-  };
-}
-
 /**
  * Repository for logging audit events.
  */
 export interface AuditRepository {
   create(input: CreateAuditLogInput): Promise<AuditLog>;
   findByResourceId(resourceId: string): Promise<AuditLog[]>;
-}
-
-/**
- * In-memory implementation of AuditRepository.
- */
-export class InMemoryAuditRepository implements AuditRepository {
-  private logs: AuditLog[] = [];
-
-  async create(input: CreateAuditLogInput): Promise<AuditLog> {
-    const log: AuditLog = {
-      id: crypto.randomUUID(),
-      ...input,
-      createdAt: new Date(),
-    };
-    this.logs.push(log);
-    return log;
-  }
-
-  async findByResourceId(resourceId: string): Promise<AuditLog[]> {
-    return this.logs.filter((log) => log.resourceId === resourceId);
-  }
 }
 
 /**

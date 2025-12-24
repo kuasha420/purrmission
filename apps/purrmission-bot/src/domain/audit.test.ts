@@ -1,7 +1,7 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { AuditService } from './audit.js';
-import { InMemoryAuditRepository } from './repositories.js';
+import { InMemoryAuditRepository } from './repositories.mock.js';
 
 describe('AuditService', () => {
     it('should log an event successfully', async () => {
