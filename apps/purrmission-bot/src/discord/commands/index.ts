@@ -13,7 +13,6 @@ import {
 } from 'discord.js';
 
 import { handleRegisterResource } from './registerResource.js';
-import { handleAddGuardian } from './addGuardian.js';
 import {
   handlePurrmissionCommand,
   purrmissionCommand,
@@ -34,17 +33,6 @@ export const commands: RESTPostAPIChatInputApplicationCommandsJSONBody[] = [
         .setDescription('Name of the resource to protect')
         .setRequired(true)
         .setMaxLength(100)
-    )
-    .toJSON(),
-
-  new SlashCommandBuilder()
-    .setName('purrmission-add-guardian')
-    .setDescription('Add a guardian to a protected resource')
-    .addStringOption((option) =>
-      option.setName('resource-id').setDescription('ID of the resource').setRequired(true)
-    )
-    .addUserOption((option) =>
-      option.setName('user').setDescription('User to add as guardian').setRequired(true)
     )
     .toJSON(),
 
@@ -75,10 +63,6 @@ export async function handleSlashCommand(
   switch (commandName) {
     case 'purrmission-register-resource':
       await handleRegisterResource(interaction, services);
-      break;
-
-    case 'purrmission-add-guardian':
-      await handleAddGuardian(interaction, services);
       break;
 
     case 'purrmission':

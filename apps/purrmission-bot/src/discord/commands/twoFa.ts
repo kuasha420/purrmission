@@ -17,6 +17,7 @@ import {
   handleResourceCommand,
   handleResourceAutocomplete,
 } from './resource.js';
+import { handleAddGuardian } from './addGuardian.js';
 import { rateLimiter } from '../../infra/rateLimit.js';
 export const purrmissionCommand = new SlashCommandBuilder()
   .setName('purrmission')
@@ -119,6 +120,29 @@ export const purrmissionCommand = new SlashCommandBuilder()
               .setRequired(true)
           )
       )
+  )
+  .addSubcommandGroup((group) =>
+    group
+      .setName('guardian')
+      .setDescription('Manage guardians for resources')
+      .addSubcommand((subcommand) =>
+        subcommand
+          .setName('add')
+          .setDescription('Add a guardian to a protected resource')
+          .addStringOption((option) =>
+            option
+              .setName('resource-id')
+              .setDescription('ID of the resource')
+              .setRequired(true)
+              .setAutocomplete(true)
+          )
+          .addUserOption((option) =>
+            option
+              .setName('user')
+              .setDescription('User to add as guardian')
+              .setRequired(true)
+          )
+      )
   );
 
 export async function handlePurrmissionCommand(
@@ -131,6 +155,20 @@ export async function handlePurrmissionCommand(
   if (subcommandGroup === 'resource') {
     await handleResourceCommand(interaction, context);
     return;
+  }
+
+  if (subcommandGroup === 'guardian') {
+    switch (subcommand) {
+      case 'add':
+        await handleAddGuardian(interaction, context.services);
+        return;
+      default:
+        await interaction.reply({
+          content: 'Unsupported subcommand for /purrmission guardian.',
+          ephemeral: true,
+        });
+        return;
+    }
   }
 
   if (subcommandGroup !== '2fa') {
