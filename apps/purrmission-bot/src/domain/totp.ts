@@ -91,6 +91,10 @@ export function createTOTPAccountFromSecret(
     throw new Error('Secret cannot be empty');
   }
 
+  // Sanitize secret: remove all whitespace (including internal spaces)
+  // Google Authenticator often displays secrets with spaces for readability.
+  secret = secret.replace(/\s+/g, '');
+
   // Stricter Base32 check: A-Z, 2-7, with optional padding only at the end (per RFC 4648)
   const base32Regex = /^[A-Z2-7]+=*$/i;
   if (!base32Regex.test(secret)) {
