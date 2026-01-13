@@ -49,7 +49,7 @@ fi
 
 # 5. MCP Sync
 echo -e "${YELLOW}Syncing MCP config...${NC}"
-node scripts/sync-mcp.js
+pnpm mcp:sync
 
 echo -e "${GREEN}=== Setup Complete ===${NC}"
 echo -e "Run ${BLUE}pnpm dev${NC} to start the development server."
