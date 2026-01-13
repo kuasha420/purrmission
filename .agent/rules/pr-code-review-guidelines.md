@@ -13,23 +13,23 @@ Use the known PR ID and retrieve the latest sets of review comments (based on UT
 ### If either PR Number or Review ID is not provided or correctly inferrable
 Refuse to address any CR feedback, instruct on the correct approach based on this document.  
 
-Next, use the `scripts/gh-pr-review-comments.js` script to fetch ALL inline comments.
+Next, use the `scripts/gh-pr-review-comments.cjs` script to fetch ALL inline comments.
 
 The project includes a helper script to fetch and format review comments.
 
 ```bash
 # 1. Discover available reviews (Auto-mode)
-node scripts/gh-pr-review-comments.js <PR_NUMBER>
+node scripts/gh-pr-review-comments.cjs <PR_NUMBER>
 
 # 2. Fetch specific review comments
-node scripts/gh-pr-review-comments.js <PR_NUMBER> <REVIEW_ID>
+node scripts/gh-pr-review-comments.cjs <PR_NUMBER> <REVIEW_ID>
 
 # 3. Delta Mode (Fetch ONLY unaddressed feedback)
 # Use this when you have already addressed some comments and posted a "Code Review Addressed" reply.
-node scripts/gh-pr-review-comments.js <PR_NUMBER> --delta
+node scripts/gh-pr-review-comments.cjs <PR_NUMBER> --delta
 
 # Save to a file (REQUIRED)
-node scripts/gh-pr-review-comments.js <PR_NUMBER> --delta --file /tmp/new_feedback.md
+node scripts/gh-pr-review-comments.cjs <PR_NUMBER> --delta --file /tmp/new_feedback.md
 ```
 
 ### IMPORTANT: ALWAYS use a temporary out of working tree location for the review comment files. NEVER COMMIT ANY review comment files to git, EVER!
@@ -50,7 +50,7 @@ NEVER. UNDER. ANY. CIRCUMSTANCES. IGNORE. ANY. ON. THE. POINTS. OF. THIS. FILE.
 Use `sed` to replace text across files in a flash without opening editors.
 ```bash
 # Syntax: sed -i 's|old_text|new_text|g' filename
-sed -i 's|scripts/gh-pr-review-comments.sh|node scripts/gh-pr-review-comments.js|g' README.md
+sed -i 's|scripts/gh-pr-review-comments.sh|node scripts/gh-pr-review-comments.cjs|g' README.md
 ```
 
 ### GitHub API Magic
