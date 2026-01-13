@@ -28,7 +28,10 @@
     "dev:ops:test": "node --import tsx --test scripts/ops.test.ts",
     "prod:ops:backup": "node dist-scripts/backup-db.js",
     "prod:ops:rotate-keys": "node dist-scripts/rotate-keys.js",
-    "prod:ops:encrypt-totp": "node dist-scripts/encrypt-totp-secrets.js"
+    "prod:ops:encrypt-totp": "node dist-scripts/encrypt-totp-secrets.js",
+    "mcp:sync": "node scripts/sync-mcp.cjs",
+    "antigravity": "node scripts/antigravity.cjs",
+    "quick-start": "bash scripts/quick-start.sh"
   },
   "packageManager": "pnpm@9.15.1",
   "dependencies": {
