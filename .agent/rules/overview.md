@@ -16,6 +16,8 @@ trigger: model_decision
 - **Package Manager**: PNPM (v9+)
 - **Framework**: discord.js v14
 - **Web Server**: Fastify
+- **ORM**: Prisma
+- **Database**: SQLite (Migratable to PostgreSQL)
 - **Validation**: Zod
 - **Dev Tooling**: tsx for hot-reloading
 
@@ -24,7 +26,7 @@ trigger: model_decision
 ### Core Components
 1. **Discord Bot**: Handles slash commands and user interactions
 2. **HTTP API**: Fastify server for external integrations
-3. **Repository Layer**: Pluggable in-memory data storage
+3. **Repository Layer**: Persistence using Prisma ORM with SQLite
 4. **TOTP System**: Time-based one-time password generation and validation
 5. **Approval Workflow**: Multi-guardian approval request system
 
@@ -37,7 +39,7 @@ purrmission/
 │       │   ├── commands/   # Discord slash commands
 │       │   ├── domain/     # Core business logic
 │       │   │   ├── models.ts        # Domain models
-│       │   │   ├── repositories.ts  # Repository interfaces
+│       │   │   ├── repositories.ts  # Repository implementations (Prisma)
 │       │   │   └── totp.ts          # TOTP engine
 │       │   ├── api/        # HTTP API routes
 │       │   ├── config/     # Configuration
@@ -61,12 +63,16 @@ Required:
 - `DISCORD_TOKEN` - Discord bot token
 - `DISCORD_CLIENT_ID` - Discord application ID
 - `DISCORD_GUILD_ID` - Guild ID for testing
+- `DATABASE_URL` - Connection string for Prisma (e.g., `file:./dev.db`)
+- `ENCRYPTION_KEY` - 32-byte hex string for at-rest encryption
 
 ### Installation
 ```bash
 corepack enable
 pnpm install
 # Create .env from .env.example and fill in values
+pnpm prisma:generate
+pnpm prisma:deploy
 pnpm dev
 ```
 
@@ -77,4 +83,4 @@ pnpm dev
 - Discord slash command interface
 - HTTP API for external integrations
 - QR code support for TOTP setup
-- In-memory data storage with pluggable repositories
+- Persistent data storage using Prisma/SQLite

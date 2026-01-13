@@ -22,6 +22,7 @@ Purrmission uses **AES-256-GCM** for authenticated encryption of sensitive data 
 1. **Database Leak**: If the SQLite database is leaked, sensitive values (TOTP secrets, API keys) remain protected by AES-256-GCM encryption.
 2. **Access Token Spam**: Rate limiting prevents brute-forcing of TOTP codes or field values via Discord commands.
 3. **Misconfiguration**: The application fails to start if the `ENCRYPTION_KEY` is missing or invalid, preventing "silent failures" where data is written unencrypted.
+4. **Malformatted Secrets**: TOTP secrets are automatically sanitized (whitespace removal) upon entry to prevent copy-paste errors from causing generation failures.
 
 ### Operational Guardrails
 - **Audit Logging**: All sensitive access is logged to the `AuditLog` table, providing a trail for forensic analysis.

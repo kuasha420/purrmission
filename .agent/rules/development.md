@@ -30,8 +30,12 @@ trigger: model_decision
 ### Modifying Domain Logic
 - Edit files in `apps/purrmission-bot/src/domain/`
 - Update models in `models.ts`
+- **Database**:
+    - Update `prisma/schema.prisma` if model structure changes
+    - Run `pnpm prisma migrate dev --name <change_name>` to generate and apply migrations
+    - Run `pnpm prisma generate` to update the client
 - Update repository interfaces in `repositories.ts`
-- Implement changes in repository implementations
+- Implement changes in repository implementations (Prisma)
 - Update TOTP logic in `totp.ts`
 
 ### Adding API Endpoints
@@ -68,53 +72,18 @@ trigger: model_decision
 ## Testing
 
 ### Running Tests
+We use the Node.js native test runner (`node:test`) with `tsx`.
+
 ```bash
-pnpm test              # Run all tests
-pnpm test:watch        # Watch mode
-pnpm test:coverage     # Coverage report
+# Run all tests
+pnpm test
+
+# Run a specific test file
+node --import tsx --test apps/purrmission-bot/src/domain/totp.test.ts
 ```
 
 ### Writing Tests
-- Test framework: TBD (Vitest recommended)
-- Unit tests for business logic
-- Integration tests for repositories
-- Mock Discord interactions
-
-## Debugging
-
-### Common Issues
-
-**"Module not found"**
-- Missing `.js` extension in import
-- Fix: Add `.js` to all relative imports
-
-**"Cannot find name"**
-- TypeScript type error
-- Fix: Add proper type annotations
-
-**Command not registered**
-- Slash command not deployed
-- Fix: Run `pnpm discord:deploy-commands`
-
-### Logging
-- Use logger utility instead of `console.log`
-- Repository operations logged in development
-- API requests logged by Fastify
-
-## Agent Guidelines
-
-### File Updates
-- **.agent/** files: Use command line tools (`cat`, `sed`) or full file rewrites. Do NOT use partial replacement tools.
-
-### Commit Practices
-- **Atomic Commits**: Prefer small, focused commits that address a single logical change.
-- **Descriptive Messages**: Write clear, concise commit messages explaining the "why" and "what".
-
-### Temporary Files
-- **Workspace Hygiene**: Never save temporary files in the root or source directories.
-- **Location**: Always use the `tmp/` directory (create if needed).
-- **Cleanup**: Delete temporary files when no longer needed.
-
-## Prisma Rules
-1. **Regenerate Client on Schema Change**: Whenever you modify `prisma/schema.prisma` (manually or via migration), you MUST run `npx prisma generate` immediately afterwards to update the TypeScript definitions.
-2. **Migration Workflow**: Use `npx prisma migrate dev --name <descriptive-name>` to apply schema changes in development.
+- Use `node:test` module (`test`, `describe`, `it`)
+- Use `node:assert` for assertions
+- Mock external dependencies (Discord.js, Prisma) where appropriate
+- Place test files next to source files (e.g., `totp.test.ts` next to `totp.ts`)
