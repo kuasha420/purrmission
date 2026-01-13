@@ -60,6 +60,7 @@ if (process.platform === "win32") {
 }
 
 const GLOBAL_MCP_PATH = path.join(CLAUDE_CONFIG_DIR, "claude_desktop_config.json");
+const ANTIGRAVITY_CONFIG_PATH = path.join(os.homedir(), ".gemini/antigravity/mcp_config.json");
 const VSCODE_MCP_PATH = path.join(PROJECT_ROOT, ".vscode", "mcp.json"); // Per-project VS Code config
 
 // --- Helpers ---
@@ -278,7 +279,22 @@ function syncMcp() {
         console.log(`✅ VS Code: Synced to ${VSCODE_MCP_PATH}`);
     } catch (e) {
         console.error(`❌ Error: Could not write to VS Code config: ${e.message}`);
+    } catch (e) {
+        console.error(`❌ Error: Could not write to VS Code config: ${e.message}`);
         // Don't exit, just warn
+    }
+
+    // 4c. Write Antigravity Config
+    try {
+        ensureDirectoryExists(ANTIGRAVITY_CONFIG_PATH);
+        // Antigravity might expect a slightly different format or strictly specific one.
+        // Assuming same format as Claude Desktop for now.
+        fs.writeFileSync(ANTIGRAVITY_CONFIG_PATH, JSON.stringify(globalConfig, null, 2), {
+            mode: 0o600,
+        });
+        console.log(`✅ Antigravity: Synced to ${ANTIGRAVITY_CONFIG_PATH}`);
+    } catch (e) {
+        console.error(`❌ Error: Could not write to Antigravity config: ${e.message}`);
     }
 }
 
