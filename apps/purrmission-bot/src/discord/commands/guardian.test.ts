@@ -48,7 +48,7 @@ describe('handlePurrmissionCommand - Guardian Routing', () => {
                 replyCalls.push(options);
                 return Promise.resolve(null as unknown); // Return unknown enabling cast to InteractionCallbackResponse if needed, but for void return in test it's fine
             }) as unknown as ChatInputCommandInteraction['reply'],
-        };
+        } as unknown as ChatInputCommandInteraction;
 
         mockContext = {
             services: {
