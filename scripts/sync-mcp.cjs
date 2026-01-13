@@ -30,11 +30,10 @@ const ENV_PATH = path.join(PROJECT_ROOT, ".env");
 // 2. Global Config Paths
 // Platform specific paths for Claude and VS Code
 let CLAUDE_CONFIG_DIR;
-let VSCODE_CONFIG_DIR;
+let CLAUDE_CONFIG_DIR;
 
 if (process.platform === "win32") {
     CLAUDE_CONFIG_DIR = path.join(process.env.APPDATA, "Claude");
-    VSCODE_CONFIG_DIR = path.join(process.env.APPDATA, "Code", "User", "globalStorage", "ms-vscode.js-debug"); // Example, verify real path
 } else if (process.platform === "darwin") {
     CLAUDE_CONFIG_DIR = path.join(
         os.homedir(),
@@ -42,21 +41,9 @@ if (process.platform === "win32") {
         "Application Support",
         "Claude",
     );
-    VSCODE_CONFIG_DIR = path.join(
-        os.homedir(),
-        "Library",
-        "Application Support",
-        "Code",
-        "User",
-        "globalStorage",
-        "ms-vscode.js-debug",
-    ); // Placeholder
 } else {
     // Linux
     CLAUDE_CONFIG_DIR = path.join(os.homedir(), ".config", "Claude");
-    // VS Code MCP config location can vary, explicitly checked for commonly used extension:
-    // This script targets the standard mcp-server-config.json if it exists, or creates it in a standard location.
-    // Ideally, we target the Claude config as primary.
 }
 
 const GLOBAL_MCP_PATH = path.join(CLAUDE_CONFIG_DIR, "claude_desktop_config.json");
@@ -169,7 +156,6 @@ function syncMcp() {
 
     // 3. Merge Strategies
     const servers = projectConfig.mcpServers || {};
-    let addedCount = 0;
 
     // Load .env vars once
     const fileEnvVars = parseEnv();
@@ -246,7 +232,6 @@ function syncMcp() {
         }
 
         globalConfig.mcpServers[key] = serverConfig;
-        addedCount++;
         console.log(`   - Synced server: ${key}`);
     }
 

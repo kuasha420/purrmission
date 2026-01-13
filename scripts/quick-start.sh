@@ -41,7 +41,7 @@ pnpm install
 echo -e "${YELLOW}Setting up database...${NC}"
 pnpm prisma:generate
 # Check if we can run migrate (needs DB url)
-if grep -q "DATABASE_URL" .env; then
+if grep -q -E '^DATABASE_URL=.+' .env; then
     pnpm prisma:deploy || echo -e "${YELLOW}Migration deploy failed. Skipping.${NC}"
 else 
     echo -e "${YELLOW}No DATABASE_URL in .env. Skipping migration.${NC}"
