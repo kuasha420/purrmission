@@ -62,6 +62,7 @@ You can use the provided script or PM2.
 ```bash
 pnpm install
 pnpm build
+pnpm prisma:deploy
 pnpm prod:purrmission
 ```
 

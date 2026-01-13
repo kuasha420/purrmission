@@ -10,7 +10,7 @@
 - **Approval Chains**: Require guardian approval for protected resource usage.
 - **Discord Integration**: Get codes and approve requests directly in DMs or channels.
 - **HTTP API**: External services can request approvals via RESTful endpoints.
-- **Pluggable Storage**: In-memory repositories with future support for databases.
+- **Persistent Storage**: Prisma ORM with SQLite (migratable to PostgreSQL).
 
 ## Sponsorship & Licensing
 

@@ -1,6 +1,4 @@
----
-trigger: always_on
----
+
 
 # Architecture Details
 
@@ -10,13 +8,14 @@ trigger: always_on
 Core TOTP functionality using `otplib`:
 - Parse OTPauth URIs
 - Create TOTP accounts from URIs or secrets
+- Automatic secret sanitization (whitespace removal)
 - Generate 6-digit TOTP codes
 - Validate TOTP codes (optional)
 
 ### TOTP Repository
 Configuration in `apps/purrmission-bot/src/domain/repositories.ts`:
-- `InMemoryTOTPRepository`: Default implementation
-- Stores accounts keyed by owner ID and account name
+- `PrismaTOTPRepository`: default implementation
+- Stores accounts in SQLite via Prisma ORM
 - Supports personal and shared accounts
 - CRUD operations: create, read, list, delete
 
@@ -32,7 +31,7 @@ Configuration in `apps/purrmission-bot/src/domain/repositories.ts`:
 - `ApprovalRepository`: Interface for approval data
 - `ResourceRepository`: Interface for resource data
 - `GuardianRepository`: Interface for guardian data
-- In-memory implementations provided
+- Prisma implementations (`Prisma*Repository`) provided in `src/domain/repositories.ts`
 
 ## Discord Integration
 
@@ -46,7 +45,7 @@ Configuration in `apps/purrmission-bot/src/domain/repositories.ts`:
 1. User invokes slash command
 2. Bot validates permissions
 3. Command handler processes request
-4. Repository layer persists changes
+4. Repository layer persists changes to SQLite via Prisma
 5. Bot responds with formatted message
 
 ## HTTP API Structure
@@ -70,6 +69,10 @@ Configuration in `apps/purrmission-bot/src/domain/repositories.ts`:
 - **Resource**: Gated resource definition
 - **Guardian**: Approval authority
 - **ApprovalRequest**: Request with status and votes
+
+### Schema Definition
+- Primary source of truth for data models is `prisma/schema.prisma`.
+- TypeScript interfaces match the database schema.
 
 ### Type Safety
 - Strict TypeScript mode enabled
