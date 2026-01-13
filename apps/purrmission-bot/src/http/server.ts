@@ -214,6 +214,102 @@ export function createHttpServer(deps: HttpServerDeps): FastifyInstance {
     }
   );
 
+  // -------------------------------------------------------------------------
+  // Project & Environment Management
+  // -------------------------------------------------------------------------
+
+  // Authenticaton helper
+  const authenticate = async (req: any, rep: any): Promise<string> => {
+    const authHeader = req.headers.authorization;
+    if (!authHeader || !authHeader.startsWith('Bearer ')) {
+      rep.status(401).send({ error: 'unauthorized', message: 'Missing Bearer token' });
+      return '';
+    }
+    const token = authHeader.substring(7);
+    const apiToken = await services.auth.validateToken(token);
+    if (!apiToken) {
+      rep.status(401).send({ error: 'unauthorized', message: 'Invalid token' });
+      return '';
+    }
+    return apiToken.userId;
+  };
+
+  server.post<{ Body: { name: string; description?: string } }>('/api/projects', async (req, rep) => {
+    const userId = await authenticate(req, rep);
+    if (!userId) return;
+
+    const { name, description } = req.body || {};
+    if (!name) return rep.status(400).send({ error: 'name is required' });
+
+    const project = await services.project.createProject({
+      name,
+      description,
+      ownerId: userId
+    });
+
+    return rep.status(201).send(project);
+  });
+
+  server.get('/api/projects', async (req, rep) => {
+    const userId = await authenticate(req, rep);
+    if (!userId) return;
+
+    const projects = await services.project.listProjects(userId);
+    return projects;
+  });
+
+  server.get<{ Params: { projectId: string } }>('/api/projects/:projectId', async (req, rep) => {
+    const userId = await authenticate(req, rep);
+    if (!userId) return;
+    const { projectId } = req.params;
+
+    const project = await services.project.getProject(projectId);
+    if (!project) return rep.status(404).send({ error: 'Project not found' });
+
+    // Basic ACL: only owner can view (for now)
+    if (project.ownerId !== userId) return rep.status(403).send({ error: 'Access denied' });
+
+    return project;
+  });
+
+  server.post<{ Params: { projectId: string }, Body: { name: string; slug: string } }>('/api/projects/:projectId/environments', async (req, rep) => {
+    const userId = await authenticate(req, rep);
+    if (!userId) return;
+    const { projectId } = req.params;
+    const { name, slug } = req.body || {};
+
+    if (!name || !slug) return rep.status(400).send({ error: 'name and slug are required' });
+
+    const project = await services.project.getProject(projectId);
+    if (!project) return rep.status(404).send({ error: 'Project not found' });
+    if (project.ownerId !== userId) return rep.status(403).send({ error: 'Access denied' });
+
+    try {
+      const env = await services.project.createEnvironment({
+        name,
+        slug,
+        projectId
+      });
+      return rep.status(201).send(env);
+    } catch (e: any) {
+      if (e.code === 'P2002') return rep.status(409).send({ error: 'Slug already exists for this project' });
+      throw e;
+    }
+  });
+
+  server.get<{ Params: { projectId: string } }>('/api/projects/:projectId/environments', async (req, rep) => {
+    const userId = await authenticate(req, rep);
+    if (!userId) return;
+    const { projectId } = req.params;
+
+    const project = await services.project.getProject(projectId);
+    if (!project) return rep.status(404).send({ error: 'Project not found' });
+    if (project.ownerId !== userId) return rep.status(403).send({ error: 'Access denied' });
+
+    const envs = await services.project.listEnvironments(projectId);
+    return envs;
+  });
+
   return server;
 }
 

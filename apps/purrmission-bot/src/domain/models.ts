@@ -295,3 +295,37 @@ export interface ApiToken {
 
 export type CreateAuthSessionInput = Omit<AuthSession, 'id' | 'createdAt' | 'updatedAt' | 'userId'>;
 export type CreateApiTokenInput = Omit<ApiToken, 'id' | 'createdAt' | 'lastUsedAt'>;
+
+// ----------------------------------------------------
+// Project & Environment
+// ----------------------------------------------------
+
+export interface Project {
+  id: string;
+  name: string;
+  description: string | null;
+  ownerId: string;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+export interface Environment {
+  id: string;
+  name: string;
+  slug: string;
+  projectId: string;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+export interface CreateProjectInput {
+  name: string;
+  description?: string;
+  ownerId: string;
+}
+
+export interface CreateEnvironmentInput {
+  name: string;
+  slug: string;
+  projectId: string;
+}

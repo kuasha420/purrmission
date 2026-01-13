@@ -28,6 +28,10 @@ import type {
   AuthSessionStatus,
   ApiToken,
   CreateApiTokenInput,
+  Project,
+  Environment,
+  CreateProjectInput,
+  CreateEnvironmentInput,
 } from './models.js';
 import { encryptValue, decryptValue } from '../infra/crypto.js';
 import { logger } from '../logging/logger.js';
@@ -548,6 +552,7 @@ export interface Repositories {
   resourceFields: ResourceFieldRepository;
   audit: AuditRepository;
   auth: AuthRepository;
+  projects: ProjectRepository;
 }
 
 /**
@@ -750,6 +755,16 @@ export interface AuthRepository {
   deleteExpiredSessions(): Promise<number>;
 }
 
+export interface ProjectRepository {
+  createProject(input: CreateProjectInput): Promise<Project>;
+  findById(id: string): Promise<Project | null>;
+  listProjectsByOwner(ownerId: string): Promise<Project[]>;
+
+  createEnvironment(input: CreateEnvironmentInput): Promise<Environment>;
+  listEnvironments(projectId: string): Promise<Environment[]>;
+  findEnvironment(projectId: string, slug: string): Promise<Environment | null>;
+}
+
 
 export class PrismaAuthRepository implements AuthRepository {
   private readonly prisma: PrismaClient;
@@ -879,5 +894,67 @@ export class PrismaAuthRepository implements AuthRepository {
       expiresAt: row.expiresAt,
       createdAt: row.createdAt,
     };
+  }
+}
+
+export class PrismaProjectRepository implements ProjectRepository {
+  private readonly prisma: PrismaClient;
+
+  constructor(prisma: PrismaClient) {
+    this.prisma = prisma;
+  }
+
+  async createProject(input: CreateProjectInput): Promise<Project> {
+    const project = await this.prisma.project.create({
+      data: {
+        name: input.name,
+        description: input.description,
+        ownerId: input.ownerId,
+      }
+    });
+    return {
+      ...project,
+      description: project.description ?? null,
+    };
+  }
+
+  async findById(id: string): Promise<Project | null> {
+    const row = await this.prisma.project.findUnique({ where: { id } });
+    if (!row) return null;
+    return {
+      ...row,
+      description: row.description ?? null,
+    };
+  }
+
+  async listProjectsByOwner(ownerId: string): Promise<Project[]> {
+    const rows = await this.prisma.project.findMany({ where: { ownerId }, orderBy: { createdAt: 'desc' } });
+    return rows.map(row => ({
+      ...row,
+      description: row.description ?? null,
+    }));
+  }
+
+  async createEnvironment(input: CreateEnvironmentInput): Promise<Environment> {
+    const env = await this.prisma.environment.create({
+      data: {
+        name: input.name,
+        slug: input.slug,
+        projectId: input.projectId
+      }
+    });
+    return env;
+  }
+
+  async listEnvironments(projectId: string): Promise<Environment[]> {
+    return this.prisma.environment.findMany({ where: { projectId }, orderBy: { name: 'asc' } });
+  }
+
+  async findEnvironment(projectId: string, slug: string): Promise<Environment | null> {
+    return this.prisma.environment.findUnique({
+      where: {
+        projectId_slug: { projectId, slug }
+      }
+    });
   }
 }

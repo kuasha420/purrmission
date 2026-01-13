@@ -161,3 +161,30 @@ model ApiToken {
   @@index([expiresAt])
   @@index([lastUsedAt])
 }
+
+model Project {
+  id          String   @id @default(uuid())
+  name        String
+  description String?
+  ownerId     String   // Discord User ID
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  environments Environment[]
+
+  @@index([ownerId])
+}
+
+model Environment {
+  id        String   @id @default(uuid())
+  name      String
+  slug      String
+  projectId String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  project   Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@unique([projectId, slug])
+  @@index([projectId])
+}

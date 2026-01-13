@@ -20,6 +20,7 @@ import type { Repositories } from './repositories.js';
 import { logger } from '../logging/logger.js';
 import { AuditService } from './audit.js';
 import { AuthService } from './auth.js';
+import { ProjectService } from './project.js';
 
 /**
  * Service dependencies.
@@ -438,6 +439,7 @@ export interface Services {
   resource: ResourceService;
   audit: AuditService;
   auth: AuthService;
+  project: ProjectService;
 }
 
 /**
@@ -455,5 +457,6 @@ export function createServices(baseDeps: { repositories: Repositories }): Servic
     resource: new ResourceService(fullDeps),
     audit,
     auth: new AuthService(baseDeps.repositories.auth),
+    project: new ProjectService(baseDeps.repositories.projects),
   };
 }
