@@ -12,6 +12,9 @@ import type {
     CreateResourceFieldInput,
     AuditLog,
     CreateAuditLogInput,
+    AuthSession,
+    ApiToken,
+    CreateApiTokenInput,
 } from './models.js';
 import {
     ResourceRepository,
@@ -20,6 +23,7 @@ import {
     TOTPRepository,
     ResourceFieldRepository,
     AuditRepository,
+    AuthRepository,
     Repositories,
 } from './repositories.js';
 import crypto from 'node:crypto';
@@ -322,6 +326,88 @@ export class InMemoryAuditRepository implements AuditRepository {
 }
 
 /**
+ * In-memory implementation of AuthRepository.
+ * Useful for tests.
+ */
+export class InMemoryAuthRepository implements AuthRepository {
+    private sessions: Map<string, AuthSession> = new Map();
+    private tokens: Map<string, ApiToken> = new Map();
+
+    async createSession(input: { deviceCode: string; userCode: string; expiresAt: Date }): Promise<AuthSession> {
+        const session: AuthSession = {
+            id: crypto.randomUUID(),
+            deviceCode: input.deviceCode,
+            userCode: input.userCode,
+            status: 'PENDING',
+            expiresAt: input.expiresAt,
+            createdAt: new Date(),
+            updatedAt: new Date(),
+        };
+        this.sessions.set(session.id, session);
+        return session;
+    }
+
+    async findSessionByDeviceCode(deviceCode: string): Promise<AuthSession | null> {
+        for (const session of this.sessions.values()) {
+            if (session.deviceCode === deviceCode) {
+                return session;
+            }
+        }
+        return null;
+    }
+
+    async findSessionByUserCode(userCode: string): Promise<AuthSession | null> {
+        for (const session of this.sessions.values()) {
+            if (session.userCode === userCode) {
+                return session;
+            }
+        }
+        return null;
+    }
+
+    async updateSessionStatus(id: string, status: 'APPROVED' | 'DENIED' | 'EXPIRED', userId?: string): Promise<void> {
+        const session = this.sessions.get(id);
+        if (session) {
+            session.status = status;
+            if (userId) {
+                session.userId = userId;
+            }
+            session.updatedAt = new Date();
+        }
+    }
+
+    async createApiToken(input: CreateApiTokenInput): Promise<ApiToken> {
+        const token: ApiToken = {
+            id: crypto.randomUUID(),
+            token: input.token,
+            userId: input.userId,
+            name: input.name,
+            expiresAt: input.expiresAt,
+            lastUsedAt: null,
+            createdAt: new Date(),
+        };
+        this.tokens.set(token.id, token);
+        return token;
+    }
+
+    async findApiToken(token: string): Promise<ApiToken | null> {
+        for (const t of this.tokens.values()) {
+            if (t.token === token) {
+                return t;
+            }
+        }
+        return null;
+    }
+
+    async updateApiTokenLastUsed(id: string): Promise<void> {
+        const token = this.tokens.get(id);
+        if (token) {
+            token.lastUsedAt = new Date();
+        }
+    }
+}
+
+/**
  * Create in-memory repositories for tests.
  */
 export function createInMemoryRepositories(): Repositories {
@@ -332,5 +418,6 @@ export function createInMemoryRepositories(): Repositories {
         totp: new InMemoryTOTPRepository(),
         resourceFields: new InMemoryResourceFieldRepository(),
         audit: new InMemoryAuditRepository(),
+        auth: new InMemoryAuthRepository(),
     };
 }

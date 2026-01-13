@@ -157,6 +157,58 @@ export function createHttpServer(deps: HttpServerDeps): FastifyInstance {
     };
   });
 
+  // Device Auth Flow: Initiate
+  server.post('/api/auth/device/code', async (_request, _reply) => {
+    const result = await services.auth.initiateDeviceFlow();
+    return {
+      device_code: result.deviceCode,
+      user_code: result.userCode,
+      verification_uri: result.verificationUri,
+      expires_in: result.expiresIn,
+      interval: result.interval,
+    };
+  });
+
+  // Device Auth Flow: Exchange Token
+  server.post<{ Body: { device_code: string; grant_type: string } }>(
+    '/api/auth/token',
+    async (request, reply) => {
+      const { device_code, grant_type } = request.body || {};
+
+      if (grant_type !== 'urn:ietf:params:oauth:grant-type:device_code') {
+        return reply.status(400).send({ error: 'unsupported_grant_type' });
+      }
+
+      if (!device_code) {
+        return reply.status(400).send({ error: 'invalid_request' });
+      }
+
+      try {
+        const token = await services.auth.exchangeCodeForToken(device_code);
+        if (!token) {
+          return reply.status(400).send({ error: 'authorization_pending' });
+        }
+
+        return {
+          access_token: token.token,
+          token_type: 'Bearer',
+          expires_in: null, // Never expires currently
+        };
+      } catch (e: any) {
+        if (e.message === 'expired_token') {
+          return reply.status(400).send({ error: 'expired_token' });
+        }
+        if (e.message === 'access_denied') {
+          return reply.status(403).send({ error: 'access_denied' });
+        }
+        if (e.message === 'invalid_grant') {
+          return reply.status(400).send({ error: 'invalid_grant' });
+        }
+        throw e;
+      }
+    }
+  );
+
   return server;
 }
 

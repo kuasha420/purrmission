@@ -12,6 +12,7 @@ import {
   PrismaGuardianRepository,
   PrismaApprovalRequestRepository,
   PrismaResourceFieldRepository,
+  PrismaAuthRepository,
 } from './domain/repositories.js';
 import { createServices } from './domain/services.js';
 import { createDiscordClient } from './discord/client.js';
@@ -45,6 +46,7 @@ async function main(): Promise<void> {
     totp: new PrismaTOTPRepository(prisma),
     resourceFields: new PrismaResourceFieldRepository(prisma),
     audit: new PrismaAuditRepository(prisma),
+    auth: new PrismaAuthRepository(prisma),
   };
 
   logger.info('Initializing services...');

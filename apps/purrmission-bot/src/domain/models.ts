@@ -263,3 +263,33 @@ export interface AuditLog {
 
 export type CreateAuditLogInput = Omit<AuditLog, 'id' | 'createdAt'>;
 
+
+/**
+ * Represents a device login session (OAuth Device Flow).
+ */
+export interface AuthSession {
+  id: string;
+  deviceCode: string;
+  userCode: string;
+  status: 'PENDING' | 'APPROVED' | 'EXPIRED' | 'DENIED';
+  userId?: string;
+  expiresAt: Date;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+/**
+ * Long-lived API token for CLI access.
+ */
+export interface ApiToken {
+  id: string;
+  token: string; // Hashed at rest
+  userId: string;
+  name: string;
+  lastUsedAt: Date | null;
+  expiresAt: Date | null;
+  createdAt: Date;
+}
+
+export type CreateAuthSessionInput = Omit<AuthSession, 'id' | 'createdAt' | 'updatedAt' | 'userId'>;
+export type CreateApiTokenInput = Omit<ApiToken, 'id' | 'createdAt' | 'lastUsedAt'>;
