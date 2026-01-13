@@ -279,8 +279,6 @@ function syncMcp() {
         console.log(`✅ VS Code: Synced to ${VSCODE_MCP_PATH}`);
     } catch (e) {
         console.error(`❌ Error: Could not write to VS Code config: ${e.message}`);
-    } catch (e) {
-        console.error(`❌ Error: Could not write to VS Code config: ${e.message}`);
         // Don't exit, just warn
     }
 
