@@ -8,7 +8,7 @@
  * TODO: Replace in-memory implementations with Postgres/Prisma for production.
  */
 
-import type { PrismaClient } from '@prisma/client';
+import type { PrismaClient, Prisma } from '@prisma/client';
 import type {
   Resource,
   Guardian,
@@ -432,10 +432,6 @@ export class PrismaTOTPRepository implements TOTPRepository {
   }
 }
 
-
-
-
-
 /**
  * Prisma implementation of ResourceFieldRepository.
  * Encrypts values at rest using AES-256-GCM.
@@ -550,9 +546,6 @@ export interface Repositories {
 }
 
 /**
- * Create in-memory repositories for MVP.
- */
-/**
  * Repository for logging audit events.
  */
 export interface AuditRepository {
@@ -606,6 +599,7 @@ export class PrismaGuardianRepository implements GuardianRepository {
   async add(input: AddGuardianInput): Promise<Guardian> {
     const created = await this.prisma.guardian.create({
       data: {
+        id: input.id,
         resourceId: input.resourceId,
         discordUserId: input.discordUserId,
         role: input.role,
@@ -668,9 +662,10 @@ export class PrismaApprovalRequestRepository implements ApprovalRequestRepositor
   async create(input: CreateApprovalRequestInput): Promise<ApprovalRequest> {
     const created = await this.prisma.approvalRequest.create({
       data: {
+        id: input.id,
         resourceId: input.resourceId,
         status: input.status,
-        context: input.context as any, // Prisma expects specific JSON type
+        context: input.context as Prisma.InputJsonValue,
         callbackUrl: input.callbackUrl,
         expiresAt: input.expiresAt,
         discordMessageId: input.discordMessageId,
@@ -681,7 +676,7 @@ export class PrismaApprovalRequestRepository implements ApprovalRequestRepositor
   }
 
   async updateStatus(id: string, status: ApprovalStatus, resolvedBy?: string): Promise<void> {
-    const data: any = { status };
+    const data: Prisma.ApprovalRequestUpdateInput = { status };
     if (resolvedBy) {
       data.resolvedBy = resolvedBy;
       data.resolvedAt = new Date();
