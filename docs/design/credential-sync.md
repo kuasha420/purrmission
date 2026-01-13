@@ -79,3 +79,9 @@ We will leverage the existing robust domain models:
 - **Transport**: HTTPS required.
 - **Storage**: Existing AES-256-GCM at rest.
 - **Access**: API endpoints mapped to `Guardian` logic.
+
+### 6.1. Future Consideration: Client-Side E2E Encryption
+As identified in the design review, we plan to migrate to client-side encryption for an End-to-End (E2EE) security posture.
+- **Key Management**: Clients will manage public/private key pairs. The system will store public keys.
+- **Encryption Flow**: Secrets will be encrypted client-side using the project/guardian's public key before transmission.
+- **API Design**: The `PUT /api/projects/:id/secrets` endpoint will be designed to accept flexible payloads (encrypted blobs) to facilitate this transition without breaking changes.
