@@ -30,7 +30,6 @@ const ENV_PATH = path.join(PROJECT_ROOT, ".env");
 // 2. Global Config Paths
 // Platform specific paths for Claude and VS Code
 let CLAUDE_CONFIG_DIR;
-let CLAUDE_CONFIG_DIR;
 
 if (process.platform === "win32") {
     CLAUDE_CONFIG_DIR = path.join(process.env.APPDATA, "Claude");
