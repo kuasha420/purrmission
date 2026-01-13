@@ -1,7 +1,7 @@
 # Design Doc: Purrmission Credential Sync
 
 ## 1. Overview
-A new capability to synchronize development credentials (secrets, .env variables, API keys) across machines using a centralized Purrmission server. This involves a new CLI tool (`purrmission`) and enhancements to the existing generic HTTP API.
+A new capability to synchronize development credentials (secrets, .env variables, API keys) across machines using a centralized Purrmission server. This involves a new CLI tool (`pawthy`) and enhancements to the existing generic HTTP API.
 
 ## 2. Goals
 - **Centralized Secret Management**: Store `.env` vars securely in Purrmission.
@@ -41,7 +41,7 @@ We will leverage the existing robust domain models:
 
 **Unattended**:
 - User generates a static **Service Token** via Discord command (e.g. `/purrmission token create`).
-- Script uses `PURRMISSION_TOKEN` env var.
+- Script uses `PAWTHY_TOKEN` env var.
 
 ## 4. Workflows
 
