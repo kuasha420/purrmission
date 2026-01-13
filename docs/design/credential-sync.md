@@ -13,7 +13,7 @@ A new capability to synchronize development credentials (secrets, .env variables
 ## 3. Architecture
 
 ### 3.1. Components
-1.  **Purrmission CLI (`apps/purrmission-cli`)**:
+1.  **Pawthy CLI (`apps/pawthy`)**:
     - Node.js CLI (TypeScript).
     - Libraries: `commander` (args), `inquirer`/`prompts` (TUI), `dotenv` (parsing).
     - Function: Authenticates with Bot, reads/writes local `.env`, calls API.
@@ -33,11 +33,11 @@ We will leverage the existing robust domain models:
 ### 3.3. Authentication Flow (CLI <-> API)
 **Challenge**: How does the CLI verify it's a specific Discord user?
 **Solution: "Device Flow" or "Command-based Token"**
-1. User runs `purrmission login`.
+1. User runs `pawthy login`.
 2. CLI generates a unique `session_code`.
 3. CLI asks user to run `/purrmission cli-login code:<session_code>` in Discord.
 4. Bot verifies user in Discord, associates `session_code` with `discordUserId`, and issues a long-lived **API Token**.
-5. CLI polls/receives the Token and stores it in `~/.purrmission/config`.
+5. CLI polls/receives the Token and stores it in `~/.pawthy/config`.
 
 **Unattended**:
 - User generates a static **Service Token** via Discord command (e.g. `/purrmission token create`).
@@ -45,20 +45,20 @@ We will leverage the existing robust domain models:
 
 ## 4. Workflows
 
-### 4.1. Initialization (`purrmission init`)
+### 4.1. Initialization (`pawthy init`)
 1. TUI asks for Project Name (e.g., "my-website") and Environment (e.g., "dev").
 2. CLI checks if `Resource` "my-website:dev" exists.
     - If no: Calls API to crate it (User must be Owner).
     - If yes: Checks permissions.
-3. Creates local `.purrmissionrc` linking current dir to that Resource ID.
+3. Creates local `.pawthyrc` linking current dir to that Resource ID.
 
-### 4.2. Push (`purrmission push`)
+### 4.2. Push (`pawthy push`)
 1. parses `.env` file.
 2. Encrypts? (Optional: Client-side encryption would be best, but for MVP, TLS + Server-side encryption is standard).
 3. Sends Key/Value pairs to API.
 4. API updates `ResourceField`s (upsert).
 
-### 4.3. Pull (`purrmission pull`)
+### 4.3. Pull (`pawthy pull`)
 1. Calls API to list fields for Resource.
 2. API enforces **Approval Flow**:
     - If Resource is `OPEN` (or user is Owner?), return data immediately.
