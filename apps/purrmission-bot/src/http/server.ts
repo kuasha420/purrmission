@@ -4,7 +4,7 @@
  * Provides the HTTP API for external services to request approvals.
  */
 
-import Fastify, { type FastifyInstance } from 'fastify';
+import Fastify, { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import type { Client, TextChannel } from 'discord.js';
 import { z } from 'zod';
 import { logger } from '../logging/logger.js';
@@ -189,15 +189,15 @@ export function createHttpServer(deps: HttpServerDeps): FastifyInstance {
       }
 
       try {
-        const token = await services.auth.exchangeCodeForToken(device_code);
-        if (!token) {
+        const result = await services.auth.exchangeCodeForToken(device_code);
+        if (!result) {
           return reply.status(400).send({ error: 'authorization_pending' });
         }
 
         return {
-          access_token: token.token,
+          access_token: result.token,
           token_type: 'Bearer',
-          expires_in: token.expiresAt ? Math.round((token.expiresAt.getTime() - Date.now()) / 1000) : null,
+          expires_in: result.expiresAt ? Math.round((result.expiresAt.getTime() - Date.now()) / 1000) : null,
         };
       } catch (e: unknown) {
         if (e instanceof ExpiredTokenError) {
@@ -219,7 +219,7 @@ export function createHttpServer(deps: HttpServerDeps): FastifyInstance {
   // -------------------------------------------------------------------------
 
   // Authenticaton helper
-  const authenticate = async (req: any, rep: any): Promise<string> => {
+  const authenticate = async (req: FastifyRequest, rep: FastifyReply): Promise<string> => {
     const authHeader = req.headers.authorization;
     if (!authHeader || !authHeader.startsWith('Bearer ')) {
       rep.status(401).send({ error: 'unauthorized', message: 'Missing Bearer token' });

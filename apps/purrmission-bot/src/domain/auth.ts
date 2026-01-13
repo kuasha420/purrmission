@@ -30,6 +30,10 @@ const DEFAULT_TOKEN_EXPIRY_DAYS = 90;
 export class AuthService {
     constructor(private readonly authRepo: AuthRepository) { }
 
+    private hashToken(token: string): string {
+        return createHash('sha256').update(token).digest('hex');
+    }
+
     /**
      * Starts the device flow.
      * Generates a device code (for cli) and user code (for human).
@@ -93,7 +97,7 @@ export class AuthService {
      * Exchanges a device code for an API token.
      * Returns null if pending, approved token if approved, throws if expired/denied.
      */
-    async exchangeCodeForToken(deviceCode: string): Promise<ApiToken | null> {
+    async exchangeCodeForToken(deviceCode: string): Promise<{ token: string; apiToken: ApiToken } | null> {
         const session = await this.authRepo.findSessionByDeviceCode(deviceCode);
         if (!session) throw new InvalidGrantError();
 

@@ -271,5 +271,6 @@ describe('AuthService', () => {
             assert.strictEqual(result, 5);
             assert.strictEqual((mockRepo.deleteExpiredSessions as any).mock.calls.length, 1);
         });
+
     });
 });

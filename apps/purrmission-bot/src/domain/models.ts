@@ -289,7 +289,7 @@ export interface ApiToken {
   userId: string;
   name: string;
   lastUsedAt: Date | null;
-  expiresAt: Date | null;
+  expiresAt: Date;
   createdAt: Date;
 }
 

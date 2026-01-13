@@ -796,9 +796,13 @@ export class PrismaAuthRepository implements AuthRepository {
   }
 
   async updateSessionStatus(id: string, status: AuthSessionStatus, userId?: string): Promise<void> {
+    if (status === 'APPROVED' && !userId) {
+      throw new Error('userId is required for APPROVED status');
+    }
+
     await this.prisma.authSession.update({
       where: { id },
-      data: { status, userId },
+      data: { status, userId: userId || null },
     });
   }
 
@@ -848,7 +852,6 @@ export class PrismaAuthRepository implements AuthRepository {
       value === 'CONSUMED'
     );
   }
-
   private mapSession(row: {
     id: string;
     deviceCode: string;
@@ -863,7 +866,6 @@ export class PrismaAuthRepository implements AuthRepository {
     if (!this.isValidAuthSessionStatus(status)) {
       throw new Error(`Invalid auth session status from database: ${String(status)}`);
     }
-
     return {
       id: row.id,
       deviceCode: row.deviceCode,
@@ -908,7 +910,7 @@ export class PrismaProjectRepository implements ProjectRepository {
     const project = await this.prisma.project.create({
       data: {
         name: input.name,
-        description: input.description,
+        description: input.description ?? null,
         ownerId: input.ownerId,
       }
     });

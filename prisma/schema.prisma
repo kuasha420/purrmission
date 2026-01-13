@@ -154,7 +154,7 @@ model ApiToken {
   userId      String   // Discord User ID
   name        String   // Device/Session name
   lastUsedAt  DateTime?
-  expiresAt   DateTime? // Optional long-lived expiry
+  expiresAt   DateTime  // Mandatory expiry
   createdAt   DateTime @default(now())
 
   @@index([userId])

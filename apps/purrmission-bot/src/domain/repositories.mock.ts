@@ -374,6 +374,9 @@ export class InMemoryAuthRepository implements AuthRepository {
         const session = this.sessions.get(id);
         if (session) {
             session.status = status;
+            if (status === 'APPROVED' && !userId) {
+                throw new Error('userId is required for APPROVED status');
+            }
             if (userId) {
                 session.userId = userId;
             }

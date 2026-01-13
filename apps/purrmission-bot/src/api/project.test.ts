@@ -5,9 +5,17 @@ import { createHttpServer } from '../http/server.js';
 import { createServices } from '../domain/services.js';
 import { createInMemoryRepositories } from '../domain/repositories.mock.js';
 import { createDiscordClient } from '../discord/client.js';
+import { createHash } from 'node:crypto';
 
 // Mock Discord Client (minimal)
-const mockDiscordClient: any = {
+import { FastifyInstance } from 'fastify';
+import { Services } from '../domain/services.js';
+import { Repositories } from '../domain/repositories.js';
+
+import { Client } from 'discord.js';
+
+// Mock Discord Client (minimal)
+const mockDiscordClient: Partial<Client> = {
     isReady: () => true,
     user: { tag: 'TestBot#0000' },
     channels: { fetch: async () => null },
@@ -19,9 +27,9 @@ const mockDiscordClient: any = {
 };
 
 describe('Project API', () => {
-    let server: any;
-    let services: any;
-    let repositories: any;
+    let server: FastifyInstance;
+    let services: Services;
+    let repositories: Repositories;
     let validToken = 'valid-token';
     let userId = 'user-123';
 
@@ -30,8 +38,9 @@ describe('Project API', () => {
         services = createServices({ repositories });
 
         // Setup Auth for test
+        const hashedToken = createHash('sha256').update(validToken).digest('hex');
         await repositories.auth.createApiToken({
-            token: validToken,
+            token: hashedToken,
             userId: userId,
             name: 'Test Token',
             expiresAt: new Date(Date.now() + 3600000),
