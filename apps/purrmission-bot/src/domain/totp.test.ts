@@ -58,6 +58,19 @@ describe('Bypassing spaces in TOTP secrets', () => {
                 accountBase.issuer,
                 accountBase.shared
             );
-        }, /Invalid TOTP secret/);
+        }, /Invalid TOTP secret format \(Base32 expected\)/);
+    });
+
+    test('should accept mixed whitespace characters', () => {
+        const secretWithMixedWhitespace = 'JBSWY\n3DPEH\tPK3PX\r\n P';
+        const expectedSecret = 'JBSWY3DPEHPK3PXP';
+        const account = createTOTPAccountFromSecret(
+            accountBase.ownerDiscordUserId,
+            accountBase.accountName,
+            secretWithMixedWhitespace,
+            accountBase.issuer,
+            accountBase.shared
+        );
+        assert.strictEqual(account.secret, expectedSecret);
     });
 });
