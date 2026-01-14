@@ -34,7 +34,7 @@ import type {
   CreateEnvironmentInput,
 } from './models.js';
 import { encryptValue, decryptValue } from '../infra/crypto.js';
-import { logger } from '../logging/logger.js';
+import { DuplicateError, ResourceNotFoundError } from './errors.js';
 
 import crypto from 'node:crypto';
 
@@ -937,14 +937,21 @@ export class PrismaProjectRepository implements ProjectRepository {
   }
 
   async createEnvironment(input: CreateEnvironmentInput): Promise<Environment> {
-    const env = await this.prisma.environment.create({
-      data: {
-        name: input.name,
-        slug: input.slug,
-        projectId: input.projectId
+    try {
+      const env = await this.prisma.environment.create({
+        data: {
+          name: input.name,
+          slug: input.slug,
+          projectId: input.projectId
+        }
+      });
+      return env;
+    } catch (error: any) {
+      if (error.code === 'P2002') {
+        throw new DuplicateError(`Environment with slug "${input.slug}" already exists in this project.`);
       }
-    });
-    return env;
+      throw error;
+    }
   }
 
   async listEnvironments(projectId: string): Promise<Environment[]> {
