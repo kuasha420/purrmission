@@ -20,6 +20,7 @@ describe('AuthService', () => {
             createApiToken: mock.fn(),
             findApiToken: mock.fn(),
             updateApiTokenLastUsed: mock.fn(),
+            deleteExpiredSessions: mock.fn(),
         };
         authService = new AuthService(mockRepo);
     });
@@ -271,5 +272,6 @@ describe('AuthService', () => {
             assert.strictEqual(result, 5);
             assert.strictEqual((mockRepo.deleteExpiredSessions as any).mock.calls.length, 1);
         });
+
     });
 });

@@ -3,7 +3,7 @@ import { test, describe, beforeEach, mock } from 'node:test';
 import assert from 'node:assert';
 import { handleAuthLogin } from './auth.js';
 import { ChatInputCommandInteraction } from 'discord.js';
-import { CommandContext } from '../types/command.js';
+import { CommandContext } from './context.js';
 
 describe('Discord Command: handleAuthLogin', () => {
     let mockInteraction: Partial<ChatInputCommandInteraction>;

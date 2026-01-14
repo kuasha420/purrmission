@@ -4,7 +4,7 @@
  * Provides the HTTP API for external services to request approvals.
  */
 
-import Fastify, { type FastifyInstance } from 'fastify';
+import Fastify, { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import type { Client, TextChannel } from 'discord.js';
 import { z } from 'zod';
 import { logger } from '../logging/logger.js';
@@ -189,15 +189,15 @@ export function createHttpServer(deps: HttpServerDeps): FastifyInstance {
       }
 
       try {
-        const token = await services.auth.exchangeCodeForToken(device_code);
-        if (!token) {
+        const result = await services.auth.exchangeCodeForToken(device_code);
+        if (!result) {
           return reply.status(400).send({ error: 'authorization_pending' });
         }
 
         return {
-          access_token: token.token,
+          access_token: result.token,
           token_type: 'Bearer',
-          expires_in: token.expiresAt ? Math.round((token.expiresAt.getTime() - Date.now()) / 1000) : null,
+          expires_in: Math.round((result.apiToken.expiresAt.getTime() - Date.now()) / 1000),
         };
       } catch (e: unknown) {
         if (e instanceof ExpiredTokenError) {
@@ -213,6 +213,160 @@ export function createHttpServer(deps: HttpServerDeps): FastifyInstance {
       }
     }
   );
+
+  // -------------------------------------------------------------------------
+  // Project & Environment Management
+  // -------------------------------------------------------------------------
+
+  // Zod Schemas
+  const CreateProjectSchema = z.object({
+    name: z.string().min(1),
+    description: z.string().optional(),
+  });
+
+  const CreateEnvironmentSchema = z.object({
+    name: z.string().min(1),
+    slug: z.string().min(1),
+  });
+
+  const ProjectParamsSchema = z.object({
+    projectId: z.string().uuid(),
+  });
+
+  // Authentication Hook
+  const authenticate = async (req: FastifyRequest, rep: FastifyReply) => {
+    const authHeader = req.headers.authorization;
+    if (!authHeader || !authHeader.startsWith('Bearer ')) {
+      throw new AccessDeniedError('Missing Bearer token');
+    }
+    const token = authHeader.substring(7);
+    const apiToken = await services.auth.validateToken(token);
+    if (!apiToken) {
+      throw new AccessDeniedError('Invalid token');
+    }
+    // Attach user to request
+    (req as any).user = { id: apiToken.userId };
+  };
+
+  // Configure Zod Validator
+  server.setValidatorCompiler(({ schema }) => {
+    return (data) => {
+      const result = (schema as z.ZodTypeAny).safeParse(data);
+      if (result.success === false) {
+        return { error: result.error };
+      }
+      return { value: result.data };
+    };
+  });
+
+  // Global Error Handler
+  server.setErrorHandler((error, request, reply) => {
+    if (error instanceof z.ZodError) {
+      return reply.status(400).send({ error: 'validation_error', details: error.issues });
+    }
+    if (error.name === 'DuplicateError') {
+      return reply.status(409).send({ error: error.message });
+    }
+    if (error.name === 'ResourceNotFoundError') {
+      return reply.status(404).send({ error: error.message });
+    }
+    if (error.name === 'AccessDeniedError') {
+      return reply.status(401).send({ error: 'unauthorized', message: error.message });
+    }
+    if (error.name === 'InvalidGrantError') {
+      return reply.status(400).send({ error: 'invalid_grant', message: error.message });
+    }
+    if (error.name === 'ExpiredTokenError') {
+      return reply.status(400).send({ error: 'expired_token' });
+    }
+
+    // Default handler
+    logger.error('Unhandled API error', { error });
+    return reply.status(500).send({ error: 'internal_server_error' });
+  });
+  server.post('/api/projects', {
+    preHandler: [authenticate],
+    schema: {
+      body: CreateProjectSchema
+    }
+  }, async (req, rep) => {
+    const { name, description } = req.body as z.infer<typeof CreateProjectSchema>;
+    const userId = (req as any).user.id;
+
+    const project = await services.project.createProject({
+      name,
+      description,
+      ownerId: userId
+    });
+
+    return rep.status(201).send(project);
+  });
+
+  server.get('/api/projects', {
+    preHandler: [authenticate]
+  }, async (req, rep) => {
+    const userId = (req as any).user.id;
+    const projects = await services.project.listProjects(userId);
+    return projects;
+  });
+
+  server.get('/api/projects/:projectId', {
+    preHandler: [authenticate],
+    schema: {
+      params: ProjectParamsSchema
+    }
+  }, async (req, rep) => {
+    const { projectId } = req.params as z.infer<typeof ProjectParamsSchema>;
+    const userId = (req as any).user.id;
+
+    const project = await services.project.getProject(projectId);
+    if (!project) throw new ResourceNotFoundError('Project not found');
+
+    // Basic ACL: only owner can view (for now)
+    if (project.ownerId !== userId) throw new AccessDeniedError('Access denied');
+
+    return project;
+  });
+
+  server.post('/api/projects/:projectId/environments', {
+    preHandler: [authenticate],
+    schema: {
+      params: ProjectParamsSchema,
+      body: CreateEnvironmentSchema
+    }
+  }, async (req, rep) => {
+    const { projectId } = req.params as z.infer<typeof ProjectParamsSchema>;
+    const { name, slug } = req.body as z.infer<typeof CreateEnvironmentSchema>;
+    const userId = (req as any).user.id;
+
+    const project = await services.project.getProject(projectId);
+    if (!project) throw new ResourceNotFoundError('Project not found');
+    if (project.ownerId !== userId) throw new AccessDeniedError('Access denied');
+
+    const env = await services.project.createEnvironment({
+      name,
+      slug,
+      projectId
+    });
+    return rep.status(201).send(env);
+  });
+
+  server.get('/api/projects/:projectId/environments', {
+    preHandler: [authenticate],
+    schema: {
+      params: ProjectParamsSchema
+    }
+  }, async (req, rep) => {
+    const { projectId } = req.params as z.infer<typeof ProjectParamsSchema>;
+    const userId = (req as any).user.id;
+
+    const project = await services.project.getProject(projectId);
+    if (!project) throw new ResourceNotFoundError('Project not found');
+    if (project.ownerId !== userId) throw new AccessDeniedError('Access denied');
+
+    const envs = await services.project.listEnvironments(projectId);
+    return envs;
+  });
 
   return server;
 }

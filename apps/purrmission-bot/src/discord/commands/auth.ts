@@ -29,8 +29,15 @@ export async function handleAuthLogin(
                 ephemeral: true,
             });
         }
-    } catch (error) {
-        logger.error('Error handling auth login', { error });
+    } catch (error: unknown) {
+        if (error instanceof Error) {
+            logger.error('Error handling auth login', {
+                message: error.message,
+                stack: error.stack
+            });
+        } else {
+            logger.error('Error handling auth login', { error: String(error) });
+        }
         await interaction.reply({
             content: '❌ An internal error occurred while processing your login.',
             ephemeral: true,

@@ -28,9 +28,13 @@ import type {
   AuthSessionStatus,
   ApiToken,
   CreateApiTokenInput,
+  Project,
+  Environment,
+  CreateProjectInput,
+  CreateEnvironmentInput,
 } from './models.js';
 import { encryptValue, decryptValue } from '../infra/crypto.js';
-import { logger } from '../logging/logger.js';
+import { DuplicateError, ResourceNotFoundError } from './errors.js';
 
 import crypto from 'node:crypto';
 
@@ -548,6 +552,7 @@ export interface Repositories {
   resourceFields: ResourceFieldRepository;
   audit: AuditRepository;
   auth: AuthRepository;
+  projects: ProjectRepository;
 }
 
 /**
@@ -750,6 +755,16 @@ export interface AuthRepository {
   deleteExpiredSessions(): Promise<number>;
 }
 
+export interface ProjectRepository {
+  createProject(input: CreateProjectInput): Promise<Project>;
+  findById(id: string): Promise<Project | null>;
+  listProjectsByOwner(ownerId: string): Promise<Project[]>;
+
+  createEnvironment(input: CreateEnvironmentInput): Promise<Environment>;
+  listEnvironments(projectId: string): Promise<Environment[]>;
+  findEnvironment(projectId: string, slug: string): Promise<Environment | null>;
+}
+
 
 export class PrismaAuthRepository implements AuthRepository {
   private readonly prisma: PrismaClient;
@@ -781,9 +796,13 @@ export class PrismaAuthRepository implements AuthRepository {
   }
 
   async updateSessionStatus(id: string, status: AuthSessionStatus, userId?: string): Promise<void> {
+    if (status === 'APPROVED' && !userId) {
+      throw new Error('userId is required for APPROVED status');
+    }
+
     await this.prisma.authSession.update({
       where: { id },
-      data: { status, userId },
+      data: { status, userId: userId || null },
     });
   }
 
@@ -833,7 +852,6 @@ export class PrismaAuthRepository implements AuthRepository {
       value === 'CONSUMED'
     );
   }
-
   private mapSession(row: {
     id: string;
     deviceCode: string;
@@ -848,7 +866,6 @@ export class PrismaAuthRepository implements AuthRepository {
     if (!this.isValidAuthSessionStatus(status)) {
       throw new Error(`Invalid auth session status from database: ${String(status)}`);
     }
-
     return {
       id: row.id,
       deviceCode: row.deviceCode,
@@ -867,7 +884,7 @@ export class PrismaAuthRepository implements AuthRepository {
     userId: string;
     name: string;
     lastUsedAt: Date | null;
-    expiresAt: Date | null;
+    expiresAt: Date;
     createdAt: Date;
   }): ApiToken {
     return {
@@ -879,5 +896,73 @@ export class PrismaAuthRepository implements AuthRepository {
       expiresAt: row.expiresAt,
       createdAt: row.createdAt,
     };
+  }
+}
+
+export class PrismaProjectRepository implements ProjectRepository {
+  private readonly prisma: PrismaClient;
+
+  constructor(prisma: PrismaClient) {
+    this.prisma = prisma;
+  }
+
+  async createProject(input: CreateProjectInput): Promise<Project> {
+    const project = await this.prisma.project.create({
+      data: {
+        name: input.name,
+        description: input.description ?? null,
+        ownerId: input.ownerId,
+      }
+    });
+    return {
+      ...project,
+    };
+  }
+
+  async findById(id: string): Promise<Project | null> {
+    const row = await this.prisma.project.findUnique({ where: { id } });
+    if (!row) return null;
+    return {
+      ...row,
+      description: row.description ?? null,
+    };
+  }
+
+  async listProjectsByOwner(ownerId: string): Promise<Project[]> {
+    const rows = await this.prisma.project.findMany({ where: { ownerId }, orderBy: { createdAt: 'desc' } });
+    return rows.map(row => ({
+      ...row,
+      description: row.description ?? null,
+    }));
+  }
+
+  async createEnvironment(input: CreateEnvironmentInput): Promise<Environment> {
+    try {
+      const env = await this.prisma.environment.create({
+        data: {
+          name: input.name,
+          slug: input.slug,
+          projectId: input.projectId
+        }
+      });
+      return env;
+    } catch (error: any) {
+      if (error.code === 'P2002') {
+        throw new DuplicateError(`Environment with slug "${input.slug}" already exists in this project.`);
+      }
+      throw error;
+    }
+  }
+
+  async listEnvironments(projectId: string): Promise<Environment[]> {
+    return this.prisma.environment.findMany({ where: { projectId }, orderBy: { name: 'asc' } });
+  }
+
+  async findEnvironment(projectId: string, slug: string): Promise<Environment | null> {
+    return this.prisma.environment.findUnique({
+      where: {
+        projectId_slug: { projectId, slug }
+      }
+    });
   }
 }

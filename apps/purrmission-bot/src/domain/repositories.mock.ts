@@ -15,6 +15,10 @@ import type {
     AuthSession,
     ApiToken,
     CreateApiTokenInput,
+    Project,
+    Environment,
+    CreateProjectInput,
+    CreateEnvironmentInput,
 } from './models.js';
 import {
     ResourceRepository,
@@ -24,6 +28,7 @@ import {
     ResourceFieldRepository,
     AuditRepository,
     AuthRepository,
+    ProjectRepository,
     Repositories,
 } from './repositories.js';
 import crypto from 'node:crypto';
@@ -369,6 +374,9 @@ export class InMemoryAuthRepository implements AuthRepository {
         const session = this.sessions.get(id);
         if (session) {
             session.status = status;
+            if (status === 'APPROVED' && !userId) {
+                throw new Error('userId is required for APPROVED status');
+            }
             if (userId) {
                 session.userId = userId;
             }
@@ -405,6 +413,78 @@ export class InMemoryAuthRepository implements AuthRepository {
             token.lastUsedAt = new Date();
         }
     }
+
+    async deleteExpiredSessions(): Promise<number> {
+        let count = 0;
+        const now = new Date();
+        for (const [id, session] of this.sessions.entries()) {
+            if (
+                session.status === 'EXPIRED' ||
+                session.status === 'CONSUMED' ||
+                session.expiresAt < now
+            ) {
+                this.sessions.delete(id);
+                count++;
+            }
+        }
+        return count;
+    }
+}
+
+export class InMemoryProjectRepository implements ProjectRepository {
+    private projects: Map<string, Project> = new Map();
+    private environments: Map<string, Environment> = new Map();
+
+    async createProject(input: CreateProjectInput): Promise<Project> {
+        const project: Project = {
+            id: crypto.randomUUID(),
+            name: input.name,
+            description: input.description ?? null,
+            ownerId: input.ownerId,
+            createdAt: new Date(),
+            updatedAt: new Date(),
+        };
+        this.projects.set(project.id, project);
+        return project;
+    }
+
+    async findById(id: string): Promise<Project | null> {
+        return this.projects.get(id) ?? null;
+    }
+
+    async listProjectsByOwner(ownerId: string): Promise<Project[]> {
+        return Array.from(this.projects.values()).filter(p => p.ownerId === ownerId);
+    }
+
+    async createEnvironment(input: CreateEnvironmentInput): Promise<Environment> {
+        // Check uniqueness of slug within project for safety, though mock
+        const existing = await this.findEnvironment(input.projectId, input.slug);
+        if (existing) throw new Error('Slug already exists');
+
+        const env: Environment = {
+            id: crypto.randomUUID(),
+            name: input.name,
+            slug: input.slug,
+            projectId: input.projectId,
+            createdAt: new Date(),
+            updatedAt: new Date(),
+        };
+        this.environments.set(env.id, env);
+        return env;
+    }
+
+    async listEnvironments(projectId: string): Promise<Environment[]> {
+        return Array.from(this.environments.values()).filter(e => e.projectId === projectId);
+    }
+
+    async findEnvironment(projectId: string, slug: string): Promise<Environment | null> {
+        for (const env of this.environments.values()) {
+            if (env.projectId === projectId && env.slug === slug) {
+                return env;
+            }
+        }
+        return null;
+    }
 }
 
 /**
@@ -419,5 +499,6 @@ export function createInMemoryRepositories(): Repositories {
         resourceFields: new InMemoryResourceFieldRepository(),
         audit: new InMemoryAuditRepository(),
         auth: new InMemoryAuthRepository(),
+        projects: new InMemoryProjectRepository(),
     };
 }
