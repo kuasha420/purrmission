@@ -267,7 +267,7 @@ export type CreateAuditLogInput = Omit<AuditLog, 'id' | 'createdAt'>;
 /**
  * Represents a device login session (OAuth Device Flow).
  */
-export type AuthSessionStatus = 'PENDING' | 'APPROVED' | 'EXPIRED' | 'DENIED';
+export type AuthSessionStatus = 'PENDING' | 'APPROVED' | 'EXPIRED' | 'DENIED' | 'CONSUMED';
 
 export interface AuthSession {
   id: string;

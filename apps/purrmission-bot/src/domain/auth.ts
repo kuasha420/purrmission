@@ -25,6 +25,8 @@ export class AccessDeniedError extends Error {
     }
 }
 
+const DEFAULT_TOKEN_EXPIRY_DAYS = 90;
+
 export class AuthService {
     constructor(private readonly authRepo: AuthRepository) { }
 
@@ -59,9 +61,6 @@ export class AuthService {
             expiresAt,
         });
 
-        // TODO: Implement a periodic cron job to clean up expired sessions (AuthSession where status=EXPIRED or expiresAt < now)
-
-        // TODO: In a real app, this should be a full URL like https://example.com/device
         // For this Discord bot, we direct them to the slash command.
         // This is a known deviation from RFC 8628 for better Discord UX.
         return {
@@ -114,17 +113,15 @@ export class AuthService {
             }
 
             // Mark session as fully consumed/closed so it can't be used to mint more tokens.
-            // Using 'EXPIRED' as a terminal state for now to block further exchanges,
-            // though a dedicated 'CONSUMED' state might be cleaner in the future.
-            await this.authRepo.updateSessionStatus(session.id, 'EXPIRED');
+            await this.authRepo.updateSessionStatus(session.id, 'CONSUMED');
 
             const tokenString = 'paw_' + randomBytes(32).toString('hex'); // 'paw_' prefix
 
             // Hash the token for storage
             const tokenHash = createHash('sha256').update(tokenString).digest('hex');
 
-            // Default expiry: 90 days
-            const tokenExpiresAt = new Date(Date.now() + 90 * 24 * 60 * 60 * 1000);
+            // Default expiry
+            const tokenExpiresAt = new Date(Date.now() + DEFAULT_TOKEN_EXPIRY_DAYS * 24 * 60 * 60 * 1000);
 
             const token = await this.authRepo.createApiToken({
                 token: tokenHash,
@@ -161,5 +158,12 @@ export class AuthService {
         });
 
         return apiToken;
+    }
+
+    /**
+     * Cleans up expired and consumed sessions from the database.
+     */
+    async cleanupExpiredSessions(): Promise<number> {
+        return this.authRepo.deleteExpiredSessions();
     }
 }

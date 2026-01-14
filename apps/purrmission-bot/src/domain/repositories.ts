@@ -747,6 +747,7 @@ export interface AuthRepository {
   createApiToken(input: CreateApiTokenInput): Promise<ApiToken>;
   findApiToken(token: string): Promise<ApiToken | null>;
   updateApiTokenLastUsed(id: string): Promise<void>;
+  deleteExpiredSessions(): Promise<number>;
 }
 
 
@@ -810,12 +811,26 @@ export class PrismaAuthRepository implements AuthRepository {
     });
   }
 
+  async deleteExpiredSessions(): Promise<number> {
+    const result = await this.prisma.authSession.deleteMany({
+      where: {
+        OR: [
+          { status: 'EXPIRED' },
+          { status: 'CONSUMED' },
+          { expiresAt: { lt: new Date() } },
+        ],
+      },
+    });
+    return result.count;
+  }
+
   private isValidAuthSessionStatus(value: unknown): value is AuthSessionStatus {
     return (
       value === 'PENDING' ||
       value === 'APPROVED' ||
       value === 'EXPIRED' ||
-      value === 'DENIED'
+      value === 'DENIED' ||
+      value === 'CONSUMED'
     );
   }
 

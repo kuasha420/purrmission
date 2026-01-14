@@ -135,7 +135,7 @@ describe('AuthService', () => {
             assert.strictEqual((mockRepo.updateSessionStatus as any).mock.calls[0].arguments[1], 'EXPIRED');
         });
 
-        test('should issue token for approved session and mark session expired', async () => {
+        test('should issue token for approved session and mark session consumed', async () => {
             const approvedSession: AuthSession = {
                 id: 'session-1',
                 deviceCode: 'device-1',
@@ -165,8 +165,8 @@ describe('AuthService', () => {
             const createCall = (mockRepo.createApiToken as any).mock.calls[0].arguments[0];
             assert.notStrictEqual(createCall.token, result?.token); // Stored token should be hash, result is plain
 
-            // Should mark session as EXPIRED (consumed)
-            assert.deepStrictEqual((mockRepo.updateSessionStatus as any).mock.calls[0].arguments, ['session-1', 'EXPIRED']);
+            // Should mark session as CONSUMED
+            assert.deepStrictEqual((mockRepo.updateSessionStatus as any).mock.calls[0].arguments, ['session-1', 'CONSUMED']);
         });
 
         test('should throw ExpiredTokenError if session expired after approval', async () => {
@@ -262,4 +262,14 @@ describe('AuthService', () => {
         });
     });
 
+    describe('cleanupExpiredSessions', () => {
+        test('should call repository to delete expired sessions', async () => {
+            mockRepo.deleteExpiredSessions = mock.fn(async () => 5);
+
+            const result = await authService.cleanupExpiredSessions();
+
+            assert.strictEqual(result, 5);
+            assert.strictEqual((mockRepo.deleteExpiredSessions as any).mock.calls.length, 1);
+        });
+    });
 });

@@ -131,6 +131,7 @@ enum AuthSessionStatus {
   APPROVED
   EXPIRED
   DENIED
+  CONSUMED
 }
 
 model AuthSession {
