@@ -41,7 +41,8 @@ export class AuthService {
     }> {
         const deviceCode = randomUUID();
         // Generate a short 8-char user code (e.g. ABCD-1234)
-        const userCodeParts = randomBytes(4).toString('hex').toUpperCase().match(/.{1,4}/g);
+        const hex = randomBytes(4).toString('hex').toUpperCase();
+        const userCodeParts = hex.match(/.{1,4}/g);
 
         if (!userCodeParts) {
             throw new Error('Failed to generate user code');
@@ -58,8 +59,11 @@ export class AuthService {
             expiresAt,
         });
 
+        // TODO: Implement a periodic cron job to clean up expired sessions (AuthSession where status=EXPIRED or expiresAt < now)
+
         // TODO: In a real app, this should be a full URL like https://example.com/device
         // For this Discord bot, we direct them to the slash command.
+        // This is a known deviation from RFC 8628 for better Discord UX.
         return {
             deviceCode,
             userCode,
