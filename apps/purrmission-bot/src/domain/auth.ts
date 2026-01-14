@@ -136,8 +136,8 @@ export class AuthService {
 
             // Return the plaintext token to the user (BUT based on the DB record structure)
             return {
-                ...token,
-                token: tokenString // OVERWRITE hash with plaintext for the response
+                token: tokenString,
+                apiToken: token
             };
         }
 

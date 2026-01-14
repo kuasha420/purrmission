@@ -884,7 +884,7 @@ export class PrismaAuthRepository implements AuthRepository {
     userId: string;
     name: string;
     lastUsedAt: Date | null;
-    expiresAt: Date | null;
+    expiresAt: Date;
     createdAt: Date;
   }): ApiToken {
     return {

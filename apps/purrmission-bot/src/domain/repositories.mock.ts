@@ -413,6 +413,22 @@ export class InMemoryAuthRepository implements AuthRepository {
             token.lastUsedAt = new Date();
         }
     }
+
+    async deleteExpiredSessions(): Promise<number> {
+        let count = 0;
+        const now = new Date();
+        for (const [id, session] of this.sessions.entries()) {
+            if (
+                session.status === 'EXPIRED' ||
+                session.status === 'CONSUMED' ||
+                session.expiresAt < now
+            ) {
+                this.sessions.delete(id);
+                count++;
+            }
+        }
+        return count;
+    }
 }
 
 export class InMemoryProjectRepository implements ProjectRepository {

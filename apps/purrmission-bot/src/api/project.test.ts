@@ -15,7 +15,7 @@ import { Repositories } from '../domain/repositories.js';
 import { Client } from 'discord.js';
 
 // Mock Discord Client (minimal)
-const mockDiscordClient: Partial<Client> = {
+const mockDiscordClient: any = {
     isReady: () => true,
     user: { tag: 'TestBot#0000' },
     channels: { fetch: async () => null },

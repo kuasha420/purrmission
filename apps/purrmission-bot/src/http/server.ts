@@ -196,8 +196,7 @@ export function createHttpServer(deps: HttpServerDeps): FastifyInstance {
 
         return {
           access_token: result.token,
-          token_type: 'Bearer',
-          expires_in: result.expiresAt ? Math.round((result.expiresAt.getTime() - Date.now()) / 1000) : null,
+          expires_in: result.apiToken.expiresAt ? Math.round((result.apiToken.expiresAt.getTime() - Date.now()) / 1000) : null,
         };
       } catch (e: unknown) {
         if (e instanceof ExpiredTokenError) {

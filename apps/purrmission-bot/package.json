@@ -10,7 +10,7 @@
     "start": "node dist/index.js",
     "build": "tsc -p tsconfig.json",
     "discord:deploy-commands": "tsx src/discord/registerCommands.ts",
-    "test": "node --import tsx --test {src,scripts}/**/*.test.ts"
+    "test": "env DISCORD_BOT_TOKEN=mock DISCORD_CLIENT_ID=mock DISCORD_GUILD_ID=mock DATABASE_URL=mock ENCRYPTION_KEY=000102030405060708090a0b0c0d0e0f000102030405060708090a0b0c0d0e0f node --import tsx --test {src,scripts}/**/*.test.ts"
   },
   "dependencies": {
     "discord.js": "^14.16.3",
