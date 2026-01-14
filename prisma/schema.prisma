@@ -126,15 +126,24 @@ model AuditLog {
   @@index([createdAt])
 }
 
+enum AuthSessionStatus {
+  PENDING
+  APPROVED
+  EXPIRED
+  DENIED
+}
+
 model AuthSession {
-  id          String   @id @default(uuid())
-  deviceCode  String   @unique
-  userCode    String   @unique
-  status      String   // PENDING, APPROVED, EXPIRED, DENIED
-  userId      String?  // Linked Discord User ID
+  id          String            @id @default(uuid())
+  deviceCode  String            @unique
+  userCode    String            @unique
+  status      AuthSessionStatus // PENDING, APPROVED, EXPIRED, DENIED
+  userId      String? // Linked Discord User ID
   expiresAt   DateTime
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  createdAt   DateTime          @default(now())
+  updatedAt   DateTime          @updatedAt
+
+  @@index([userId])
 }
 
 model ApiToken {

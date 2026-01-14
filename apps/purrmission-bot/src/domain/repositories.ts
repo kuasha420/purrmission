@@ -25,6 +25,7 @@ import type {
   AuditLog,
   CreateAuditLogInput,
   AuthSession,
+  AuthSessionStatus,
   ApiToken,
   CreateApiTokenInput,
 } from './models.js';
@@ -742,7 +743,7 @@ export interface AuthRepository {
   createSession(input: { deviceCode: string; userCode: string; expiresAt: Date }): Promise<AuthSession>;
   findSessionByDeviceCode(deviceCode: string): Promise<AuthSession | null>;
   findSessionByUserCode(userCode: string): Promise<AuthSession | null>;
-  updateSessionStatus(id: string, status: 'APPROVED' | 'DENIED' | 'EXPIRED', userId?: string): Promise<void>;
+  updateSessionStatus(id: string, status: AuthSessionStatus, userId?: string): Promise<void>;
   createApiToken(input: CreateApiTokenInput): Promise<ApiToken>;
   findApiToken(token: string): Promise<ApiToken | null>;
   updateApiTokenLastUsed(id: string): Promise<void>;
@@ -778,7 +779,7 @@ export class PrismaAuthRepository implements AuthRepository {
     return session ? this.mapSession(session) : null;
   }
 
-  async updateSessionStatus(id: string, status: 'APPROVED' | 'DENIED' | 'EXPIRED', userId?: string): Promise<void> {
+  async updateSessionStatus(id: string, status: AuthSessionStatus, userId?: string): Promise<void> {
     await this.prisma.authSession.update({
       where: { id },
       data: { status, userId },
@@ -809,12 +810,35 @@ export class PrismaAuthRepository implements AuthRepository {
     });
   }
 
-  private mapSession(row: any): AuthSession {
+  private isValidAuthSessionStatus(value: unknown): value is AuthSessionStatus {
+    return (
+      value === 'PENDING' ||
+      value === 'APPROVED' ||
+      value === 'EXPIRED' ||
+      value === 'DENIED'
+    );
+  }
+
+  private mapSession(row: {
+    id: string;
+    deviceCode: string;
+    userCode: string;
+    status: string; // Prisma returns string for enums unless typed
+    userId: string | null;
+    expiresAt: Date;
+    createdAt: Date;
+    updatedAt: Date;
+  }): AuthSession {
+    const status = row.status;
+    if (!this.isValidAuthSessionStatus(status)) {
+      throw new Error(`Invalid auth session status from database: ${String(status)}`);
+    }
+
     return {
       id: row.id,
       deviceCode: row.deviceCode,
       userCode: row.userCode,
-      status: row.status as any,
+      status: status,
       userId: row.userId ?? undefined,
       expiresAt: row.expiresAt,
       createdAt: row.createdAt,
@@ -822,7 +846,15 @@ export class PrismaAuthRepository implements AuthRepository {
     };
   }
 
-  private mapToken(row: any): ApiToken {
+  private mapToken(row: {
+    id: string;
+    token: string;
+    userId: string;
+    name: string;
+    lastUsedAt: Date | null;
+    expiresAt: Date | null;
+    createdAt: Date;
+  }): ApiToken {
     return {
       id: row.id,
       token: row.token,

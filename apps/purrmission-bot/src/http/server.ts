@@ -13,6 +13,11 @@ import {
   createApprovalButtons,
   createApprovalEmbed,
 } from '../discord/interactions/approvalButtons.js';
+import {
+  InvalidGrantError,
+  ExpiredTokenError,
+  AccessDeniedError,
+} from '../domain/auth.js';
 
 /**
  * Dependencies for the HTTP server.
@@ -194,14 +199,14 @@ export function createHttpServer(deps: HttpServerDeps): FastifyInstance {
           token_type: 'Bearer',
           expires_in: null, // Never expires currently
         };
-      } catch (e: any) {
-        if (e.message === 'expired_token') {
+      } catch (e: unknown) {
+        if (e instanceof ExpiredTokenError) {
           return reply.status(400).send({ error: 'expired_token' });
         }
-        if (e.message === 'access_denied') {
+        if (e instanceof AccessDeniedError) {
           return reply.status(403).send({ error: 'access_denied' });
         }
-        if (e.message === 'invalid_grant') {
+        if (e instanceof InvalidGrantError) {
           return reply.status(400).send({ error: 'invalid_grant' });
         }
         throw e;
