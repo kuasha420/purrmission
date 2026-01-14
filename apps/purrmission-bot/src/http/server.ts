@@ -13,6 +13,11 @@ import {
   createApprovalButtons,
   createApprovalEmbed,
 } from '../discord/interactions/approvalButtons.js';
+import {
+  InvalidGrantError,
+  ExpiredTokenError,
+  AccessDeniedError,
+} from '../domain/auth.js';
 
 /**
  * Dependencies for the HTTP server.
@@ -156,6 +161,58 @@ export function createHttpServer(deps: HttpServerDeps): FastifyInstance {
       resolvedAt: approvalRequest.resolvedAt?.toISOString() ?? null,
     };
   });
+
+  // Device Auth Flow: Initiate
+  server.post('/api/auth/device/code', async (_request, _reply) => {
+    const result = await services.auth.initiateDeviceFlow();
+    return {
+      device_code: result.deviceCode,
+      user_code: result.userCode,
+      verification_uri: result.verificationUri,
+      expires_in: result.expiresIn,
+      interval: result.interval,
+    };
+  });
+
+  // Device Auth Flow: Exchange Token
+  server.post<{ Body: { device_code: string; grant_type: string } }>(
+    '/api/auth/token',
+    async (request, reply) => {
+      const { device_code, grant_type } = request.body || {};
+
+      if (grant_type !== 'urn:ietf:params:oauth:grant-type:device_code') {
+        return reply.status(400).send({ error: 'unsupported_grant_type' });
+      }
+
+      if (!device_code) {
+        return reply.status(400).send({ error: 'invalid_request' });
+      }
+
+      try {
+        const token = await services.auth.exchangeCodeForToken(device_code);
+        if (!token) {
+          return reply.status(400).send({ error: 'authorization_pending' });
+        }
+
+        return {
+          access_token: token.token,
+          token_type: 'Bearer',
+          expires_in: token.expiresAt ? Math.round((token.expiresAt.getTime() - Date.now()) / 1000) : null,
+        };
+      } catch (e: unknown) {
+        if (e instanceof ExpiredTokenError) {
+          return reply.status(400).send({ error: 'expired_token' });
+        }
+        if (e instanceof AccessDeniedError) {
+          return reply.status(403).send({ error: 'access_denied' });
+        }
+        if (e instanceof InvalidGrantError) {
+          return reply.status(400).send({ error: 'invalid_grant' });
+        }
+        throw e;
+      }
+    }
+  );
 
   return server;
 }

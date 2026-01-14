@@ -1,3 +1,7 @@
+---
+trigger: always_on
+---
+
 # 📝 Coding Standards & Agent Behavior
 
 ## 1. Safety First

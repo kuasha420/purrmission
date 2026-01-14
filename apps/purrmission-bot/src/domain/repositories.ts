@@ -24,6 +24,10 @@ import type {
   CreateResourceFieldInput,
   AuditLog,
   CreateAuditLogInput,
+  AuthSession,
+  AuthSessionStatus,
+  ApiToken,
+  CreateApiTokenInput,
 } from './models.js';
 import { encryptValue, decryptValue } from '../infra/crypto.js';
 import { logger } from '../logging/logger.js';
@@ -543,6 +547,7 @@ export interface Repositories {
   totp: TOTPRepository;
   resourceFields: ResourceFieldRepository;
   audit: AuditRepository;
+  auth: AuthRepository;
 }
 
 /**
@@ -730,6 +735,149 @@ export class PrismaApprovalRequestRepository implements ApprovalRequestRepositor
       resolvedAt: row.resolvedAt ?? undefined,
       discordMessageId: row.discordMessageId ?? undefined,
       discordChannelId: row.discordChannelId ?? undefined,
+    };
+  }
+}
+
+export interface AuthRepository {
+  createSession(input: { deviceCode: string; userCode: string; expiresAt: Date }): Promise<AuthSession>;
+  findSessionByDeviceCode(deviceCode: string): Promise<AuthSession | null>;
+  findSessionByUserCode(userCode: string): Promise<AuthSession | null>;
+  updateSessionStatus(id: string, status: AuthSessionStatus, userId?: string): Promise<void>;
+  createApiToken(input: CreateApiTokenInput): Promise<ApiToken>;
+  findApiToken(token: string): Promise<ApiToken | null>;
+  updateApiTokenLastUsed(id: string): Promise<void>;
+  deleteExpiredSessions(): Promise<number>;
+}
+
+
+export class PrismaAuthRepository implements AuthRepository {
+  private readonly prisma: PrismaClient;
+
+  constructor(prisma: PrismaClient) {
+    this.prisma = prisma;
+  }
+
+  async createSession(input: { deviceCode: string; userCode: string; expiresAt: Date }): Promise<AuthSession> {
+    const session = await this.prisma.authSession.create({
+      data: {
+        deviceCode: input.deviceCode,
+        userCode: input.userCode,
+        status: 'PENDING',
+        expiresAt: input.expiresAt,
+      },
+    });
+    return this.mapSession(session);
+  }
+
+  async findSessionByDeviceCode(deviceCode: string): Promise<AuthSession | null> {
+    const session = await this.prisma.authSession.findUnique({ where: { deviceCode } });
+    return session ? this.mapSession(session) : null;
+  }
+
+  async findSessionByUserCode(userCode: string): Promise<AuthSession | null> {
+    const session = await this.prisma.authSession.findUnique({ where: { userCode } });
+    return session ? this.mapSession(session) : null;
+  }
+
+  async updateSessionStatus(id: string, status: AuthSessionStatus, userId?: string): Promise<void> {
+    await this.prisma.authSession.update({
+      where: { id },
+      data: { status, userId },
+    });
+  }
+
+  async createApiToken(input: CreateApiTokenInput): Promise<ApiToken> {
+    const token = await this.prisma.apiToken.create({
+      data: {
+        token: input.token,
+        userId: input.userId,
+        name: input.name,
+        expiresAt: input.expiresAt,
+      },
+    });
+    return this.mapToken(token);
+  }
+
+  async findApiToken(token: string): Promise<ApiToken | null> {
+    const row = await this.prisma.apiToken.findUnique({ where: { token } });
+    return row ? this.mapToken(row) : null;
+  }
+
+  async updateApiTokenLastUsed(id: string): Promise<void> {
+    await this.prisma.apiToken.update({
+      where: { id },
+      data: { lastUsedAt: new Date() },
+    });
+  }
+
+  async deleteExpiredSessions(): Promise<number> {
+    const result = await this.prisma.authSession.deleteMany({
+      where: {
+        OR: [
+          { status: 'EXPIRED' },
+          { status: 'CONSUMED' },
+          { expiresAt: { lt: new Date() } },
+        ],
+      },
+    });
+    return result.count;
+  }
+
+  private isValidAuthSessionStatus(value: unknown): value is AuthSessionStatus {
+    return (
+      value === 'PENDING' ||
+      value === 'APPROVED' ||
+      value === 'EXPIRED' ||
+      value === 'DENIED' ||
+      value === 'CONSUMED'
+    );
+  }
+
+  private mapSession(row: {
+    id: string;
+    deviceCode: string;
+    userCode: string;
+    status: string; // Prisma returns string for enums unless typed
+    userId: string | null;
+    expiresAt: Date;
+    createdAt: Date;
+    updatedAt: Date;
+  }): AuthSession {
+    const status = row.status;
+    if (!this.isValidAuthSessionStatus(status)) {
+      throw new Error(`Invalid auth session status from database: ${String(status)}`);
+    }
+
+    return {
+      id: row.id,
+      deviceCode: row.deviceCode,
+      userCode: row.userCode,
+      status: status,
+      userId: row.userId ?? undefined,
+      expiresAt: row.expiresAt,
+      createdAt: row.createdAt,
+      updatedAt: row.updatedAt,
+    };
+  }
+
+  private mapToken(row: {
+    id: string;
+    token: string;
+    userId: string;
+    name: string;
+    lastUsedAt: Date | null;
+    expiresAt: Date | null;
+    createdAt: Date;
+  }): ApiToken {
+    return {
+      id: row.id,
+      token: row.token,
+      userId: row.userId,
+      name: row.name,
+      lastUsedAt: row.lastUsedAt,
+      expiresAt: row.expiresAt,
+      createdAt: row.createdAt,
     };
   }
 }

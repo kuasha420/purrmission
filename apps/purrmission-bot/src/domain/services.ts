@@ -19,6 +19,7 @@ import type {
 import type { Repositories } from './repositories.js';
 import { logger } from '../logging/logger.js';
 import { AuditService } from './audit.js';
+import { AuthService } from './auth.js';
 
 /**
  * Service dependencies.
@@ -436,6 +437,7 @@ export interface Services {
   approval: ApprovalService;
   resource: ResourceService;
   audit: AuditService;
+  auth: AuthService;
 }
 
 /**
@@ -452,5 +454,6 @@ export function createServices(baseDeps: { repositories: Repositories }): Servic
     approval: new ApprovalService(fullDeps),
     resource: new ResourceService(fullDeps),
     audit,
+    auth: new AuthService(baseDeps.repositories.auth),
   };
 }

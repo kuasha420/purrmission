@@ -1,3 +1,7 @@
+---
+trigger: always_on
+---
+
 # 🎯 Issue Execution Protocol
 
 When assigned to work on a GitHub Issue, you MUST follow this strict protocol.

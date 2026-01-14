@@ -19,6 +19,7 @@ import {
 } from './resource.js';
 import { handleAddGuardian } from './addGuardian.js';
 import { rateLimiter } from '../../infra/rateLimit.js';
+import { handleAuthLogin } from './auth.js';
 export const purrmissionCommand = new SlashCommandBuilder()
   .setName('purrmission')
   .setDescription('Manage 2FA accounts and resources')
@@ -143,6 +144,18 @@ export const purrmissionCommand = new SlashCommandBuilder()
               .setRequired(true)
           )
       )
+  )
+  .addSubcommand((subcommand) =>
+    subcommand
+      .setName('cli-login')
+      .setDescription('Approve a Pawthy CLI login request')
+      .addStringOption((option) =>
+        option
+          .setName('code')
+          .setDescription('The 9-character code from the CLI (e.g., ABCD-1234)')
+          .setRequired(true)
+          .setMaxLength(20)
+      )
   );
 
 export async function handlePurrmissionCommand(
@@ -151,6 +164,11 @@ export async function handlePurrmissionCommand(
 ): Promise<void> {
   const subcommandGroup = interaction.options.getSubcommandGroup(false);
   const subcommand = interaction.options.getSubcommand(false);
+
+  if (subcommand === 'cli-login') {
+    await handleAuthLogin(interaction, context);
+    return;
+  }
 
   if (subcommandGroup === 'resource') {
     await handleResourceCommand(interaction, context);
