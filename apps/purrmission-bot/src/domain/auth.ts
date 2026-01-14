@@ -107,11 +107,16 @@ export class AuthService {
         }
 
         if (session.status === 'APPROVED' && session.userId) {
-            // Check if we should invalidate the session to prevent replay?
-            // OAuth 2.0 Device Flow spec doesn't explicitly require one-time use of the device code *after* exchange,
-            // but it is good security practice. We'll mark it DENIED (or consumed) effectively.
-            // However, we might want to return the same token if called again?
-            // For now, let's issue a new token and assume the client stores it.
+            // Check expiry again to ensure session hasn't expired since approval
+            if (session.expiresAt < new Date()) {
+                await this.authRepo.updateSessionStatus(session.id, 'EXPIRED');
+                throw new ExpiredTokenError();
+            }
+
+            // Mark session as fully consumed/closed so it can't be used to mint more tokens.
+            // Using 'EXPIRED' as a terminal state for now to block further exchanges,
+            // though a dedicated 'CONSUMED' state might be cleaner in the future.
+            await this.authRepo.updateSessionStatus(session.id, 'EXPIRED');
 
             const tokenString = 'paw_' + randomBytes(32).toString('hex'); // 'paw_' prefix
 
@@ -127,12 +132,6 @@ export class AuthService {
                 name: `CLI Device Flow ${session.userCode}`,
                 expiresAt: tokenExpiresAt
             });
-
-            // Mark session as fully consumed/closed so it can't be used to mint more tokens
-            // Re-using 'DENIED' as a terminal state for now to block further exchanges, 
-            // though 'EXPIRED' or a new 'CONSUMED' state might be cleaner.
-            // Given the enum constraints, let's use EXPIRED to signify it's done.
-            await this.authRepo.updateSessionStatus(session.id, 'EXPIRED');
 
             // Return the plaintext token to the user (BUT based on the DB record structure)
             return {

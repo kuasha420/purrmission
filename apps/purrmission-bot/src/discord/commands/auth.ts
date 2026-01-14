@@ -7,7 +7,7 @@ export async function handleAuthLogin(
     interaction: ChatInputCommandInteraction,
     context: CommandContext
 ): Promise<void> {
-    const code = interaction.options.getString('code', true);
+    const code = interaction.options.getString('code', true).toUpperCase().trim();
     const userId = interaction.user.id;
 
     try {
