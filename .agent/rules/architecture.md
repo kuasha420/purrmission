@@ -2,8 +2,6 @@
 trigger: always_on
 ---
 
-
-
 # Architecture Details
 
 ## TOTP System

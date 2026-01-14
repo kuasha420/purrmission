@@ -1,3 +1,7 @@
+---
+trigger: always_on
+---
+
 # 🛠️ Tech Stack & Workflow
 
 ## Core Stack
