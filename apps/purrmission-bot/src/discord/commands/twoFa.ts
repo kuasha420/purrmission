@@ -154,7 +154,7 @@ export const purrmissionCommand = new SlashCommandBuilder()
           .setName('code')
           .setDescription('The 9-character code from the CLI (e.g., ABCD-1234)')
           .setRequired(true)
-          .setMaxLength(4)
+          .setMaxLength(9)
       )
   );
 

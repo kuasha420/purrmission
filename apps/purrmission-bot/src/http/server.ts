@@ -196,7 +196,8 @@ export function createHttpServer(deps: HttpServerDeps): FastifyInstance {
 
         return {
           access_token: result.token,
-          expires_in: result.apiToken.expiresAt ? Math.round((result.apiToken.expiresAt.getTime() - Date.now()) / 1000) : null,
+          token_type: 'Bearer',
+          expires_in: Math.round((result.apiToken.expiresAt.getTime() - Date.now()) / 1000),
         };
       } catch (e: unknown) {
         if (e instanceof ExpiredTokenError) {
@@ -217,7 +218,7 @@ export function createHttpServer(deps: HttpServerDeps): FastifyInstance {
   // Project & Environment Management
   // -------------------------------------------------------------------------
 
-  // Authenticaton helper
+  // Authentication helper
   const authenticate = async (req: FastifyRequest, rep: FastifyReply): Promise<string> => {
     const authHeader = req.headers.authorization;
     if (!authHeader || !authHeader.startsWith('Bearer ')) {
@@ -291,7 +292,7 @@ export function createHttpServer(deps: HttpServerDeps): FastifyInstance {
       });
       return rep.status(201).send(env);
     } catch (e: any) {
-      if (e.code === 'P2002') return rep.status(409).send({ error: 'Slug already exists for this project' });
+      if ((e as any).code === 'P2002') return rep.status(409).send({ error: 'Slug already exists for this project' });
       throw e;
     }
   });

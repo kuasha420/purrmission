@@ -4,7 +4,7 @@ import assert from 'node:assert';
 import { createHttpServer } from '../http/server.js';
 import { createServices } from '../domain/services.js';
 import { createInMemoryRepositories } from '../domain/repositories.mock.js';
-import { createDiscordClient } from '../discord/client.js';
+
 import { createHash } from 'node:crypto';
 
 // Mock Discord Client (minimal)
@@ -15,7 +15,7 @@ import { Repositories } from '../domain/repositories.js';
 import { Client } from 'discord.js';
 
 // Mock Discord Client (minimal)
-const mockDiscordClient: any = {
+const mockDiscordClient: Partial<Client> = {
     isReady: () => true,
     user: { tag: 'TestBot#0000' },
     channels: { fetch: async () => null },

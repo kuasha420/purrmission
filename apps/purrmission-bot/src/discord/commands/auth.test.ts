@@ -6,8 +6,8 @@ import { ChatInputCommandInteraction } from 'discord.js';
 import { CommandContext } from './context.js';
 
 describe('Discord Command: handleAuthLogin', () => {
-    let mockInteraction: any;
-    let mockContext: any;
+    let mockInteraction: Partial<ChatInputCommandInteraction>;
+    let mockContext: Partial<CommandContext>;
 
     beforeEach(() => {
         mockInteraction = {

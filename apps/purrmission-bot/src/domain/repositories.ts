@@ -916,7 +916,6 @@ export class PrismaProjectRepository implements ProjectRepository {
     });
     return {
       ...project,
-      description: project.description ?? null,
     };
   }
 
