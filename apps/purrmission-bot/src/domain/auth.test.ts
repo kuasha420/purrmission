@@ -168,6 +168,56 @@ describe('AuthService', () => {
             // Should mark session as EXPIRED (consumed)
             assert.deepStrictEqual((mockRepo.updateSessionStatus as any).mock.calls[0].arguments, ['session-1', 'EXPIRED']);
         });
+
+        test('should throw ExpiredTokenError if session expired after approval', async () => {
+            const expiredSession: AuthSession = {
+                id: 'session-1',
+                deviceCode: 'device-1',
+                userCode: 'ABCD-1234',
+                status: 'APPROVED',
+                userId: 'user-123',
+                expiresAt: new Date(Date.now() - 1000), // Expired
+                createdAt: new Date(),
+                updatedAt: new Date(),
+            };
+            mockRepo.findSessionByDeviceCode = mock.fn(async () => expiredSession);
+            mockRepo.updateSessionStatus = mock.fn(async () => undefined);
+
+            await assert.rejects(authService.exchangeCodeForToken('device-1'), ExpiredTokenError);
+            assert.strictEqual((mockRepo.updateSessionStatus as any).mock.calls[0].arguments[1], 'EXPIRED');
+        });
+
+        test('should throw AccessDeniedError if session is DENIED', async () => {
+            const deniedSession: AuthSession = {
+                id: 'session-1',
+                deviceCode: 'device-1',
+                userCode: 'ABCD-1234',
+                status: 'DENIED',
+                userId: 'user-123',
+                expiresAt: new Date(Date.now() + 10000),
+                createdAt: new Date(),
+                updatedAt: new Date(),
+            };
+            mockRepo.findSessionByDeviceCode = mock.fn(async () => deniedSession);
+
+            await assert.rejects(authService.exchangeCodeForToken('device-1'), AccessDeniedError);
+        });
+
+        test('should throw AccessDeniedError if APPROVED session lacks userId', async () => {
+            const noUserSession: AuthSession = {
+                id: 'session-1',
+                deviceCode: 'device-1',
+                userCode: 'ABCD-1234',
+                status: 'APPROVED',
+                userId: null,
+                expiresAt: new Date(Date.now() + 10000),
+                createdAt: new Date(),
+                updatedAt: new Date(),
+            };
+            mockRepo.findSessionByDeviceCode = mock.fn(async () => noUserSession);
+
+            await assert.rejects(authService.exchangeCodeForToken('device-1'), AccessDeniedError);
+        });
     });
 
     describe('validateToken', () => {
