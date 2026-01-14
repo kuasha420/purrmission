@@ -14,7 +14,9 @@ import type {
   DecisionResult,
   Resource,
   Guardian,
+  Guardian,
   TOTPAccount,
+  ResourceField,
 } from './models.js';
 import type { Repositories } from './repositories.js';
 import { logger } from '../logging/logger.js';
@@ -428,6 +430,77 @@ export class ResourceService {
     }
 
     return repositories.totp.findById(resource.totpAccountId);
+  }
+
+  /**
+   * Create a new field for a resource.
+   */
+  async createField(resourceId: string, name: string, value: string): Promise<ResourceField> {
+    const { repositories } = this.deps;
+
+    // Verify resource exists
+    const resource = await repositories.resources.findById(resourceId);
+    if (!resource) {
+      throw new Error(`Resource not found: ${resourceId}`);
+    }
+
+    // Check if field already exists
+    const existing = await repositories.resourceFields.findByResourceAndName(resourceId, name);
+    if (existing) {
+      throw new Error(`Field '${name}' already exists for this resource`);
+    }
+
+    const field = await repositories.resourceFields.create({
+      resourceId,
+      name,
+      value,
+    });
+
+    logger.info('Created resource field', {
+      resourceId,
+      fieldName: name,
+    });
+
+    return field;
+  }
+
+  /**
+   * List all fields for a resource (values are not returned here, but handled by repo/domain model if implemented,
+   * though typical list endpoints might omit values. Our model includes value, so we return it.
+   * Access control should be handled by the caller).
+   */
+  async listFields(resourceId: string): Promise<ResourceField[]> {
+    const { repositories } = this.deps;
+    return repositories.resourceFields.findByResourceId(resourceId);
+  }
+
+  /**
+   * Get a specific field for a resource.
+   */
+  async getField(resourceId: string, name: string): Promise<ResourceField | null> {
+    const { repositories } = this.deps;
+    return repositories.resourceFields.findByResourceAndName(resourceId, name);
+  }
+
+  /**
+   * Delete a field from a resource.
+   */
+  async deleteField(resourceId: string, name: string): Promise<void> {
+    const { repositories } = this.deps;
+
+    const field = await repositories.resourceFields.findByResourceAndName(resourceId, name);
+    if (!field) {
+      // Idempotent success or throw? Let's verify standard behavior.
+      // Usually idempotent is safer for APIs.
+      return;
+    }
+
+    await repositories.resourceFields.delete(field.id);
+
+    logger.info('Deleted resource field', {
+      resourceId,
+      fieldName: name,
+    });
   }
 }
 
