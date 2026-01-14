@@ -7,17 +7,17 @@ const path = require('path');
 function showHelp() {
     console.log(`
 Usage:
-  node scripts/gh-pr-review-comments.js <pr-number> [review-id] [--file <output-file>] [--delta]
+  node scripts/gh-pr-review-comments.cjs <pr-number> [review-id] [--file <output-file>] [--delta]
 
 Examples:
   # Print all review comments to stdout
-  node scripts/gh-pr-review-comments.js 34 3517858180
+  node scripts/gh-pr-review-comments.cjs 34 3517858180
 
   # Print NEW comments since you last said "Code Review Addressed"
-  node scripts/gh-pr-review-comments.js 34 --delta
+  node scripts/gh-pr-review-comments.cjs 34 --delta
 
   # Save comments into a file (creates or appends)
-  node scripts/gh-pr-review-comments.js 34 3517858180 --file /tmp/review.txt
+  node scripts/gh-pr-review-comments.cjs 34 3517858180 --file /tmp/review.txt
 
 Description:
   Fetches all comments under the specified Pull Request review and outputs
@@ -79,10 +79,21 @@ function getLastAddressedTime(prNum, user) {
         const output = execSync(cmd, { encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'] });
         const comments = JSON.parse(output);
 
-        const marker = comments.find(c =>
-            c.user.login === user &&
-            (c.body.includes("Code Review Feedback Addressed") || c.body.includes("Code Review Addressed"))
-        );
+        const patterns = [
+            "Code Review Feedback Addressed",
+            "Code Review Addressed",
+            "CR Feedback Addressed",
+            "CR Addressed",
+            "### 📝 CR Feedback Addressed",
+            "### 📝Code Review Feedback Addressed",
+            "[Found and addressed a total of"
+        ];
+
+        const marker = comments.find(c => {
+            if (c.user.login !== user) return false;
+            const body = c.body.toLowerCase();
+            return patterns.some(p => body.includes(p.toLowerCase()));
+        });
 
         return marker ? new Date(marker.created_at) : null;
     } catch (e) {
@@ -160,7 +171,7 @@ try {
         });
         console.log("------------------------------------------------------------");
         console.log("\nTo fetch comments for a specific review, run:");
-        console.log(`node scripts/gh-pr-review-comments.js ${prNumber} <REVIEW_ID>`);
+        console.log(`node scripts/gh-pr-review-comments.cjs ${prNumber} <REVIEW_ID>`);
 
         process.exit(0);
     }
