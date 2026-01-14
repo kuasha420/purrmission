@@ -144,6 +144,7 @@ model AuthSession {
   updatedAt   DateTime          @updatedAt
 
   @@index([userId])
+  @@index([expiresAt])
 }
 
 model ApiToken {
@@ -156,4 +157,6 @@ model ApiToken {
   createdAt   DateTime @default(now())
 
   @@index([userId])
+  @@index([expiresAt])
+  @@index([lastUsedAt])
 }
