@@ -77,7 +77,7 @@ export class AuthService {
      * Approves a pending session, linking it to a user.
      */
     async approveSession(userCode: string, userId: string): Promise<boolean> {
-        const session = await this.authRepo.findSessionByUserCode(userCode);
+        const session = await this.authRepo.findSessionByUserCode(userCode.toUpperCase());
 
         if (!session) return false;
         if (session.status !== 'PENDING') return false;
