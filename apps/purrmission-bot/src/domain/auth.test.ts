@@ -26,8 +26,14 @@ describe('AuthService', () => {
 
     describe('initiateDeviceFlow', () => {
         test('should generate device code and user code', async () => {
-            // Mock implementation to return the input session
-            mockRepo.createSession = mock.fn(async (session: any) => session);
+            // Mock implementation to return a valid AuthSession
+            mockRepo.createSession = mock.fn(async (input: any) => ({
+                id: 'session-id-1',
+                status: 'PENDING',
+                createdAt: new Date(),
+                updatedAt: new Date(),
+                ...input
+            }));
 
             const result = await authService.initiateDeviceFlow();
 

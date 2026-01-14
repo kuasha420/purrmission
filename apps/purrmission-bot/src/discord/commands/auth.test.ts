@@ -2,10 +2,12 @@
 import { test, describe, beforeEach, mock } from 'node:test';
 import assert from 'node:assert';
 import { handleAuthLogin } from './auth.js';
+import { ChatInputCommandInteraction } from 'discord.js';
+import { CommandContext } from '../types/command.js';
 
 describe('Discord Command: handleAuthLogin', () => {
-    let mockInteraction: any;
-    let mockContext: any;
+    let mockInteraction: Partial<ChatInputCommandInteraction>;
+    let mockContext: Partial<CommandContext>;
 
     beforeEach(() => {
         mockInteraction = {
@@ -32,7 +34,7 @@ describe('Discord Command: handleAuthLogin', () => {
         mockInteraction.options.getString = mock.fn(() => 'ABCD-1234');
         mockContext.services.auth.approveSession = mock.fn(async () => true);
 
-        await handleAuthLogin(mockInteraction, mockContext);
+        await handleAuthLogin(mockInteraction as ChatInputCommandInteraction, mockContext as CommandContext);
 
         assert.strictEqual(mockContext.services.auth.approveSession.mock.callCount(), 1);
         assert.deepStrictEqual(mockContext.services.auth.approveSession.mock.calls[0].arguments, ['ABCD-1234', 'user-123']);
@@ -46,7 +48,7 @@ describe('Discord Command: handleAuthLogin', () => {
         mockInteraction.options.getString = mock.fn(() => 'INVALID');
         mockContext.services.auth.approveSession = mock.fn(async () => false);
 
-        await handleAuthLogin(mockInteraction, mockContext);
+        await handleAuthLogin(mockInteraction as ChatInputCommandInteraction, mockContext as CommandContext);
 
         assert.strictEqual(mockInteraction.reply.mock.callCount(), 1);
         const replyArg = mockInteraction.reply.mock.calls[0].arguments[0];
@@ -57,7 +59,7 @@ describe('Discord Command: handleAuthLogin', () => {
         mockInteraction.options.getString = mock.fn(() => 'ERROR');
         mockContext.services.auth.approveSession = mock.fn(async () => { throw new Error('Internal Boom'); });
 
-        await handleAuthLogin(mockInteraction, mockContext);
+        await handleAuthLogin(mockInteraction as ChatInputCommandInteraction, mockContext as CommandContext);
 
         assert.strictEqual(mockInteraction.reply.mock.callCount(), 1);
         const replyArg = mockInteraction.reply.mock.calls[0].arguments[0];
