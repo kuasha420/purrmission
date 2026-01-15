@@ -75,6 +75,11 @@ export interface GuardianRepository {
    * Find all guardianships for a specific user.
    */
   findByUserId(discordUserId: string): Promise<Guardian[]>;
+
+  /**
+   * Remove a guardian from a resource.
+   */
+  remove(resourceId: string, discordUserId: string): Promise<void>;
 }
 
 /**
@@ -640,6 +645,16 @@ export class PrismaGuardianRepository implements GuardianRepository {
       where: { discordUserId },
     });
     return rows.map((row) => this.mapPrismaToDomain(row));
+  }
+
+  async remove(resourceId: string, discordUserId: string): Promise<void> {
+    // Using deleteMany is safe and idempotent-ish (won't fail if not found).
+    await this.prisma.guardian.deleteMany({
+      where: {
+        resourceId,
+        discordUserId,
+      },
+    });
   }
 
   private mapPrismaToDomain(row: {

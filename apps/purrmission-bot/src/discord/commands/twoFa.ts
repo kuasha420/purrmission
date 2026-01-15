@@ -18,6 +18,8 @@ import {
   handleResourceAutocomplete,
 } from './resource.js';
 import { handleAddGuardian } from './addGuardian.js';
+import { handleRemoveGuardian } from './removeGuardian.js';
+import { handleListGuardians } from './listGuardians.js';
 import { rateLimiter } from '../../infra/rateLimit.js';
 import { handleAuthLogin } from './auth.js';
 export const purrmissionCommand = new SlashCommandBuilder()
@@ -144,7 +146,38 @@ export const purrmissionCommand = new SlashCommandBuilder()
               .setRequired(true)
           )
       )
+      .addSubcommand((subcommand) =>
+        subcommand
+          .setName('remove')
+          .setDescription('Remove a guardian from a protected resource')
+          .addStringOption((option) =>
+            option
+              .setName('resource-id')
+              .setDescription('ID of the resource')
+              .setRequired(true)
+              .setAutocomplete(true)
+          )
+          .addUserOption((option) =>
+            option
+              .setName('user')
+              .setDescription('User to remove')
+              .setRequired(true)
+          )
+      )
+      .addSubcommand((subcommand) =>
+        subcommand
+          .setName('list')
+          .setDescription('List all guardians for a resource')
+          .addStringOption((option) =>
+            option
+              .setName('resource-id')
+              .setDescription('ID of the resource')
+              .setRequired(true)
+              .setAutocomplete(true)
+          )
+      )
   )
+
   .addSubcommand((subcommand) =>
     subcommand
       .setName('cli-login')
@@ -179,6 +212,12 @@ export async function handlePurrmissionCommand(
     switch (subcommand) {
       case 'add':
         await handleAddGuardian(interaction, context.services);
+        return;
+      case 'remove':
+        await handleRemoveGuardian(interaction, context.services);
+        return;
+      case 'list':
+        await handleListGuardians(interaction, context.services);
         return;
       default:
         await interaction.reply({

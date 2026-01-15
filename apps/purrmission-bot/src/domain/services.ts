@@ -360,6 +360,59 @@ export class ResourceService {
   }
 
   /**
+   * Remove a guardian from a resource.
+   */
+  async removeGuardian(
+    resourceId: string,
+    actorId: string,
+    targetUserId: string
+  ): Promise<{ success: boolean; error?: string }> {
+    const { repositories } = this.deps;
+
+    // Verify Actor is Owner
+    const actorGuardian = await repositories.guardians.findByResourceAndUser(resourceId, actorId);
+    if (!actorGuardian || actorGuardian.role !== 'OWNER') {
+      return { success: false, error: 'Only the resource owner can remove guardians.' };
+    }
+
+    // Verify Target is a Guardian
+    const targetGuardian = await repositories.guardians.findByResourceAndUser(resourceId, targetUserId);
+    if (!targetGuardian) {
+      return { success: false, error: 'User is not a guardian of this resource.' };
+    }
+    if (targetGuardian.role === 'OWNER') {
+      return { success: false, error: 'Cannot remove the resource owner.' };
+    }
+
+    await repositories.guardians.remove(resourceId, targetUserId);
+
+    logger.info('Removed guardian from resource', {
+      resourceId,
+      actorId,
+      targetUserId,
+    });
+
+    return { success: true };
+  }
+
+  /**
+   * List confirmed guardians for a resource.
+   */
+  async listGuardians(
+    resourceId: string,
+    actorId: string
+  ): Promise<{ success: boolean; guardians?: Guardian[]; error?: string }> {
+    // Verify Access
+    const hasAccess = await this.isGuardian(resourceId, actorId);
+    if (!hasAccess) {
+      return { success: false, error: 'Access denied. You must be a guardian to list guardians.' };
+    }
+
+    const guardians = await this.deps.repositories.guardians.findByResourceId(resourceId);
+    return { success: true, guardians };
+  }
+
+  /**
    * Verify an API key and return the resource.
    */
   async verifyApiKey(apiKey: string): Promise<Resource | null> {
