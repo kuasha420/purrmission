@@ -14,7 +14,6 @@ import type {
   DecisionResult,
   Resource,
   Guardian,
-  Guardian,
   TOTPAccount,
   ResourceField,
 } from './models.js';
@@ -23,6 +22,10 @@ import { logger } from '../logging/logger.js';
 import { AuditService } from './audit.js';
 import { AuthService } from './auth.js';
 import { ProjectService } from './project.js';
+import {
+  ResourceNotFoundError,
+  DuplicateError,
+} from './errors.js';
 
 /**
  * Service dependencies.
@@ -441,13 +444,13 @@ export class ResourceService {
     // Verify resource exists
     const resource = await repositories.resources.findById(resourceId);
     if (!resource) {
-      throw new Error(`Resource not found: ${resourceId}`);
+      throw new ResourceNotFoundError(`Resource not found: ${resourceId}`);
     }
 
     // Check if field already exists
     const existing = await repositories.resourceFields.findByResourceAndName(resourceId, name);
     if (existing) {
-      throw new Error(`Field '${name}' already exists for this resource`);
+      throw new DuplicateError(`Field '${name}' already exists for this resource`);
     }
 
     const field = await repositories.resourceFields.create({
