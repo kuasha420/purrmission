@@ -11,7 +11,6 @@ import type { Repositories } from '../domain/repositories.js';
 import type { Client } from 'discord.js';
 
 // Mock Discord Client (minimal)
-// Mock Discord Client (minimal)
 const mockDiscordClient = {
     isReady: () => true,
     user: { tag: 'TestBot#0000' },
@@ -51,6 +50,14 @@ describe('Resource API', () => {
             name: 'Test Resource',
             mode: 'ONE_OF_N' as any,
             apiKey: 'api-key-1'
+        });
+
+        // Setup Guardian (Owner)
+        await repositories.guardians.add({
+            id: 'g-' + userId,
+            resourceId,
+            discordUserId: userId,
+            role: 'OWNER',
         });
 
         server = createHttpServer({
@@ -127,10 +134,6 @@ describe('Resource API', () => {
             secret: 'JBSWY3DPEHPK3PXP', // Valid base32
             shared: false,
         });
-        // Mock ID to be UUID if it's not
-        // The mock repo uses uuid() usually, but let's verify or enforce.
-        // Actually, the in-memory repo uses crypto.randomUUID() usually.
-        // Let's safe guard.
 
 
         // Link
