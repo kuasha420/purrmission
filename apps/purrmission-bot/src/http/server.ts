@@ -19,6 +19,13 @@ import {
   AccessDeniedError,
 } from '../domain/auth.js';
 import { generateTOTPCode } from '../domain/totp.js';
+import { ResourceNotFoundError } from '../domain/errors.js';
+
+declare module 'fastify' {
+  interface FastifyRequest {
+    user: { id: string };
+  }
+}
 
 /**
  * Dependencies for the HTTP server.
@@ -398,8 +405,12 @@ export function createHttpServer(deps: HttpServerDeps): FastifyInstance {
     }
   }, async (req) => {
     const { id } = req.params as z.infer<typeof ResourceParamsSchema>;
-    // TODO: Verify access (owner/guardian)
-    // For now, assuming caller has access if authenticated (MVP) or we need a service check
+
+    // Verify access
+    if (!(await services.resource.isGuardian(id, req.user.id))) {
+      throw new AccessDeniedError('Access denied');
+    }
+
     const fields = await services.resource.listFields(id);
     return fields.map(f => f.name);
   });
@@ -414,6 +425,11 @@ export function createHttpServer(deps: HttpServerDeps): FastifyInstance {
     const { id } = req.params as z.infer<typeof ResourceParamsSchema>;
     const { name, value } = req.body as z.infer<typeof CreateResourceFieldSchema>;
 
+    // Verify access
+    if (!(await services.resource.isGuardian(id, req.user.id))) {
+      throw new AccessDeniedError('Access denied');
+    }
+
     const field = await services.resource.createField(id, name, value);
     return rep.status(201).send(field);
   });
@@ -425,6 +441,11 @@ export function createHttpServer(deps: HttpServerDeps): FastifyInstance {
     }
   }, async (req) => {
     const { id, name } = req.params as z.infer<typeof FieldParamsSchema>;
+
+    // Verify access
+    if (!(await services.resource.isGuardian(id, req.user.id))) {
+      throw new AccessDeniedError('Access denied');
+    }
 
     const field = await services.resource.getField(id, name);
     if (!field) {
@@ -441,6 +462,12 @@ export function createHttpServer(deps: HttpServerDeps): FastifyInstance {
     }
   }, async (req, rep) => {
     const { id, name } = req.params as z.infer<typeof FieldParamsSchema>;
+
+    // Verify access
+    if (!(await services.resource.isGuardian(id, req.user.id))) {
+      throw new AccessDeniedError('Access denied');
+    }
+
     await services.resource.deleteField(id, name);
     return rep.status(204).send();
   });
@@ -456,6 +483,11 @@ export function createHttpServer(deps: HttpServerDeps): FastifyInstance {
     }
   }, async (req) => {
     const { id } = req.params as z.infer<typeof ResourceParamsSchema>;
+
+    // Verify access
+    if (!(await services.resource.isGuardian(id, req.user.id))) {
+      throw new AccessDeniedError('Access denied');
+    }
 
     const account = await services.resource.getLinkedTOTPAccount(id);
     if (!account) {
@@ -475,7 +507,12 @@ export function createHttpServer(deps: HttpServerDeps): FastifyInstance {
   }, async (req, rep) => {
     const { id } = req.params as z.infer<typeof ResourceParamsSchema>;
     const { totpAccountId } = req.body as z.infer<typeof LinkTotpSchema>;
-    const userId = (req as any).user.id; // Actor ID
+    const userId = req.user.id; // Actor ID
+
+    // Verify access
+    if (!(await services.resource.isGuardian(id, userId))) {
+      throw new AccessDeniedError('Access denied');
+    }
 
     await services.resource.linkTOTPAccount(id, totpAccountId, userId);
     return rep.status(200).send({ success: true });
@@ -488,6 +525,13 @@ export function createHttpServer(deps: HttpServerDeps): FastifyInstance {
     }
   }, async (req, rep) => {
     const { id } = req.params as z.infer<typeof ResourceParamsSchema>;
+    const userId = req.user.id; // Actor ID
+
+    // Verify access
+    if (!(await services.resource.isGuardian(id, userId))) {
+      throw new AccessDeniedError('Access denied');
+    }
+
     await services.resource.unlinkTOTPAccount(id);
     return rep.status(204).send();
   });
