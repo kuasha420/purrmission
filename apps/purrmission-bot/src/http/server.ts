@@ -18,6 +18,14 @@ import {
   ExpiredTokenError,
   AccessDeniedError,
 } from '../domain/auth.js';
+import { generateTOTPCode } from '../domain/totp.js';
+import { ResourceNotFoundError } from '../domain/errors.js';
+
+declare module 'fastify' {
+  interface FastifyRequest {
+    user: { id: string };
+  }
+}
 
 /**
  * Dependencies for the HTTP server.
@@ -233,6 +241,24 @@ export function createHttpServer(deps: HttpServerDeps): FastifyInstance {
     projectId: z.string().uuid(),
   });
 
+  const CreateResourceFieldSchema = z.object({
+    name: z.string().min(1).max(64).regex(/^[A-Za-z0-9_-]+$/),
+    value: z.string().max(10240),
+  });
+
+  const ResourceParamsSchema = z.object({
+    id: z.string().uuid(),
+  });
+
+  const FieldParamsSchema = z.object({
+    id: z.string().uuid(),
+    name: z.string().min(1),
+  });
+
+  const LinkTotpSchema = z.object({
+    totpAccountId: z.string().uuid(),
+  });
+
   // Authentication Hook
   const authenticate = async (req: FastifyRequest, rep: FastifyReply) => {
     const authHeader = req.headers.authorization;
@@ -245,7 +271,16 @@ export function createHttpServer(deps: HttpServerDeps): FastifyInstance {
       throw new AccessDeniedError('Invalid token');
     }
     // Attach user to request
+    // Attach user to request
     (req as any).user = { id: apiToken.userId };
+  };
+
+  // Authorization Hook: Verify Guardian/Owner Access
+  const verifyIsGuardian = async (req: FastifyRequest<{ Params: { id: string } }>) => {
+    const { id } = req.params;
+    if (!(await services.resource.isGuardian(id, req.user.id))) {
+      throw new AccessDeniedError('Access denied');
+    }
   };
 
   // Configure Zod Validator
@@ -366,6 +401,111 @@ export function createHttpServer(deps: HttpServerDeps): FastifyInstance {
 
     const envs = await services.project.listEnvironments(projectId);
     return envs;
+  });
+
+  // ---------------------------------------------------------------------------
+  // Resource Field Endpoints
+  // ---------------------------------------------------------------------------
+
+  server.get<{ Params: z.infer<typeof ResourceParamsSchema> }>('/api/resources/:id/fields', {
+    preHandler: [authenticate, verifyIsGuardian],
+    schema: {
+      params: ResourceParamsSchema
+    }
+  }, async (req) => {
+    const { id } = req.params;
+    const fields = await services.resource.listFields(id);
+    return fields.map(f => f.name);
+  });
+
+  server.post<{ Params: z.infer<typeof ResourceParamsSchema>, Body: z.infer<typeof CreateResourceFieldSchema> }>('/api/resources/:id/fields', {
+    preHandler: [authenticate, verifyIsGuardian],
+    schema: {
+      params: ResourceParamsSchema,
+      body: CreateResourceFieldSchema
+    }
+  }, async (req, rep) => {
+    const { id } = req.params;
+    const { name, value } = req.body;
+
+    const field = await services.resource.createField(id, name, value);
+    return rep.status(201).send(field);
+  });
+
+  server.get<{ Params: z.infer<typeof FieldParamsSchema> }>('/api/resources/:id/fields/:name', {
+    preHandler: [authenticate, verifyIsGuardian],
+    schema: {
+      params: FieldParamsSchema
+    }
+  }, async (req) => {
+    const { id, name } = req.params;
+
+    const field = await services.resource.getField(id, name);
+    if (!field) {
+      throw new ResourceNotFoundError(`Field '${name}' not found`);
+    }
+
+    return { name: field.name, value: field.value };
+  });
+
+  server.delete<{ Params: z.infer<typeof FieldParamsSchema> }>('/api/resources/:id/fields/:name', {
+    preHandler: [authenticate, verifyIsGuardian],
+    schema: {
+      params: FieldParamsSchema
+    }
+  }, async (req, rep) => {
+    const { id, name } = req.params;
+
+    await services.resource.deleteField(id, name);
+    return rep.status(204).send();
+  });
+
+  // ---------------------------------------------------------------------------
+  // Resource 2FA Endpoints
+  // ---------------------------------------------------------------------------
+
+  server.get<{ Params: z.infer<typeof ResourceParamsSchema> }>('/api/resources/:id/2fa', {
+    preHandler: [authenticate, verifyIsGuardian],
+    schema: {
+      params: ResourceParamsSchema
+    }
+  }, async (req) => {
+    const { id } = req.params;
+
+    const account = await services.resource.getLinkedTOTPAccount(id);
+    if (!account) {
+      throw new ResourceNotFoundError('No 2FA account linked to this resource');
+    }
+
+    const code = generateTOTPCode(account);
+    return { code };
+  });
+
+  server.post<{ Params: z.infer<typeof ResourceParamsSchema>, Body: z.infer<typeof LinkTotpSchema> }>('/api/resources/:id/2fa/link', {
+    preHandler: [authenticate, verifyIsGuardian],
+    schema: {
+      params: ResourceParamsSchema,
+      body: LinkTotpSchema
+    }
+  }, async (req, rep) => {
+    const { id } = req.params;
+    const { totpAccountId } = req.body;
+    const userId = req.user.id; // Actor ID
+
+    await services.resource.linkTOTPAccount(id, totpAccountId, userId);
+    return rep.status(200).send({ success: true });
+  });
+
+  server.delete<{ Params: z.infer<typeof ResourceParamsSchema> }>('/api/resources/:id/2fa/link', {
+    preHandler: [authenticate, verifyIsGuardian],
+    schema: {
+      params: ResourceParamsSchema
+    }
+  }, async (req, rep) => {
+    const { id } = req.params;
+
+    await services.resource.unlinkTOTPAccount(id);
+    return rep.status(204).send();
   });
 
   return server;

@@ -15,12 +15,17 @@ import type {
   Resource,
   Guardian,
   TOTPAccount,
+  ResourceField,
 } from './models.js';
 import type { Repositories } from './repositories.js';
 import { logger } from '../logging/logger.js';
 import { AuditService } from './audit.js';
 import { AuthService } from './auth.js';
 import { ProjectService } from './project.js';
+import {
+  ResourceNotFoundError,
+  DuplicateError,
+} from './errors.js';
 
 /**
  * Service dependencies.
@@ -251,6 +256,21 @@ export class ResourceService {
   }
 
   /**
+   * Get a resource by ID.
+   */
+  async getResource(id: string): Promise<Resource | null> {
+    return this.deps.repositories.resources.findById(id);
+  }
+
+  /**
+   * Check if a user is a guardian (or owner) of a resource.
+   */
+  async isGuardian(resourceId: string, userId: string): Promise<boolean> {
+    const guardian = await this.deps.repositories.guardians.findByResourceAndUser(resourceId, userId);
+    return !!guardian;
+  }
+
+  /**
    * Create a new resource.
    *
    * @param name - Name of the resource
@@ -428,6 +448,77 @@ export class ResourceService {
     }
 
     return repositories.totp.findById(resource.totpAccountId);
+  }
+
+  /**
+   * Create a new field for a resource.
+   */
+  async createField(resourceId: string, name: string, value: string): Promise<ResourceField> {
+    const { repositories } = this.deps;
+
+    // Verify resource exists
+    const resource = await repositories.resources.findById(resourceId);
+    if (!resource) {
+      throw new ResourceNotFoundError(`Resource not found: ${resourceId}`);
+    }
+
+    // Check if field already exists
+    const existing = await repositories.resourceFields.findByResourceAndName(resourceId, name);
+    if (existing) {
+      throw new DuplicateError(`Field '${name}' already exists for this resource`);
+    }
+
+    const field = await repositories.resourceFields.create({
+      resourceId,
+      name,
+      value,
+    });
+
+    logger.info('Created resource field', {
+      resourceId,
+      fieldName: name,
+    });
+
+    return field;
+  }
+
+  /**
+   * List all fields for a resource.
+   * Note: This method returns full field objects, including their values.
+   * Access control must be handled by the caller to ensure only authorized users can see these values.
+   */
+  async listFields(resourceId: string): Promise<ResourceField[]> {
+    const { repositories } = this.deps;
+    return repositories.resourceFields.findByResourceId(resourceId);
+  }
+
+  /**
+   * Get a specific field for a resource.
+   */
+  async getField(resourceId: string, name: string): Promise<ResourceField | null> {
+    const { repositories } = this.deps;
+    return repositories.resourceFields.findByResourceAndName(resourceId, name);
+  }
+
+  /**
+   * Delete a field from a resource.
+   */
+  async deleteField(resourceId: string, name: string): Promise<void> {
+    const { repositories } = this.deps;
+
+    const field = await repositories.resourceFields.findByResourceAndName(resourceId, name);
+    if (!field) {
+      // Idempotent success or throw? Let's verify standard behavior.
+      // Usually idempotent is safer for APIs.
+      return;
+    }
+
+    await repositories.resourceFields.delete(field.id);
+
+    logger.info('Deleted resource field', {
+      resourceId,
+      fieldName: name,
+    });
   }
 }
 
