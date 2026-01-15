@@ -75,6 +75,11 @@ export interface GuardianRepository {
    * Find all guardianships for a specific user.
    */
   findByUserId(discordUserId: string): Promise<Guardian[]>;
+
+  /**
+   * Remove a guardian from a resource.
+   */
+  remove(resourceId: string, discordUserId: string): Promise<void>;
 }
 
 /**
@@ -640,6 +645,24 @@ export class PrismaGuardianRepository implements GuardianRepository {
       where: { discordUserId },
     });
     return rows.map((row) => this.mapPrismaToDomain(row));
+  }
+
+  async remove(resourceId: string, discordUserId: string): Promise<void> {
+    // Delete validation is implicit: if not found, Prisma throws or deletes 0.
+    // We want to delete specific entry.
+    // Since composite key or fields are not id, we use deleteMany or delete with unique constraint if exists.
+    // The schema likely has a unique compound index on [resourceId, discordUserId] or logic handles it.
+    // Let's check if we can delete by ID if we find it first, or use deleteMany.
+    // Safer to use deleteMany for non-unique-id based deletions if uncertain of schema constraints, 
+    // but typically guardians are unique per resource/user.
+
+    // Using deleteMany is safe and idempotent-ish (won't fail if not found).
+    await this.prisma.guardian.deleteMany({
+      where: {
+        resourceId,
+        discordUserId,
+      },
+    });
   }
 
   private mapPrismaToDomain(row: {
