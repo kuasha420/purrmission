@@ -256,6 +256,13 @@ export class ResourceService {
   }
 
   /**
+   * Get a resource by ID.
+   */
+  async getResource(id: string): Promise<Resource | null> {
+    return this.deps.repositories.resources.findById(id);
+  }
+
+  /**
    * Create a new resource.
    *
    * @param name - Name of the resource
