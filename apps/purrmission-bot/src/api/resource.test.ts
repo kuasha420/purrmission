@@ -195,6 +195,6 @@ describe('Resource API', () => {
             headers: { Authorization: `Bearer ${validToken}` }
         });
 
-        assert.strictEqual(listRes.statusCode, 403);
+        assert.strictEqual(listRes.statusCode, 401);
     });
 });
