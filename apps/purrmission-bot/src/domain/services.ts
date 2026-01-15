@@ -263,6 +263,14 @@ export class ResourceService {
   }
 
   /**
+   * Check if a user is a guardian (or owner) of a resource.
+   */
+  async isGuardian(resourceId: string, userId: string): Promise<boolean> {
+    const guardian = await this.deps.repositories.guardians.findByResourceAndUser(resourceId, userId);
+    return !!guardian;
+  }
+
+  /**
    * Create a new resource.
    *
    * @param name - Name of the resource
