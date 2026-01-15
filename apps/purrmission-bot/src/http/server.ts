@@ -271,7 +271,16 @@ export function createHttpServer(deps: HttpServerDeps): FastifyInstance {
       throw new AccessDeniedError('Invalid token');
     }
     // Attach user to request
+    // Attach user to request
     (req as any).user = { id: apiToken.userId };
+  };
+
+  // Authorization Hook: Verify Guardian/Owner Access
+  const verifyIsGuardian = async (req: FastifyRequest<{ Params: { id: string } }>) => {
+    const { id } = req.params;
+    if (!(await services.resource.isGuardian(id, req.user.id))) {
+      throw new AccessDeniedError('Access denied');
+    }
   };
 
   // Configure Zod Validator
@@ -398,54 +407,38 @@ export function createHttpServer(deps: HttpServerDeps): FastifyInstance {
   // Resource Field Endpoints
   // ---------------------------------------------------------------------------
 
-  server.get('/api/resources/:id/fields', {
-    preHandler: [authenticate],
+  server.get<{ Params: z.infer<typeof ResourceParamsSchema> }>('/api/resources/:id/fields', {
+    preHandler: [authenticate, verifyIsGuardian],
     schema: {
       params: ResourceParamsSchema
     }
   }, async (req) => {
-    const { id } = req.params as z.infer<typeof ResourceParamsSchema>;
-
-    // Verify access
-    if (!(await services.resource.isGuardian(id, req.user.id))) {
-      throw new AccessDeniedError('Access denied');
-    }
-
+    const { id } = req.params;
     const fields = await services.resource.listFields(id);
     return fields.map(f => f.name);
   });
 
-  server.post('/api/resources/:id/fields', {
-    preHandler: [authenticate],
+  server.post<{ Params: z.infer<typeof ResourceParamsSchema>, Body: z.infer<typeof CreateResourceFieldSchema> }>('/api/resources/:id/fields', {
+    preHandler: [authenticate, verifyIsGuardian],
     schema: {
       params: ResourceParamsSchema,
       body: CreateResourceFieldSchema
     }
   }, async (req, rep) => {
-    const { id } = req.params as z.infer<typeof ResourceParamsSchema>;
-    const { name, value } = req.body as z.infer<typeof CreateResourceFieldSchema>;
-
-    // Verify access
-    if (!(await services.resource.isGuardian(id, req.user.id))) {
-      throw new AccessDeniedError('Access denied');
-    }
+    const { id } = req.params;
+    const { name, value } = req.body;
 
     const field = await services.resource.createField(id, name, value);
     return rep.status(201).send(field);
   });
 
-  server.get('/api/resources/:id/fields/:name', {
-    preHandler: [authenticate],
+  server.get<{ Params: z.infer<typeof FieldParamsSchema> }>('/api/resources/:id/fields/:name', {
+    preHandler: [authenticate, verifyIsGuardian],
     schema: {
       params: FieldParamsSchema
     }
   }, async (req) => {
-    const { id, name } = req.params as z.infer<typeof FieldParamsSchema>;
-
-    // Verify access
-    if (!(await services.resource.isGuardian(id, req.user.id))) {
-      throw new AccessDeniedError('Access denied');
-    }
+    const { id, name } = req.params;
 
     const field = await services.resource.getField(id, name);
     if (!field) {
@@ -455,18 +448,13 @@ export function createHttpServer(deps: HttpServerDeps): FastifyInstance {
     return { name: field.name, value: field.value };
   });
 
-  server.delete('/api/resources/:id/fields/:name', {
-    preHandler: [authenticate],
+  server.delete<{ Params: z.infer<typeof FieldParamsSchema> }>('/api/resources/:id/fields/:name', {
+    preHandler: [authenticate, verifyIsGuardian],
     schema: {
       params: FieldParamsSchema
     }
   }, async (req, rep) => {
-    const { id, name } = req.params as z.infer<typeof FieldParamsSchema>;
-
-    // Verify access
-    if (!(await services.resource.isGuardian(id, req.user.id))) {
-      throw new AccessDeniedError('Access denied');
-    }
+    const { id, name } = req.params;
 
     await services.resource.deleteField(id, name);
     return rep.status(204).send();
@@ -476,18 +464,13 @@ export function createHttpServer(deps: HttpServerDeps): FastifyInstance {
   // Resource 2FA Endpoints
   // ---------------------------------------------------------------------------
 
-  server.get('/api/resources/:id/2fa', {
-    preHandler: [authenticate],
+  server.get<{ Params: z.infer<typeof ResourceParamsSchema> }>('/api/resources/:id/2fa', {
+    preHandler: [authenticate, verifyIsGuardian],
     schema: {
       params: ResourceParamsSchema
     }
   }, async (req) => {
-    const { id } = req.params as z.infer<typeof ResourceParamsSchema>;
-
-    // Verify access
-    if (!(await services.resource.isGuardian(id, req.user.id))) {
-      throw new AccessDeniedError('Access denied');
-    }
+    const { id } = req.params;
 
     const account = await services.resource.getLinkedTOTPAccount(id);
     if (!account) {
@@ -498,39 +481,28 @@ export function createHttpServer(deps: HttpServerDeps): FastifyInstance {
     return { code };
   });
 
-  server.post('/api/resources/:id/2fa/link', {
-    preHandler: [authenticate],
+  server.post<{ Params: z.infer<typeof ResourceParamsSchema>, Body: z.infer<typeof LinkTotpSchema> }>('/api/resources/:id/2fa/link', {
+    preHandler: [authenticate, verifyIsGuardian],
     schema: {
       params: ResourceParamsSchema,
       body: LinkTotpSchema
     }
   }, async (req, rep) => {
-    const { id } = req.params as z.infer<typeof ResourceParamsSchema>;
-    const { totpAccountId } = req.body as z.infer<typeof LinkTotpSchema>;
+    const { id } = req.params;
+    const { totpAccountId } = req.body;
     const userId = req.user.id; // Actor ID
-
-    // Verify access
-    if (!(await services.resource.isGuardian(id, userId))) {
-      throw new AccessDeniedError('Access denied');
-    }
 
     await services.resource.linkTOTPAccount(id, totpAccountId, userId);
     return rep.status(200).send({ success: true });
   });
 
-  server.delete('/api/resources/:id/2fa/link', {
-    preHandler: [authenticate],
+  server.delete<{ Params: z.infer<typeof ResourceParamsSchema> }>('/api/resources/:id/2fa/link', {
+    preHandler: [authenticate, verifyIsGuardian],
     schema: {
       params: ResourceParamsSchema
     }
   }, async (req, rep) => {
-    const { id } = req.params as z.infer<typeof ResourceParamsSchema>;
-    const userId = req.user.id; // Actor ID
-
-    // Verify access
-    if (!(await services.resource.isGuardian(id, userId))) {
-      throw new AccessDeniedError('Access denied');
-    }
+    const { id } = req.params;
 
     await services.resource.unlinkTOTPAccount(id);
     return rep.status(204).send();

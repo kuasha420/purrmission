@@ -483,9 +483,9 @@ export class ResourceService {
   }
 
   /**
-   * List all fields for a resource (values are not returned here, but handled by repo/domain model if implemented,
-   * though typical list endpoints might omit values. Our model includes value, so we return it.
-   * Access control should be handled by the caller).
+   * List all fields for a resource.
+   * Note: This method returns full field objects, including their values.
+   * Access control must be handled by the caller to ensure only authorized users can see these values.
    */
   async listFields(resourceId: string): Promise<ResourceField[]> {
     const { repositories } = this.deps;
