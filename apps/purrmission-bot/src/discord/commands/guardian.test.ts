@@ -21,7 +21,7 @@ describe('handlePurrmissionCommand - Guardian Routing', () => {
     let mockInteraction: Partial<ChatInputCommandInteraction>;
     let mockContext: CommandContext;
     let addGuardianCalls: { resourceId: string; userId: string }[] = [];
-    let removeGuardianCalls: { resourceId: string; userId: string; actorId: string }[] = [];
+    let removeGuardianCalls: { resourceId: string; targetUserId: string; actorId: string }[] = [];
     let listGuardiansCalls: { resourceId: string; actorId: string }[] = [];
     let replyCalls: unknown[] = [];
 

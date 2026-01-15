@@ -16,7 +16,7 @@ export async function handleListGuardians(
     try {
         const result = await services.resource.listGuardians(resourceId, callerId);
 
-        if (!result.success || !result.guardians) {
+        if (!result.success) {
             await interaction.reply({
                 content: `❌ ${result.error || 'Failed to list guardians'}`,
                 ephemeral: true,

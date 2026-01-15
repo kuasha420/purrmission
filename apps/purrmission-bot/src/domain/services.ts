@@ -380,6 +380,9 @@ export class ResourceService {
     if (!targetGuardian) {
       return { success: false, error: 'User is not a guardian of this resource.' };
     }
+    if (targetGuardian.role === 'OWNER') {
+      return { success: false, error: 'Cannot remove the resource owner.' };
+    }
 
     await repositories.guardians.remove(resourceId, targetUserId);
 

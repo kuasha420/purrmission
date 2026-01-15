@@ -83,6 +83,21 @@ describe('ResourceService', () => {
             assert.match(result.error!, /not a guardian/);
             assert.strictEqual((mockGuardianRepo.remove as any).mock.calls.length, 0);
         });
+
+        it('should fail if target is owner', async () => {
+            // Mock Actor is Owner, Target is Owner
+            (mockGuardianRepo.findByResourceAndUser as any).mock.mockImplementation(async (_rid: string, uid: string) => {
+                if (uid === ownerId) return { id: 'g1', role: 'OWNER', discordUserId: ownerId } as Guardian;
+                if (uid === guardianId) return { id: 'g2', role: 'OWNER', discordUserId: guardianId } as Guardian; // Simulate target as another owner or same owner
+                return null;
+            });
+
+            const result = await resourceService.removeGuardian(resourceId, ownerId, guardianId);
+
+            assert.strictEqual(result.success, false);
+            assert.match(result.error!, /Cannot remove the resource owner/);
+            assert.strictEqual((mockGuardianRepo.remove as any).mock.calls.length, 0);
+        });
     });
 
     describe('listGuardians', () => {
