@@ -178,4 +178,23 @@ describe('Resource API', () => {
         const check = await services.resource.getLinkedTOTPAccount(resourceId);
         assert.strictEqual(check, null);
     });
+
+    it('should deny access if not guardian', async () => {
+        // Create another resource where the user is NOT a guardian
+        const otherResourceId = '222e4567-e89b-12d3-a456-426614174000';
+        await repositories.resources.create({
+            id: otherResourceId,
+            name: 'Other Resource',
+            mode: 'ONE_OF_N' as any,
+            apiKey: 'api-key-2'
+        });
+
+        const listRes = await server.inject({
+            method: 'GET',
+            url: `/api/resources/${otherResourceId}/fields`,
+            headers: { Authorization: `Bearer ${validToken}` }
+        });
+
+        assert.strictEqual(listRes.statusCode, 403);
+    });
 });
