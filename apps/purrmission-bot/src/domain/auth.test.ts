@@ -210,7 +210,7 @@ describe('AuthService', () => {
                 deviceCode: 'device-1',
                 userCode: 'ABCD-1234',
                 status: 'APPROVED',
-                userId: null,
+                userId: undefined,
                 expiresAt: new Date(Date.now() + 10000),
                 createdAt: new Date(),
                 updatedAt: new Date(),

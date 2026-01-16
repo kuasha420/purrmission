@@ -314,6 +314,7 @@ export interface Environment {
   name: string;
   slug: string;
   projectId: string;
+  resourceId?: string;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -328,4 +329,12 @@ export interface CreateEnvironmentInput {
   name: string;
   slug: string;
   projectId: string;
+  resourceId?: string;
+}
+
+export class ResourceNotFoundError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'ResourceNotFoundError';
+  }
 }

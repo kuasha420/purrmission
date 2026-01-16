@@ -24,7 +24,7 @@ export async function handleListGuardians(
             return;
         }
 
-        if (result.guardians.length === 0) {
+        if (!result.guardians || result.guardians.length === 0) {
             await interaction.reply({
                 content: `ℹ️ No guardians found for resource \`${resourceId}\`.`,
                 ephemeral: true,
@@ -32,7 +32,7 @@ export async function handleListGuardians(
             return;
         }
 
-        const guardianList = result.guardians
+        const guardianList = result.guardians!
             .map(g => `- <@${g.discordUserId}> (\`${g.role}\`)`)
             .join('\n');
 

@@ -21,14 +21,14 @@ describe('ResourceService', () => {
 
     beforeEach(() => {
         mockGuardianRepo = {
-            findByResourceAndUser: mock.fn(),
-            findByResourceId: mock.fn(),
-            remove: mock.fn(),
-            add: mock.fn(),
+            findByResourceAndUser: mock.fn() as any,
+            findByResourceId: mock.fn() as any,
+            remove: mock.fn() as any,
+            add: mock.fn() as any,
         };
 
         mockResourceRepo = {
-            findById: mock.fn(),
+            findById: mock.fn() as any,
         };
 
         mockRepositories = {

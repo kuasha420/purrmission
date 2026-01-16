@@ -299,19 +299,20 @@ export function createHttpServer(deps: HttpServerDeps): FastifyInstance {
     if (error instanceof z.ZodError) {
       return reply.status(400).send({ error: 'validation_error', details: error.issues });
     }
-    if (error.name === 'DuplicateError') {
-      return reply.status(409).send({ error: error.message });
+    const err = error as any;
+    if (err.name === 'DuplicateError') {
+      return reply.status(409).send({ error: err.message });
     }
-    if (error.name === 'ResourceNotFoundError') {
-      return reply.status(404).send({ error: error.message });
+    if (err.name === 'ResourceNotFoundError') {
+      return reply.status(404).send({ error: err.message });
     }
-    if (error.name === 'AccessDeniedError') {
-      return reply.status(401).send({ error: 'unauthorized', message: error.message });
+    if (err.name === 'AccessDeniedError') {
+      return reply.status(401).send({ error: 'unauthorized', message: err.message });
     }
-    if (error.name === 'InvalidGrantError') {
-      return reply.status(400).send({ error: 'invalid_grant', message: error.message });
+    if (err.name === 'InvalidGrantError') {
+      return reply.status(400).send({ error: 'invalid_grant', message: err.message });
     }
-    if (error.name === 'ExpiredTokenError') {
+    if (err.name === 'ExpiredTokenError') {
       return reply.status(400).send({ error: 'expired_token' });
     }
 
@@ -401,6 +402,69 @@ export function createHttpServer(deps: HttpServerDeps): FastifyInstance {
 
     const envs = await services.project.listEnvironments(projectId);
     return envs;
+  });
+
+  server.get('/api/projects/:projectId/environments/:envId/secrets', {
+    preHandler: [authenticate]
+  }, async (req, rep) => {
+    const { projectId, envId } = req.params as { projectId: string; envId: string };
+    const userId = (req as any).user.id;
+
+    const project = await services.project.getProject(projectId);
+    if (!project) throw new ResourceNotFoundError('Project not found');
+
+    // Check project access (Owner)
+    if (project.ownerId !== userId) throw new AccessDeniedError('Access denied');
+
+    const environment = await services.project.getEnvironmentById(projectId, envId);
+    if (!environment) throw new ResourceNotFoundError('Environment not found');
+    if (!environment.resourceId) throw new ResourceNotFoundError('Environment has no linked resource');
+
+    // Resource access model for secrets:
+    // - Project owners are treated as the ultimate authority over project resources.
+    // - If the linked resource has guardians configured (including approval-mode guardians),
+    //   those guardian-level approval requirements are NOT enforced in this endpoint.
+    //   This is an explicit design decision: project ownership implies full read access
+    //   to environment secrets, even when guardians are present.
+    //   If this policy changes in the future, delegate the check to a guardian-aware
+    //   method on the appropriate service instead of relying solely on ownerId.
+    logger.debug(
+      'Project owner accessing environment secrets; guardian approvals (if any) are bypassed by design',
+      { projectId, envId, resourceId: environment.resourceId, userId }
+    );
+
+    const fields = await services.resource.listFields(environment.resourceId);
+    // Transform to simple KV
+    const secrets: Record<string, string> = {};
+    for (const f of fields) {
+      secrets[f.name] = f.value;
+    }
+    return { secrets };
+  });
+
+  server.put('/api/projects/:projectId/environments/:envId/secrets', {
+    preHandler: [authenticate]
+  }, async (req, rep) => {
+    const { projectId, envId } = req.params as { projectId: string; envId: string };
+    const { secrets } = req.body as { secrets: Record<string, string> };
+    const userId = (req as any).user.id;
+
+    const project = await services.project.getProject(projectId);
+    if (!project) throw new ResourceNotFoundError('Project not found');
+    if (project.ownerId !== userId) throw new AccessDeniedError('Access denied');
+
+    const environment = await services.project.getEnvironmentById(projectId, envId);
+    if (!environment) throw new ResourceNotFoundError('Environment not found');
+    if (!environment.resourceId) throw new ResourceNotFoundError('Environment has no linked resource');
+
+    // Upsert fields in parallel to improve performance when many secrets are provided
+    await Promise.all(
+      Object.entries(secrets).map(([key, value]) =>
+        services.resource.upsertField(environment.resourceId!, key, value)
+      )
+    );
+
+    return { success: true };
   });
 
   // ---------------------------------------------------------------------------

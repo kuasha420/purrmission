@@ -573,6 +573,37 @@ export class ResourceService {
       fieldName: name,
     });
   }
+
+  /**
+   * Create or update a resource field.
+   *
+   * If a field with the given name already exists for the resource, its value is updated.
+   * Otherwise, a new field is created.
+   *
+   * @param resourceId - The identifier of the resource to which the field belongs.
+   * @param name - The name of the field to create or update.
+   * @param value - The value to set for the field.
+   * @returns A promise that resolves to the created or updated {@link ResourceField}.
+   * @throws ResourceNotFoundError If the specified resource does not exist.
+   */
+  async upsertField(resourceId: string, name: string, value: string): Promise<ResourceField> {
+    const { repositories } = this.deps;
+
+    // Verify resource exists
+    const resource = await repositories.resources.findById(resourceId);
+    if (!resource) {
+      throw new ResourceNotFoundError(`Resource not found: ${resourceId}`);
+    }
+
+    const existing = await repositories.resourceFields.findByResourceAndName(resourceId, name);
+    if (existing) {
+      const updated = await repositories.resourceFields.update(existing.id, value);
+      logger.info('Updated resource field', { resourceId, fieldName: name });
+      return updated;
+    }
+
+    return this.createField(resourceId, name, value);
+  }
 }
 
 /**
@@ -601,6 +632,6 @@ export function createServices(baseDeps: { repositories: Repositories }): Servic
     resource: new ResourceService(fullDeps),
     audit,
     auth: new AuthService(baseDeps.repositories.auth),
-    project: new ProjectService(baseDeps.repositories.projects),
+    project: new ProjectService(baseDeps.repositories.projects, new ResourceService(fullDeps)),
   };
 }

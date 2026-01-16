@@ -8,6 +8,7 @@ import { Project, Environment } from './models.js';
 describe('ProjectService', () => {
     let projectRepo: ProjectRepository;
     let projectService: ProjectService;
+    let resourceService: any;
 
     beforeEach(() => {
         projectRepo = {
@@ -19,12 +20,16 @@ describe('ProjectService', () => {
             findEnvironment: mock.fn(),
         } as unknown as ProjectRepository;
 
-        projectService = new ProjectService(projectRepo);
+        resourceService = {
+            createResource: mock.fn(async () => ({ resource: { id: 'res-1' } }))
+        };
+
+        projectService = new ProjectService(projectRepo, resourceService);
     });
 
     it('should create a project', async () => {
         const input = { name: 'My Project', ownerId: 'user-1' };
-        const created: Project = { ...input, id: 'p-1', description: null, createdAt: new Date() };
+        const created: Project = { ...input, id: 'p-1', description: null, createdAt: new Date(), updatedAt: new Date() };
         (projectRepo.createProject as any).mock.mockImplementation(async () => created);
 
         const result = await projectService.createProject(input);
@@ -36,7 +41,7 @@ describe('ProjectService', () => {
 
     it('should list projects by owner', async () => {
         const userId = 'user-1';
-        const projects: Project[] = [{ id: 'p-1', name: 'P1', ownerId: userId, description: null, createdAt: new Date() }];
+        const projects: Project[] = [{ id: 'p-1', name: 'P1', ownerId: userId, description: null, createdAt: new Date(), updatedAt: new Date() }];
         (projectRepo.listProjectsByOwner as any).mock.mockImplementation(async () => projects);
 
         const result = await projectService.listProjects(userId);
@@ -48,7 +53,7 @@ describe('ProjectService', () => {
 
     it('should get project by id', async () => {
         const projectId = 'p-1';
-        const project: Project = { id: projectId, name: 'P1', ownerId: 'user-1', description: null, createdAt: new Date() };
+        const project: Project = { id: projectId, name: 'P1', ownerId: 'user-1', description: null, createdAt: new Date(), updatedAt: new Date() };
         (projectRepo.findById as any).mock.mockImplementation(async () => project);
 
         const result = await projectService.getProject(projectId);
@@ -60,7 +65,7 @@ describe('ProjectService', () => {
 
     it('should create an environment', async () => {
         const input = { name: 'Production', slug: 'prod', projectId: 'p-1' };
-        const created: Environment = { ...input, id: 'e-1', createdAt: new Date() };
+        const created: Environment = { ...input, id: 'e-1', createdAt: new Date(), updatedAt: new Date() };
         (projectRepo.createEnvironment as any).mock.mockImplementation(async () => created);
 
         const result = await projectService.createEnvironment(input);
