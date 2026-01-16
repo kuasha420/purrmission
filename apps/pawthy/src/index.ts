@@ -7,6 +7,11 @@ import { loginCommand } from './commands/login.js';
 
 import { initCommand } from './commands/init.js';
 
+import { pushCommand } from './commands/push.js';
+
+import { pushCommand } from './commands/push.js';
+import { pullCommand } from './commands/pull.js';
+
 const program = new Command();
 
 program
@@ -16,5 +21,7 @@ program
 
 program.addCommand(loginCommand);
 program.addCommand(initCommand);
+program.addCommand(pushCommand);
+program.addCommand(pullCommand);
 
 program.parse(process.argv);

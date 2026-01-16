@@ -957,7 +957,8 @@ export class PrismaProjectRepository implements ProjectRepository {
         data: {
           name: input.name,
           slug: input.slug,
-          projectId: input.projectId
+          projectId: input.projectId,
+          resourceId: input.resourceId,
         }
       });
       return env;

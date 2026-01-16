@@ -39,6 +39,9 @@ model Resource {
   approvalRequests ApprovalRequest[]
   fields           ResourceField[]
 
+  // Backlink from Environment (one-to-one)
+  environment Environment?
+
   @@index([apiKey])
 }
 
@@ -184,6 +187,10 @@ model Environment {
   updatedAt DateTime @updatedAt
 
   project   Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  
+  // Link to Resource for credentials
+  resourceId String?   @unique
+  resource   Resource? @relation(fields: [resourceId], references: [id], onDelete: SetNull)
 
   @@unique([projectId, slug])
   @@index([projectId])

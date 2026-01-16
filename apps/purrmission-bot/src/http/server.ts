@@ -403,6 +403,65 @@ export function createHttpServer(deps: HttpServerDeps): FastifyInstance {
     return envs;
   });
 
+  server.get('/api/projects/:projectId/environments/:envId/secrets', {
+    preHandler: [authenticate]
+  }, async (req, rep) => {
+    const { projectId, envId } = req.params as { projectId: string; envId: string };
+    const userId = (req as any).user.id;
+
+    const env = await services.project.getEnvironment(projectId, (await services.project.listEnvironments(projectId)).find(e => e.id === envId)?.slug || '');
+    // Optimization: getEnvironment takes slug, but we have envId. 
+    // We should probably add getEnvironmentById to ProjectService, but for now lets rely on list or just use resourceId if we had it.
+    // Actually, ProjectService.listEnvironments returns environments. We can just find by ID.
+    const project = await services.project.getProject(projectId);
+    if (!project) throw new ResourceNotFoundError('Project not found');
+
+    // Check project access (Owner)
+    if (project.ownerId !== userId) throw new AccessDeniedError('Access denied');
+
+    // Find environment by ID manually since we don't have getEnvironmentById yet
+    const environments = await services.project.listEnvironments(projectId);
+    const environment = environments.find(e => e.id === envId);
+
+    if (!environment) throw new ResourceNotFoundError('Environment not found');
+    if (!environment.resourceId) throw new ResourceNotFoundError('Environment has no linked resource');
+
+    // Check Resource Access (Delegated to ResourceService ideally, but here we are owner)
+    // TODO: Verify approval status if needed. For now, owner gets access.
+
+    const fields = await services.resource.listFields(environment.resourceId);
+    // Transform to simple KV
+    const secrets: Record<string, string> = {};
+    for (const f of fields) {
+      secrets[f.name] = f.value;
+    }
+    return { secrets };
+  });
+
+  server.put('/api/projects/:projectId/environments/:envId/secrets', {
+    preHandler: [authenticate]
+  }, async (req, rep) => {
+    const { projectId, envId } = req.params as { projectId: string; envId: string };
+    const { secrets } = req.body as { secrets: Record<string, string> };
+    const userId = (req as any).user.id;
+
+    const project = await services.project.getProject(projectId);
+    if (!project) throw new ResourceNotFoundError('Project not found');
+    if (project.ownerId !== userId) throw new AccessDeniedError('Access denied');
+
+    const environments = await services.project.listEnvironments(projectId);
+    const environment = environments.find(e => e.id === envId);
+    if (!environment) throw new ResourceNotFoundError('Environment not found');
+    if (!environment.resourceId) throw new ResourceNotFoundError('Environment has no linked resource');
+
+    // Upsert fields
+    for (const [key, value] of Object.entries(secrets)) {
+      await services.resource.upsertField(environment.resourceId, key, value);
+    }
+
+    return { success: true };
+  });
+
   // ---------------------------------------------------------------------------
   // Resource Field Endpoints
   // ---------------------------------------------------------------------------

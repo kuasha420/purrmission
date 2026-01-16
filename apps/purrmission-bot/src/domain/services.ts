@@ -573,6 +573,28 @@ export class ResourceService {
       fieldName: name,
     });
   }
+
+  /**
+   * Upsert a field for a resource.
+   */
+  async upsertField(resourceId: string, name: string, value: string): Promise<ResourceField> {
+    const { repositories } = this.deps;
+
+    // Verify resource exists
+    const resource = await repositories.resources.findById(resourceId);
+    if (!resource) {
+      throw new ResourceNotFoundError(`Resource not found: ${resourceId}`);
+    }
+
+    const existing = await repositories.resourceFields.findByResourceAndName(resourceId, name);
+    if (existing) {
+      const updated = await repositories.resourceFields.update(existing.id, value);
+      logger.info('Updated resource field', { resourceId, fieldName: name });
+      return updated;
+    }
+
+    return this.createField(resourceId, name, value);
+  }
 }
 
 /**
@@ -601,6 +623,6 @@ export function createServices(baseDeps: { repositories: Repositories }): Servic
     resource: new ResourceService(fullDeps),
     audit,
     auth: new AuthService(baseDeps.repositories.auth),
-    project: new ProjectService(baseDeps.repositories.projects),
+    project: new ProjectService(baseDeps.repositories.projects, new ResourceService(fullDeps)),
   };
 }

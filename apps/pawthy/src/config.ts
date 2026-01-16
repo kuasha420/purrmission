@@ -33,3 +33,15 @@ export function setApiUrl(url: string): void {
 export function clearConfig(): void {
     config.clear();
 }
+
+export function getProjectConfig(): { projectId: string; envId: string } | null {
+    try {
+        const fs = require('fs');
+        const path = require('path');
+        const configPath = path.join(process.cwd(), '.pawthyrc');
+        const content = fs.readFileSync(configPath, 'utf-8');
+        return JSON.parse(content);
+    } catch (e) {
+        return null;
+    }
+}

@@ -314,6 +314,7 @@ export interface Environment {
   name: string;
   slug: string;
   projectId: string;
+  resourceId?: string;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -328,4 +329,5 @@ export interface CreateEnvironmentInput {
   name: string;
   slug: string;
   projectId: string;
+  resourceId?: string;
 }
