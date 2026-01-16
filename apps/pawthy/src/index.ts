@@ -5,6 +5,8 @@ import chalk from "chalk";
 
 import { loginCommand } from './commands/login.js';
 
+import { initCommand } from './commands/init.js';
+
 const program = new Command();
 
 program
@@ -13,12 +15,6 @@ program
     .version("0.1.0");
 
 program.addCommand(loginCommand);
-
-program
-    .command("init")
-    .description("Initialize a new project")
-    .action(async () => {
-        console.log(chalk.blue("Init command coming soon..."));
-    });
+program.addCommand(initCommand);
 
 program.parse(process.argv);
