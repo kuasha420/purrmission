@@ -15,7 +15,7 @@ import { Repositories } from '../domain/repositories.js';
 import { Client } from 'discord.js';
 
 // Mock Discord Client (minimal)
-const mockDiscordClient: Partial<Client> = {
+const mockDiscordClient = {
     isReady: () => true,
     user: { tag: 'TestBot#0000' },
     channels: { fetch: async () => null },
@@ -24,7 +24,7 @@ const mockDiscordClient: Partial<Client> = {
     destroy: () => { },
     on: () => { },
     once: () => { },
-};
+} as unknown as Client;
 
 describe('Project API', () => {
     let server: FastifyInstance;

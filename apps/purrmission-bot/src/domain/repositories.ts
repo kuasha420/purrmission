@@ -37,6 +37,7 @@ import { encryptValue, decryptValue } from '../infra/crypto.js';
 import { DuplicateError, ResourceNotFoundError } from './errors.js';
 
 import crypto from 'node:crypto';
+import { logger } from '../logging/logger.js';
 
 
 
@@ -961,7 +962,10 @@ export class PrismaProjectRepository implements ProjectRepository {
           resourceId: input.resourceId,
         }
       });
-      return env;
+      return {
+        ...env,
+        resourceId: env.resourceId ?? undefined
+      };
     } catch (error: any) {
       if (error.code === 'P2002') {
         throw new DuplicateError(`Environment with slug "${input.slug}" already exists in this project.`);
@@ -971,14 +975,23 @@ export class PrismaProjectRepository implements ProjectRepository {
   }
 
   async listEnvironments(projectId: string): Promise<Environment[]> {
-    return this.prisma.environment.findMany({ where: { projectId }, orderBy: { name: 'asc' } });
+    const rows = await this.prisma.environment.findMany({ where: { projectId }, orderBy: { name: 'asc' } });
+    return rows.map(row => ({
+      ...row,
+      resourceId: row.resourceId ?? undefined
+    }));
   }
 
   async findEnvironment(projectId: string, slug: string): Promise<Environment | null> {
-    return this.prisma.environment.findUnique({
+    const row = await this.prisma.environment.findUnique({
       where: {
         projectId_slug: { projectId, slug }
       }
     });
+    if (!row) return null;
+    return {
+      ...row,
+      resourceId: row.resourceId ?? undefined
+    };
   }
 }

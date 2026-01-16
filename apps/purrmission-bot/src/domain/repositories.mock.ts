@@ -127,6 +127,14 @@ export class InMemoryGuardianRepository implements GuardianRepository {
             (guardian) => guardian.discordUserId === discordUserId
         );
     }
+
+    async remove(resourceId: string, discordUserId: string): Promise<void> {
+        for (const [id, guardian] of this.guardians.entries()) {
+            if (guardian.resourceId === resourceId && guardian.discordUserId === discordUserId) {
+                this.guardians.delete(id);
+            }
+        }
+    }
 }
 
 /**
@@ -466,6 +474,7 @@ export class InMemoryProjectRepository implements ProjectRepository {
             name: input.name,
             slug: input.slug,
             projectId: input.projectId,
+            resourceId: input.resourceId,
             createdAt: new Date(),
             updatedAt: new Date(),
         };

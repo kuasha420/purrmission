@@ -7,7 +7,6 @@ import { loginCommand } from './commands/login.js';
 
 import { initCommand } from './commands/init.js';
 
-import { pushCommand } from './commands/push.js';
 
 import { pushCommand } from './commands/push.js';
 import { pullCommand } from './commands/pull.js';

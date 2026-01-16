@@ -299,19 +299,20 @@ export function createHttpServer(deps: HttpServerDeps): FastifyInstance {
     if (error instanceof z.ZodError) {
       return reply.status(400).send({ error: 'validation_error', details: error.issues });
     }
-    if (error.name === 'DuplicateError') {
-      return reply.status(409).send({ error: error.message });
+    const err = error as any;
+    if (err.name === 'DuplicateError') {
+      return reply.status(409).send({ error: err.message });
     }
-    if (error.name === 'ResourceNotFoundError') {
-      return reply.status(404).send({ error: error.message });
+    if (err.name === 'ResourceNotFoundError') {
+      return reply.status(404).send({ error: err.message });
     }
-    if (error.name === 'AccessDeniedError') {
-      return reply.status(401).send({ error: 'unauthorized', message: error.message });
+    if (err.name === 'AccessDeniedError') {
+      return reply.status(401).send({ error: 'unauthorized', message: err.message });
     }
-    if (error.name === 'InvalidGrantError') {
-      return reply.status(400).send({ error: 'invalid_grant', message: error.message });
+    if (err.name === 'InvalidGrantError') {
+      return reply.status(400).send({ error: 'invalid_grant', message: err.message });
     }
-    if (error.name === 'ExpiredTokenError') {
+    if (err.name === 'ExpiredTokenError') {
       return reply.status(400).send({ error: 'expired_token' });
     }
 
