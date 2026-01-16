@@ -11,7 +11,7 @@ export const pullCommand = new Command('pull')
     .action(async (options) => {
         const token = getToken();
         const apiUrl = getApiUrl();
-        const config = getProjectConfig();
+        const config = await getProjectConfig();
 
         if (!token) {
             console.error(chalk.red('You must be logged in. Run `pawthy login` first.'));

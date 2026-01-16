@@ -36,18 +36,20 @@ export function clearConfig(): void {
     config.clear();
 }
 
-export function getProjectConfig(): { projectId: string; envId: string } | null {
+export async function getProjectConfig(): Promise<{ projectId: string; envId: string } | null> {
+    const configPath = path.join(process.cwd(), '.pawthyrc');
     try {
-        const configPath = path.join(process.cwd(), '.pawthyrc');
-        const content = fs.readFileSync(configPath, 'utf-8');
+        const content = await fs.promises.readFile(configPath, 'utf-8');
         return JSON.parse(content);
     } catch (e: any) {
-        // If the config file does not exist, treat it as "no project config" and return null.
-        if (e && e.code === 'ENOENT') {
+        if (e.code === 'ENOENT') {
             return null;
         }
-        // For other errors (e.g., permission issues, corrupted file), log the error for visibility.
-        console.error('Failed to read project configuration from .pawthyrc:', e);
-        return null;
+        if (e instanceof SyntaxError) {
+            console.error(`Error: Could not parse project configuration file at ${configPath}. It appears to be malformed.`);
+        } else {
+            console.error(`Error: Failed to read project configuration from ${configPath}:`, e.message);
+        }
+        process.exit(1);
     }
 }

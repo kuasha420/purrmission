@@ -7,12 +7,13 @@ import dotenv from 'dotenv';
 import { getToken, getApiUrl, getProjectConfig } from '../config.js';
 
 export const pushCommand = new Command('push')
-    .description('Push local .env secrets to Purrmission')
+    .description('Push local .env secrets to Purrmission, updating existing values. This does not remove secrets.')
     .option('-f, --file <path>', 'Path to .env file', '.env')
+    .option('--force', 'Push secrets without confirmation')
     .action(async (options) => {
         const token = getToken();
         const apiUrl = getApiUrl();
-        const config = getProjectConfig();
+        const config = await getProjectConfig();
 
         if (!token) {
             console.error(chalk.red('You must be logged in. Run `pawthy login` first.'));
@@ -36,9 +37,25 @@ export const pushCommand = new Command('push')
                 return;
             }
 
+            // 2. Confirmation Prompt
+            if (!options.force) {
+                const inquirer = (await import('inquirer')).default;
+                const { confirm } = await inquirer.prompt([{
+                    type: 'confirm',
+                    name: 'confirm',
+                    message: `You are about to push ${Object.keys(secrets).length} secrets to Purrmission. This may overwrite existing values. Continue?`,
+                    default: false,
+                }]);
+
+                if (!confirm) {
+                    console.log(chalk.yellow('Push cancelled.'));
+                    return;
+                }
+            }
+
             console.log(chalk.dim(`Pushing ${Object.keys(secrets).length} secrets to Purrmission...`));
 
-            // 2. Push to API
+            // 3. Push to API
             await axios.put(`${apiUrl}/api/projects/${config.projectId}/environments/${config.envId}/secrets`, {
                 secrets
             }, {
