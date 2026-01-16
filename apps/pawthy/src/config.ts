@@ -1,4 +1,6 @@
 import Conf from 'conf';
+import fs from 'fs';
+import path from 'path';
 
 interface PawthyConfig {
     token?: string;
@@ -36,12 +38,16 @@ export function clearConfig(): void {
 
 export function getProjectConfig(): { projectId: string; envId: string } | null {
     try {
-        const fs = require('fs');
-        const path = require('path');
         const configPath = path.join(process.cwd(), '.pawthyrc');
         const content = fs.readFileSync(configPath, 'utf-8');
         return JSON.parse(content);
-    } catch (e) {
+    } catch (e: any) {
+        // If the config file does not exist, treat it as "no project config" and return null.
+        if (e && e.code === 'ENOENT') {
+            return null;
+        }
+        // For other errors (e.g., permission issues, corrupted file), log the error for visibility.
+        console.error('Failed to read project configuration from .pawthyrc:', e);
         return null;
     }
 }

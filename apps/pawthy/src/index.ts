@@ -1,13 +1,7 @@
 #!/usr/bin/env node
 import { Command } from "commander";
-import boxen from "boxen";
-import chalk from "chalk";
-
 import { loginCommand } from './commands/login.js';
-
 import { initCommand } from './commands/init.js';
-
-
 import { pushCommand } from './commands/push.js';
 import { pullCommand } from './commands/pull.js';
 

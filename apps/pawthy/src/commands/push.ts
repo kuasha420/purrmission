@@ -58,7 +58,7 @@ export const pushCommand = new Command('push')
                 } else {
                     console.error(chalk.red(`Failed to push secrets: ${error.message}`));
                 }
-            } else if ((error as any).code === 'ENOENT') {
+            } else if (error instanceof Error && 'code' in error && (error as any).code === 'ENOENT') {
                 console.error(chalk.red(`File not found: ${envPath}`));
             } else {
                 console.error(chalk.red(`An error occurred: ${error instanceof Error ? error.message : String(error)}`));

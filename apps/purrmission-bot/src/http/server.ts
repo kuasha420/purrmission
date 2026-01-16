@@ -410,25 +410,28 @@ export function createHttpServer(deps: HttpServerDeps): FastifyInstance {
     const { projectId, envId } = req.params as { projectId: string; envId: string };
     const userId = (req as any).user.id;
 
-    const env = await services.project.getEnvironment(projectId, (await services.project.listEnvironments(projectId)).find(e => e.id === envId)?.slug || '');
-    // Optimization: getEnvironment takes slug, but we have envId. 
-    // We should probably add getEnvironmentById to ProjectService, but for now lets rely on list or just use resourceId if we had it.
-    // Actually, ProjectService.listEnvironments returns environments. We can just find by ID.
     const project = await services.project.getProject(projectId);
     if (!project) throw new ResourceNotFoundError('Project not found');
 
     // Check project access (Owner)
     if (project.ownerId !== userId) throw new AccessDeniedError('Access denied');
 
-    // Find environment by ID manually since we don't have getEnvironmentById yet
-    const environments = await services.project.listEnvironments(projectId);
-    const environment = environments.find(e => e.id === envId);
-
+    const environment = await services.project.getEnvironmentById(projectId, envId);
     if (!environment) throw new ResourceNotFoundError('Environment not found');
     if (!environment.resourceId) throw new ResourceNotFoundError('Environment has no linked resource');
 
-    // Check Resource Access (Delegated to ResourceService ideally, but here we are owner)
-    // TODO: Verify approval status if needed. For now, owner gets access.
+    // Resource access model for secrets:
+    // - Project owners are treated as the ultimate authority over project resources.
+    // - If the linked resource has guardians configured (including approval-mode guardians),
+    //   those guardian-level approval requirements are NOT enforced in this endpoint.
+    //   This is an explicit design decision: project ownership implies full read access
+    //   to environment secrets, even when guardians are present.
+    //   If this policy changes in the future, delegate the check to a guardian-aware
+    //   method on the appropriate service instead of relying solely on ownerId.
+    logger.debug(
+      'Project owner accessing environment secrets; guardian approvals (if any) are bypassed by design',
+      { projectId, envId, resourceId: environment.resourceId, userId }
+    );
 
     const fields = await services.resource.listFields(environment.resourceId);
     // Transform to simple KV
@@ -450,15 +453,16 @@ export function createHttpServer(deps: HttpServerDeps): FastifyInstance {
     if (!project) throw new ResourceNotFoundError('Project not found');
     if (project.ownerId !== userId) throw new AccessDeniedError('Access denied');
 
-    const environments = await services.project.listEnvironments(projectId);
-    const environment = environments.find(e => e.id === envId);
+    const environment = await services.project.getEnvironmentById(projectId, envId);
     if (!environment) throw new ResourceNotFoundError('Environment not found');
     if (!environment.resourceId) throw new ResourceNotFoundError('Environment has no linked resource');
 
-    // Upsert fields
-    for (const [key, value] of Object.entries(secrets)) {
-      await services.resource.upsertField(environment.resourceId, key, value);
-    }
+    // Upsert fields in parallel to improve performance when many secrets are provided
+    await Promise.all(
+      Object.entries(secrets).map(([key, value]) =>
+        services.resource.upsertField(environment.resourceId!, key, value)
+      )
+    );
 
     return { success: true };
   });

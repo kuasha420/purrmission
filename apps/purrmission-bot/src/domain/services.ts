@@ -575,7 +575,16 @@ export class ResourceService {
   }
 
   /**
-   * Upsert a field for a resource.
+   * Create or update a resource field.
+   *
+   * If a field with the given name already exists for the resource, its value is updated.
+   * Otherwise, a new field is created.
+   *
+   * @param resourceId - The identifier of the resource to which the field belongs.
+   * @param name - The name of the field to create or update.
+   * @param value - The value to set for the field.
+   * @returns A promise that resolves to the created or updated {@link ResourceField}.
+   * @throws ResourceNotFoundError If the specified resource does not exist.
    */
   async upsertField(resourceId: string, name: string, value: string): Promise<ResourceField> {
     const { repositories } = this.deps;

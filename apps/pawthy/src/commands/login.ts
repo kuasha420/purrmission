@@ -1,5 +1,5 @@
 import { Command } from 'commander';
-import axios, { AxiosError } from 'axios';
+import axios from 'axios';
 import boxen from 'boxen';
 import chalk from 'chalk';
 import { getApiUrl, setToken } from '../config.js';
@@ -42,8 +42,15 @@ export const loginCommand = new Command('login')
 
             // 3. Poll for Token
             const pollInterval = (interval || 5) * 1000;
+            const expiresInMs = (initResponse.data.expires_in || 1800) * 1000;
+            const startTime = Date.now();
 
             const poll = async () => {
+                if (Date.now() - startTime > expiresInMs) {
+                    console.error(chalk.red('\nAuthentication timed out. Please try again.'));
+                    process.exit(1);
+                }
+
                 try {
                     const tokenResponse = await axios.post<{
                         access_token: string;
@@ -60,22 +67,24 @@ export const loginCommand = new Command('login')
                     process.exit(0);
 
                 } catch (error) {
-                    if (axios.isAxiosError(error) && error.response) {
-                        const errorData = error.response.data as { error: string };
-                        if (errorData.error === 'authorization_pending') {
+                    if (axios.isAxiosError(error) && error.response && error.response.data) {
+                        const errorData = error.response.data as { error?: string };
+                        const errorCode = errorData.error;
+
+                        if (errorCode === 'authorization_pending') {
                             // Continue polling
                             setTimeout(poll, pollInterval);
-                        } else if (errorData.error === 'slow_down') {
+                        } else if (errorCode === 'slow_down') {
                             // Slow down
                             setTimeout(poll, pollInterval * 2);
-                        } else if (errorData.error === 'expired_token') {
+                        } else if (errorCode === 'expired_token') {
                             console.error(chalk.red('\nSession expired. Please try again.'));
                             process.exit(1);
-                        } else if (errorData.error === 'access_denied') {
+                        } else if (errorCode === 'access_denied') {
                             console.error(chalk.red('\nAccess denied by user.'));
                             process.exit(1);
                         } else {
-                            console.error(chalk.red(`\nAuthentication failed: ${errorData.error}`));
+                            console.error(chalk.red(`\nAuthentication failed: ${errorCode || 'Unknown error'}`));
                             process.exit(1);
                         }
                     } else {

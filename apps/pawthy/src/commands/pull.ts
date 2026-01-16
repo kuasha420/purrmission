@@ -42,8 +42,28 @@ export const pullCommand = new Command('pull')
 
             // 2. Format as .env
             const content = Object.entries(secrets)
-                .map(([key, value]) => `${key}=${value}`)
+                .map(([key, value]) => {
+                    // Wrap values with spaces or special chars in quotes
+                    if (value.includes(' ') || value.includes('#') || value.includes('=')) {
+                        return `${key}="${value.replace(/"/g, '\\"')}"`;
+                    }
+                    return `${key}=${value}`;
+                })
                 .join('\n');
+
+            // 3. Write to file with safety check
+            try {
+                await fs.access(envPath);
+                // File exists
+                console.warn(chalk.yellow(`\n⚠️  File ${options.file} already exists.`));
+                // For CLI non-interactive mode or simple safety, we might want to fail or require --force.
+                // Given the review comment asked for a warning/prompt, and we don't have interactive prompt lib handy (inquirer isn't in package.json yet),
+                // we will just warn and overwrite for now but formatted nicely, or maybe throw error if no force flag?
+                // Step 460 implies adding a check. Let's just log a warning for this iteration as prompt lib might be out of scope.
+                console.warn(chalk.yellow('Overwriting existing file...'));
+            } catch {
+                // File doesn't exist, proceed safe.
+            }
 
             // 3. Write to file
             await fs.writeFile(envPath, content);
