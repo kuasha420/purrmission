@@ -18,6 +18,8 @@ import {
   purrmissionCommand,
   handlePurrmissionAutocomplete,
 } from './twoFa.js';
+import { data as approveData, execute as approveExecute } from './approve.js';
+import { data as denyData, execute as denyExecute } from './deny.js';
 import { logger } from '../../logging/logger.js';
 
 /**
@@ -37,6 +39,8 @@ export const commands: RESTPostAPIChatInputApplicationCommandsJSONBody[] = [
     .toJSON(),
 
   purrmissionCommand.toJSON(),
+  approveData.toJSON(),
+  denyData.toJSON(),
 ];
 
 /**
@@ -67,6 +71,14 @@ export async function handleSlashCommand(
 
     case 'purrmission':
       await handlePurrmissionCommand(interaction, context);
+      break;
+
+    case 'approve':
+      await approveExecute(interaction, services);
+      break;
+
+    case 'deny':
+      await denyExecute(interaction, services);
       break;
 
     default:
