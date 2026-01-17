@@ -243,6 +243,22 @@ export class ApprovalService {
   async getApprovalRequest(id: string): Promise<ApprovalRequest | null> {
     return this.deps.repositories.approvalRequests.findById(id);
   }
+
+  /**
+   * Find an active (PENDING or APPROVED) approval request for a resource and requester.
+   */
+  async findActiveApproval(resourceId: string, requesterId: string): Promise<ApprovalRequest | null> {
+    const requests = await this.deps.repositories.approvalRequests.findByResourceId(resourceId);
+    // Filter for the specific requester and active status
+    return (
+      requests.find((r: ApprovalRequest) => {
+        const context = r.context as any;
+        return (
+          context?.requesterId === requesterId && (r.status === 'PENDING' || r.status === 'APPROVED')
+        );
+      }) || null
+    );
+  }
 }
 
 /**

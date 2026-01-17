@@ -20,6 +20,7 @@ import {
 } from '../domain/auth.js';
 import { generateTOTPCode } from '../domain/totp.js';
 import { ResourceNotFoundError } from '../domain/errors.js';
+import type { ApprovalRequest } from '../domain/models.js';
 
 declare module 'fastify' {
   interface FastifyRequest {
@@ -413,33 +414,71 @@ export function createHttpServer(deps: HttpServerDeps): FastifyInstance {
     const project = await services.project.getProject(projectId);
     if (!project) throw new ResourceNotFoundError('Project not found');
 
-    // Check project access (Owner)
-    if (project.ownerId !== userId) throw new AccessDeniedError('Access denied');
-
     const environment = await services.project.getEnvironmentById(projectId, envId);
     if (!environment) throw new ResourceNotFoundError('Environment not found');
     if (!environment.resourceId) throw new ResourceNotFoundError('Environment has no linked resource');
 
-    // Resource access model for secrets:
-    // - Project owners are treated as the ultimate authority over project resources.
-    // - If the linked resource has guardians configured (including approval-mode guardians),
-    //   those guardian-level approval requirements are NOT enforced in this endpoint.
-    //   This is an explicit design decision: project ownership implies full read access
-    //   to environment secrets, even when guardians are present.
-    //   If this policy changes in the future, delegate the check to a guardian-aware
-    //   method on the appropriate service instead of relying solely on ownerId.
-    logger.debug(
-      'Project owner accessing environment secrets; guardian approvals (if any) are bypassed by design',
-      { projectId, envId, resourceId: environment.resourceId, userId }
-    );
+    const resourceId = environment.resourceId;
 
-    const fields = await services.resource.listFields(environment.resourceId);
-    // Transform to simple KV
-    const secrets: Record<string, string> = {};
-    for (const f of fields) {
-      secrets[f.name] = f.value;
+    // Project owner has immediate access
+    if (project.ownerId === userId) {
+      const fields = await services.resource.listFields(resourceId);
+      const secrets: Record<string, string> = {};
+      for (const f of fields) {
+        secrets[f.name] = f.value;
+      }
+      return { secrets };
     }
-    return { secrets };
+
+    // Non-owners must be guardians
+    const isGuardian = await services.resource.isGuardian(resourceId, userId);
+    if (!isGuardian) {
+      throw new AccessDeniedError('Access denied: Only project owners or guardians can access secrets');
+    }
+
+    // Check for active approval
+    let approval: ApprovalRequest | null = await services.approval.findActiveApproval(resourceId, userId);
+
+    if (!approval) {
+      // Create a new approval request
+      const result = await services.approval.createApprovalRequest({
+        resourceId,
+        context: {
+          requesterId: userId,
+          action: 'SECRET_ACCESS',
+          reason: `CLI pull request for ${project.name}:${environment.name}`
+        }
+      });
+
+      if (!result.success || !result.request) {
+        throw new Error(`Failed to create approval request: ${result.error || 'Unknown error'}`);
+      }
+      approval = result.request;
+    }
+
+    if (!approval) {
+      throw new Error('Approval request could not be found or created');
+    }
+
+    if (approval.status === 'PENDING') {
+      rep.status(202);
+      return {
+        status: 'pending',
+        message: 'Secret access is pending approval in Discord',
+        requestId: approval.id
+      };
+    }
+
+    if (approval.status === 'APPROVED') {
+      const fields = await services.resource.listFields(resourceId);
+      const secrets: Record<string, string> = {};
+      for (const f of fields) {
+        secrets[f.name] = f.value;
+      }
+      return { secrets };
+    }
+
+    throw new AccessDeniedError('Secret access request was not approved');
   });
 
   server.put('/api/projects/:projectId/environments/:envId/secrets', {

@@ -106,6 +106,11 @@ export interface ApprovalRequestRepository {
    * Find all pending requests for a resource.
    */
   findPendingByResourceId(resourceId: string): Promise<ApprovalRequest[]>;
+
+  /**
+   * Find all requests for a resource.
+   */
+  findByResourceId(resourceId: string): Promise<ApprovalRequest[]>;
 }
 
 /**
@@ -726,6 +731,15 @@ export class PrismaApprovalRequestRepository implements ApprovalRequestRepositor
       where: {
         resourceId,
         status: 'PENDING',
+      },
+    });
+    return rows.map((row) => this.mapPrismaToDomain(row));
+  }
+
+  async findByResourceId(resourceId: string): Promise<ApprovalRequest[]> {
+    const rows = await this.prisma.approvalRequest.findMany({
+      where: {
+        resourceId,
       },
     });
     return rows.map((row) => this.mapPrismaToDomain(row));
