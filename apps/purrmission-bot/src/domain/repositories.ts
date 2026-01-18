@@ -761,6 +761,9 @@ export class PrismaApprovalRequestRepository implements ApprovalRequestRepositor
       }
     });
 
+    // NOTE: In-memory filtering is used here as a workaround for Prisma's SQLite provider,
+    // which has limitations with JSON path queries. This may have performance implications
+    // for resources with a very large number of approval requests.
     const match = rows.find(row => {
       const ctx = row.context as Record<string, unknown>;
       return ctx?.requesterId === requesterId;

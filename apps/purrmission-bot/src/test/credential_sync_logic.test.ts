@@ -12,7 +12,7 @@ import {
     AuthRepository, TOTPRepository,
 } from '../domain/repositories.js';
 import {
-    Project, Environment, Resource, Guardian, ResourceField, ApprovalRequest,
+    Project, Environment, Resource, Guardian, ResourceField, ApprovalRequest, ApprovalStatus,
     CreateProjectInput, CreateEnvironmentInput, CreateResourceInput, AddGuardianInput, CreateResourceFieldInput, CreateApprovalRequestInput
 } from '../domain/models.js';
 import { randomUUID } from 'crypto';
@@ -146,7 +146,7 @@ class MemApprovalRepo implements ApprovalRequestRepository {
     async findById(id: string): Promise<ApprovalRequest | null> {
         return this.requests.find(r => r.id === id) || null;
     }
-    async updateStatus(id: string, status: any, resolvedBy?: string): Promise<void> {
+    async updateStatus(id: string, status: ApprovalStatus, resolvedBy?: string): Promise<void> {
         const r = this.requests.find(r => r.id === id);
         if (!r) throw new Error('Not found');
         r.status = status;
