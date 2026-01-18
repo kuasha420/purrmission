@@ -1,0 +1,35 @@
+name: Release Pawthy CLI
+
+on:
+  push:
+    tags:
+      - 'pawthy-v*'
+  workflow_dispatch:
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20.x'
+          registry-url: 'https://registry.npmjs.org'
+
+      - name: Install Dependencies
+        run: pnpm install --filter pawthy --frozen-lockfile
+        working-directory: apps/pawthy
+
+      - name: Build
+        run: pnpm build
+        working-directory: apps/pawthy
+
+      - name: Publish to NPM
+        run: pnpm publish --provenance --no-git-checks --access public
+        working-directory: apps/pawthy
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
