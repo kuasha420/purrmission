@@ -33,5 +33,3 @@ jobs:
       - name: Publish to NPM
         run: pnpm publish --provenance --no-git-checks --access public
         working-directory: apps/pawthy
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
