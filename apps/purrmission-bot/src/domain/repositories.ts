@@ -751,21 +751,28 @@ export class PrismaApprovalRequestRepository implements ApprovalRequestRepositor
   }
 
   async findActiveByRequester(resourceId: string, requesterId: string): Promise<ApprovalRequest | null> {
-    const row = await this.prisma.approvalRequest.findFirst({
+    const rows = await this.prisma.approvalRequest.findMany({
       where: {
         resourceId,
         status: { in: ['PENDING', 'APPROVED'] },
-        context: {
-          path: ['requesterId'],
-          equals: requesterId,
-        }
       },
       orderBy: {
         createdAt: 'desc'
       }
     });
 
-    return row ? this.mapPrismaToDomain(row) : null;
+    // NOTE: In-memory filtering is used here as a workaround for Prisma's SQLite provider,
+    // which has limitations with JSON path queries. This may have performance implications
+    // for resources with a very large number of approval requests.
+    const match = rows.find(row => {
+      const ctx = row.context;
+      if (ctx && typeof ctx === 'object' && !Array.isArray(ctx)) {
+        return (ctx as Record<string, unknown>)['requesterId'] === requesterId;
+      }
+      return false;
+    });
+
+    return match ? this.mapPrismaToDomain(match) : null;
   }
 
   private mapPrismaToDomain(row: {

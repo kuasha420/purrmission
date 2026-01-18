@@ -33,15 +33,7 @@ import {
 } from './repositories.js';
 import crypto from 'node:crypto';
 
-export const mockRepositories = {
-    approvalRequests: {
-        create: jest.fn(),
-        findById: jest.fn(),
-        findByResourceId: jest.fn(),
-        updateStatus: jest.fn(),
-        findActiveByRequester: jest.fn(),
-    },
-};
+
 
 /**
  * In-memory implementation of ResourceRepository.
@@ -133,9 +125,7 @@ export class InMemoryGuardianRepository implements GuardianRepository {
     }
 
     async findByUserId(discordUserId: string): Promise<Guardian[]> {
-        return Array.from(this.guardians.values()).filter(
-            (guardian) => guardian.discordUserId === discordUserId
-        );
+        return Array.from(this.guardians.values()).filter(g => g.discordUserId === discordUserId);
     }
 
     async remove(resourceId: string, discordUserId: string): Promise<void> {
@@ -186,6 +176,18 @@ export class InMemoryApprovalRequestRepository implements ApprovalRequestReposit
             }
         }
         return result;
+    }
+
+    async findByResourceId(resourceId: string): Promise<ApprovalRequest[]> {
+        return Array.from(this.requests.values()).filter(r => r.resourceId === resourceId);
+    }
+
+    async findActiveByRequester(resourceId: string, requesterId: string): Promise<ApprovalRequest | null> {
+        return Array.from(this.requests.values()).find(request =>
+            request.resourceId === resourceId &&
+            ['PENDING', 'APPROVED'].includes(request.status) &&
+            (request.context as Record<string, unknown>)['requesterId'] === requesterId
+        ) || null;
     }
 }
 
