@@ -111,6 +111,11 @@ export interface ApprovalRequestRepository {
    * Find all requests for a resource.
    */
   findByResourceId(resourceId: string): Promise<ApprovalRequest[]>;
+
+  /**
+   * Find an active approval request by resource and requester.
+   */
+  findActiveByRequester(resourceId: string, requesterId: string): Promise<ApprovalRequest | null>;
 }
 
 /**
@@ -743,6 +748,24 @@ export class PrismaApprovalRequestRepository implements ApprovalRequestRepositor
       },
     });
     return rows.map((row) => this.mapPrismaToDomain(row));
+  }
+
+  async findActiveByRequester(resourceId: string, requesterId: string): Promise<ApprovalRequest | null> {
+    const row = await this.prisma.approvalRequest.findFirst({
+      where: {
+        resourceId,
+        status: { in: ['PENDING', 'APPROVED'] },
+        context: {
+          path: ['requesterId'],
+          equals: requesterId,
+        }
+      },
+      orderBy: {
+        createdAt: 'desc'
+      }
+    });
+
+    return row ? this.mapPrismaToDomain(row) : null;
   }
 
   private mapPrismaToDomain(row: {

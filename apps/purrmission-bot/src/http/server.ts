@@ -423,11 +423,7 @@ export function createHttpServer(deps: HttpServerDeps): FastifyInstance {
     // Project owner has immediate access
     if (project.ownerId === userId) {
       const fields = await services.resource.listFields(resourceId);
-      const secrets: Record<string, string> = {};
-      for (const f of fields) {
-        secrets[f.name] = f.value;
-      }
-      return { secrets };
+      return { secrets: fieldsToSecrets(fields) };
     }
 
     // Non-owners must be guardians
@@ -471,14 +467,10 @@ export function createHttpServer(deps: HttpServerDeps): FastifyInstance {
 
     if (approval.status === 'APPROVED') {
       const fields = await services.resource.listFields(resourceId);
-      const secrets: Record<string, string> = {};
-      for (const f of fields) {
-        secrets[f.name] = f.value;
-      }
-      return { secrets };
+      return { secrets: fieldsToSecrets(fields) };
     }
 
-    throw new AccessDeniedError('Secret access request was not approved');
+    throw new AccessDeniedError('Access denied: Secrets access not approved');
   });
 
   server.put('/api/projects/:projectId/environments/:envId/secrets', {
@@ -710,4 +702,8 @@ export async function startHttpServer(
   logger.info(`HTTP server listening on port ${port}`);
 
   return server;
+}
+
+function fieldsToSecrets(fields: ResourceField[]): Record<string, string> {
+  return Object.fromEntries(fields.map(f => [f.name, f.value]));
 }
