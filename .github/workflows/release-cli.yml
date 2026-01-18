@@ -31,5 +31,5 @@ jobs:
         run: pnpm --filter pawthy build
 
       - name: Publish to NPM
-        run: pnpm publish --provenance --no-git-checks --access public
+        run: npm publish --provenance --access public
         working-directory: apps/pawthy
