@@ -25,12 +25,10 @@ jobs:
           registry-url: 'https://registry.npmjs.org'
 
       - name: Install Dependencies
-        run: pnpm install --filter pawthy --frozen-lockfile
-        working-directory: apps/pawthy
+        run: pnpm install --frozen-lockfile
 
       - name: Build
-        run: pnpm build
-        working-directory: apps/pawthy
+        run: pnpm --filter pawthy build
 
       - name: Publish to NPM
         run: pnpm publish --provenance --no-git-checks --access public
