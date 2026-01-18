@@ -33,15 +33,7 @@ import {
 } from './repositories.js';
 import crypto from 'node:crypto';
 
-export const mockRepositories = {
-    approvalRequests: {
-        create: jest.fn(),
-        findById: jest.fn(),
-        findByResourceId: jest.fn(),
-        updateStatus: jest.fn(),
-        findActiveByRequester: jest.fn(),
-    },
-};
+
 
 /**
  * In-memory implementation of ResourceRepository.
@@ -186,6 +178,29 @@ export class InMemoryApprovalRequestRepository implements ApprovalRequestReposit
             }
         }
         return result;
+    }
+
+    async findByResourceId(resourceId: string): Promise<ApprovalRequest[]> {
+        const result: ApprovalRequest[] = [];
+        for (const request of this.requests.values()) {
+            if (request.resourceId === resourceId) {
+                result.push(request);
+            }
+        }
+        return result;
+    }
+
+    async findActiveByRequester(resourceId: string, requesterId: string): Promise<ApprovalRequest | null> {
+        for (const request of this.requests.values()) {
+            if (
+                request.resourceId === resourceId &&
+                ['PENDING', 'APPROVED'].includes(request.status) &&
+                (request.context as any)?.requesterId === requesterId
+            ) {
+                return request;
+            }
+        }
+        return null;
     }
 }
 

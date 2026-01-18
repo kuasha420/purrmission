@@ -20,7 +20,7 @@ import {
 } from '../domain/auth.js';
 import { generateTOTPCode } from '../domain/totp.js';
 import { ResourceNotFoundError } from '../domain/errors.js';
-import type { ApprovalRequest } from '../domain/models.js';
+import type { ApprovalRequest, ResourceField } from '../domain/models.js';
 
 declare module 'fastify' {
   interface FastifyRequest {
