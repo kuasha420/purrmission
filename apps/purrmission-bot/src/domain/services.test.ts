@@ -1,9 +1,10 @@
 import { describe, it, beforeEach, mock } from 'node:test';
 import assert from 'node:assert';
-import { ResourceService, type ServiceDependencies } from './services.js';
+import { ResourceService, ApprovalService, type ServiceDependencies } from './services.js';
 import {
     type GuardianRepository,
     type ResourceRepository,
+    type ApprovalRequestRepository,
     type Repositories
 } from './repositories.js';
 import type { Guardian } from './models.js';
@@ -127,6 +128,54 @@ describe('ResourceService', () => {
 
             assert.strictEqual(result.success, false);
             assert.match(result.error!, /Access denied/);
+        });
+    });
+});
+
+describe('ApprovalService', () => {
+    let approvalService: ApprovalService;
+    let mockRepositories: Repositories;
+    let mockApprovalRepo: Partial<ApprovalRequestRepository>;
+    let mockResourceRepo: Partial<ResourceRepository>;
+    let mockGuardianRepo: Partial<GuardianRepository>;
+
+    beforeEach(() => {
+        mockApprovalRepo = {
+            create: mock.fn() as any,
+            findById: mock.fn() as any,
+            updateStatus: mock.fn() as any,
+            findActiveByRequester: mock.fn() as any,
+        };
+        mockResourceRepo = {
+            findById: mock.fn() as any,
+        };
+        mockGuardianRepo = {
+            findByResourceId: mock.fn() as any,
+        };
+
+        mockRepositories = {
+            approvalRequests: mockApprovalRepo as ApprovalRequestRepository,
+            resources: mockResourceRepo as ResourceRepository,
+            guardians: mockGuardianRepo as GuardianRepository,
+        } as Repositories;
+
+        const deps: ServiceDependencies = { repositories: mockRepositories };
+        approvalService = new ApprovalService(deps);
+    });
+
+    describe('findActiveApproval', () => {
+        it('should call repository.findActiveByRequester', async () => {
+            const resourceId = 'res-1';
+            const requesterId = 'user-1';
+            const mockRequest = { id: 'req-1', status: 'PENDING' };
+
+            (mockApprovalRepo.findActiveByRequester as any).mock.mockImplementation(async () => mockRequest);
+
+            const result = await approvalService.findActiveApproval(resourceId, requesterId);
+
+            assert.strictEqual(result, mockRequest);
+            assert.strictEqual((mockApprovalRepo.findActiveByRequester as any).mock.calls.length, 1);
+            assert.deepStrictEqual((mockApprovalRepo.findActiveByRequester as any).mock.calls[0].arguments, [resourceId, requesterId]);
         });
     });
 });

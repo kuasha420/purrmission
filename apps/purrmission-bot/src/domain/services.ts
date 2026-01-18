@@ -243,6 +243,13 @@ export class ApprovalService {
   async getApprovalRequest(id: string): Promise<ApprovalRequest | null> {
     return this.deps.repositories.approvalRequests.findById(id);
   }
+
+  /**
+   * Find an active (PENDING or APPROVED) approval request for a resource and requester.
+   */
+  async findActiveApproval(resourceId: string, requesterId: string): Promise<ApprovalRequest | null> {
+    return this.deps.repositories.approvalRequests.findActiveByRequester(resourceId, requesterId);
+  }
 }
 
 /**

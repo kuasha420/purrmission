@@ -1,7 +1,7 @@
 import { SlashCommandBuilder, ChatInputCommandInteraction } from 'discord.js';
-import { Command } from '../types/command.js';
-import { logger } from '../../logging/logger.js';
 import type { Services } from '../../domain/services.js';
+import { Command } from '../types/command.js';
+import { handleDecisionCommand } from './decision.js';
 
 export const data = new SlashCommandBuilder()
     .setName('deny')
@@ -14,30 +14,7 @@ export const data = new SlashCommandBuilder()
     );
 
 export async function execute(interaction: ChatInputCommandInteraction, services: Services) {
-    const requestId = interaction.options.getString('request-id', true);
-    const userId = interaction.user.id;
-
-    try {
-        const result = await services.approval.recordDecision(requestId, 'DENY', userId);
-
-        if (result.success) {
-            await interaction.reply({
-                content: `🚫 Request DENIED.\nRequest ID: ${requestId}`,
-                ephemeral: true
-            });
-        } else {
-            await interaction.reply({
-                content: `❌ Failed to deny request: ${result.error}`,
-                ephemeral: true
-            });
-        }
-    } catch (error) {
-        logger.error('Error executing deny command', { err: error, requestId, userId });
-        await interaction.reply({
-            content: 'An unexpected error occurred while processing your denial.',
-            ephemeral: true
-        });
-    }
+    await handleDecisionCommand(interaction, services, 'DENY');
 }
 
 export default { data, execute } satisfies Command;

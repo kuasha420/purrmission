@@ -33,6 +33,16 @@ import {
 } from './repositories.js';
 import crypto from 'node:crypto';
 
+export const mockRepositories = {
+    approvalRequests: {
+        create: jest.fn(),
+        findById: jest.fn(),
+        findByResourceId: jest.fn(),
+        updateStatus: jest.fn(),
+        findActiveByRequester: jest.fn(),
+    },
+};
+
 /**
  * In-memory implementation of ResourceRepository.
  * Useful for tests.

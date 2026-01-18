@@ -29,13 +29,24 @@ export const pullCommand = new Command('pull')
             console.log(chalk.dim('Fetching secrets from Purrmission...'));
 
             // 1. Fetch Secrets
-            const res = await axios.get<{ secrets: Record<string, string> }>(`${apiUrl}/api/projects/${config.projectId}/environments/${config.envId}/secrets`, {
-                headers: { Authorization: `Bearer ${token}` },
-            });
+            const res = await axios.get<{ secrets?: Record<string, string>; status?: string; message?: string }>(
+                `${apiUrl}/api/projects/${config.projectId}/environments/${config.envId}/secrets`,
+                {
+                    headers: { Authorization: `Bearer ${token}` },
+                    validateStatus: (status) => status >= 200 && status < 300,
+                }
+            );
+
+            if (res.status === 202) {
+                console.log(`\n${chalk.yellow('⏳ Access Pending Approval')}`);
+                console.log(chalk.white(res.data.message));
+                console.log(chalk.dim('\nPlease run this command again once your request has been approved in Discord.'));
+                return;
+            }
 
             const secrets = res.data.secrets;
 
-            if (Object.keys(secrets).length === 0) {
+            if (!secrets || Object.keys(secrets).length === 0) {
                 console.log(chalk.yellow('No secrets found for this environment.'));
                 return;
             }
