@@ -4,7 +4,7 @@
     "description": "Credential Sync CLI for Purrmission",
     "repository": {
         "type": "git",
-        "url": "https://github.com/kuasha420/purrmission.git",
+        "url": "git+https://github.com/kuasha420/purrmission.git",
         "directory": "apps/pawthy"
     },
     "publishConfig": {
