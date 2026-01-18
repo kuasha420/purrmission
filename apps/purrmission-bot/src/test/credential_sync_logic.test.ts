@@ -9,10 +9,10 @@ import {
     ResourceFieldRepository,
     ApprovalRequestRepository,
     Repositories,
-    AuthRepository, TOTPRepository,
+    AuthRepository, TOTPRepository, AuditRepository,
 } from '../domain/repositories.js';
 import {
-    Project, Environment, Resource, Guardian, ResourceField, ApprovalRequest, ApprovalStatus,
+    Project, Environment, Resource, Guardian, ResourceField, ApprovalRequest, ApprovalStatus, AuditLog,
     CreateProjectInput, CreateEnvironmentInput, CreateResourceInput, AddGuardianInput, CreateResourceFieldInput, CreateApprovalRequestInput
 } from '../domain/models.js';
 import { randomUUID } from 'crypto';
@@ -187,7 +187,7 @@ describe('Credential Sync Logic Smoke Test', () => {
     // Mock unnecessary repos
     const authRepo = {} as AuthRepository;
     const totpRepo = {} as TOTPRepository;
-    const auditRepo = { create: async () => ({}) as any, findByResourceId: async () => [] } as any;
+    const auditRepo: AuditRepository = { create: async () => ({} as AuditLog), findByResourceId: async () => [] };
 
     const repositories: Repositories = {
         projects: projectRepo,

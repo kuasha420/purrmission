@@ -186,7 +186,7 @@ export class InMemoryApprovalRequestRepository implements ApprovalRequestReposit
         return Array.from(this.requests.values()).find(request =>
             request.resourceId === resourceId &&
             ['PENDING', 'APPROVED'].includes(request.status) &&
-            (request.context as any)?.requesterId === requesterId
+            (request.context as Record<string, unknown>)['requesterId'] === requesterId
         ) || null;
     }
 }

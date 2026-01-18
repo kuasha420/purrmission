@@ -765,8 +765,11 @@ export class PrismaApprovalRequestRepository implements ApprovalRequestRepositor
     // which has limitations with JSON path queries. This may have performance implications
     // for resources with a very large number of approval requests.
     const match = rows.find(row => {
-      const ctx = row.context as Record<string, unknown>;
-      return ctx?.requesterId === requesterId;
+      const ctx = row.context;
+      if (ctx && typeof ctx === 'object' && !Array.isArray(ctx)) {
+        return (ctx as Record<string, unknown>)['requesterId'] === requesterId;
+      }
+      return false;
     });
 
     return match ? this.mapPrismaToDomain(match) : null;
