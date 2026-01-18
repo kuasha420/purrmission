@@ -1,7 +1,22 @@
 {
-    "name": "pawthy",
-    "version": "0.1.0",
+    "name": "@psl-oss/pawthy",
+    "version": "0.1.1",
     "description": "Credential Sync CLI for Purrmission",
+    "repository": {
+        "type": "git",
+        "url": "https://github.com/kuasha420/purrmission.git",
+        "directory": "apps/pawthy"
+    },
+    "publishConfig": {
+        "access": "public",
+        "registry": "https://registry.npmjs.org/",
+        "provenance": true
+    },
+    "files": [
+        "dist",
+        "README.md",
+        "package.json"
+    ],
     "bin": {
         "pawthy": "./dist/index.js"
     },
