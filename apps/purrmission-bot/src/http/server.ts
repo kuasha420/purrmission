@@ -318,7 +318,11 @@ export function createHttpServer(deps: HttpServerDeps): FastifyInstance {
     }
 
     // Default handler
-    logger.error('Unhandled API error', { error });
+    logger.error('Unhandled API error', {
+      message: error instanceof Error ? error.message : String(error),
+      stack: error instanceof Error ? error.stack : undefined,
+      raw: error
+    });
     return reply.status(500).send({ error: 'internal_server_error' });
   });
   server.post('/api/projects', {
