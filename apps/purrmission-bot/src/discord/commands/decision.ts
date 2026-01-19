@@ -25,7 +25,64 @@ export async function handleDecisionCommand(
                 content: `${icon} Request ${actionPastTense}.\nRequest ID: ${requestId}`,
                 ephemeral: true,
             });
-            // TODO: Update the original request message if possible (requires message ID storage)
+
+            // Update original message
+            const { request } = result;
+            if (request && request.discordChannelId && request.discordMessageId) {
+                try {
+                    const channel = await interaction.client.channels.fetch(request.discordChannelId);
+                    if (channel && channel.isTextBased()) {
+                        const message = await channel.messages.fetch(request.discordMessageId);
+                        if (message) {
+                            const embed = message.embeds[0];
+                            // Remove buttons by passing empty components
+                            // Append decision to content or modify embed title?
+                            // Let's modify the embed title to include status
+                            const newEmbed = {
+                                ...embed.data,
+                                title: `${embed.title} [${actionPastTense}]`,
+                                color: decision === 'APPROVE' ? 0x00FF00 : 0xFF0000
+                            };
+
+                            await message.edit({
+                                content: `**Request ${actionPastTense}** by <@${userId}>`,
+                                embeds: [newEmbed],
+                                components: []
+                            });
+                        }
+                    }
+                } catch (err) {
+                    logger.error('Failed to update original discord message', { err, requestId });
+                }
+            }
+
+            // Handle Callback logic
+            if (result.action && result.action.type === 'CALL_CALLBACK_URL') {
+                const { url, status } = result.action;
+                try {
+                    // Fire and forget fetch
+                    fetch(url, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            requestId,
+                            status,
+                            resolvedBy: userId,
+                            resolvedAt: new Date().toISOString(),
+                            context: request?.context
+                        })
+                    }).then(res => {
+                        if (!res.ok) {
+                            logger.warn('Callback URL returned non-200 status', { url, status: res.status });
+                        }
+                    }).catch(err => {
+                        logger.error('Failed to call callback URL', { url, err });
+                    });
+                } catch (err) {
+                    logger.error('Error initiating callback request', { err });
+                }
+            }
+
         } else {
             await interaction.reply({
                 content: `❌ Failed to ${decision.toLowerCase()} request: ${result.error}`,
