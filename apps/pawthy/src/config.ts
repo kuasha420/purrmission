@@ -12,7 +12,7 @@ interface PawthyConfig {
 const config = new Conf<PawthyConfig>({
     projectName: 'pawthy',
     defaults: {
-        apiUrl: 'http://localhost:3000', // Default to local for now, can be changed via env or init
+        apiUrl: 'http://localhost:3001', // Changed to 3001
     },
 });
 
@@ -25,7 +25,7 @@ export function setToken(token: string): void {
 }
 
 export function getApiUrl(): string {
-    return process.env.PAWTHY_API_URL || config.get('apiUrl') || 'http://localhost:3000';
+    return process.env.PAWTHY_API_URL || config.get('apiUrl') || 'http://localhost:3001';
 }
 
 export function setApiUrl(url: string): void {

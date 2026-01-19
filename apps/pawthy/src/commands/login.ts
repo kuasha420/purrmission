@@ -18,7 +18,7 @@ export const loginCommand = new Command('login')
                 verification_uri: string;
                 expires_in: number;
                 interval: number;
-            }>(`${apiUrl}/api/auth/device/code`);
+            }>(`${apiUrl}/api/auth/device/code`, {});
 
             const { device_code, user_code, verification_uri, interval } = initResponse.data;
 
