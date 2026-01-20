@@ -80,6 +80,7 @@ jobs:
             prisma
             dist-scripts
             dist-checksums.txt
+            scripts/validate-env.cjs
 
   deploy:
     needs: build
