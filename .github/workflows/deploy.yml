@@ -110,6 +110,7 @@ jobs:
             [ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"
             cd ${{ secrets.SSH_TARGET }}
             pm2 stop Purrmission || true
+            mkdir -p data
             # Flush target directory except .env files and persistent data
             # Preserved: .env*, *.db, *.sqlite, *.sqlite3, WAL/SHM sidecars, data/
             find . -mindepth 1 -maxdepth 1 \
