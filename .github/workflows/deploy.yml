@@ -132,7 +132,7 @@ jobs:
           key: ${{ secrets.SSH_KEY }}
           port: ${{ secrets.SSH_PORT || 22 }}
           target: ${{ secrets.SSH_TARGET }}
-          source: "apps,package.json,pnpm-lock.yaml,pnpm-workspace.yaml,ecosystem.config.cjs,dist-checksums.txt,prisma,dist-scripts"
+          source: "apps,package.json,pnpm-lock.yaml,pnpm-workspace.yaml,ecosystem.config.cjs,dist-checksums.txt,prisma,dist-scripts,scripts/validate-env.cjs"
 
       - name: Verify deployment integrity
         uses: appleboy/ssh-action@v1
@@ -184,6 +184,13 @@ jobs:
             # Note: Migration script requires ENCRYPTION_KEY in .env
             # Run manually if upgrading from pre-encryption version:
             # ENCRYPTION_KEY=<key> tsx scripts/encrypt-totp-secrets.ts --apply
+
+            # Run validation
+            echo "Validating environment..."
+            node scripts/validate-env.cjs
+
+            # Consolidate .env: Remove any nested .env files to avoid confusion
+            find apps -name ".env" -type f -delete
 
             pm2 startOrRestart ecosystem.config.cjs
 

@@ -1,6 +1,17 @@
 import dotenv from 'dotenv';
+import path from 'path';
+import { fileURLToPath } from 'url';
 
 dotenv.config();
+
+// If core variables are missing, try loading from project root
+// This supports local development where .env is at the repository root
+if (!process.env.DATABASE_URL) {
+  const __filename = fileURLToPath(import.meta.url);
+  const __dirname = path.dirname(__filename);
+  const rootEnvPath = path.resolve(__dirname, '../../../../.env');
+  dotenv.config({ path: rootEnvPath });
+}
 import { z } from 'zod';
 
 /**
