@@ -137,6 +137,13 @@ jobs:
             fi
 
             pm2 stop Purrmission || true
+            
+            # Check for write permissions
+            if [ ! -w "." ]; then
+                echo "❌ CRITICAL: Target directory is not writable!"
+                exit 1
+            fi
+
             mkdir -p data
             mkdir -p backups
 

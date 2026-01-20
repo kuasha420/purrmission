@@ -1,6 +1,7 @@
 const fs = require('fs');
 const path = require('path');
 const dotenv = require('dotenv');
+const { z } = require('zod');
 
 // 1. Identify Environment File
 const envPath = path.resolve(process.cwd(), '.env');
@@ -17,51 +18,54 @@ if (result.error) {
     process.exit(1);
 }
 
-// 3. Define Requirements
-const REQUIRED_KEYS = [
-    'DATABASE_URL',
-    'DISCORD_BOT_TOKEN',
-    'DISCORD_CLIENT_ID',
-    'DISCORD_GUILD_ID',
-    'ENCRYPTION_KEY'
-];
+// 3. Define Requirements using Zod
+const envSchema = z.object({
+    DISCORD_BOT_TOKEN: z.string().min(1, 'DISCORD_BOT_TOKEN is required'),
+    DISCORD_CLIENT_ID: z.string().min(1, 'DISCORD_CLIENT_ID is required'),
+    DISCORD_GUILD_ID: z.string().min(1, 'DISCORD_GUILD_ID is required'),
+    ENCRYPTION_KEY: z.string().regex(/^[0-9a-fA-F]{64}$/, 'ENCRYPTION_KEY must be a 64-character hexadecimal string'),
+    DATABASE_URL: z.string().min(1, 'DATABASE_URL is required'),
+    APP_PORT: z.coerce.number().optional().default(3000),
+});
 
-// 4. Validate Presence
-const missing = REQUIRED_KEYS.filter(key => !process.env[key]);
-if (missing.length > 0) {
-    console.error('❌ CRITICAL: Missing required environment variables in .env:');
-    missing.forEach(key => console.error(`   - ${key}`));
+// 4. Validate Environment
+const validation = envSchema.safeParse(process.env);
+
+if (!validation.success) {
+    console.error('❌ CRITICAL: Invalid environment configuration:');
+    const formatted = validation.error.format();
+    Object.keys(formatted).forEach(key => {
+        if (key === '_errors') return;
+        if (formatted[key] && formatted[key]._errors && formatted[key]._errors.length > 0) {
+            console.error(`   - ${key}: ${formatted[key]._errors.join(', ')}`);
+        }
+    });
     process.exit(1);
 }
 
-// 5. Validate Encryption Key Format
-if (!/^[0-9a-fA-F]{64}$/.test(process.env.ENCRYPTION_KEY)) {
-    console.error('❌ CRITICAL: ENCRYPTION_KEY must be a 64-character hexadecimal string.');
-    process.exit(1);
-}
+const { DATABASE_URL } = validation.data;
 
-// 6. Validate Persistence Location (ENFORCEMENT)
-const dbUrl = process.env.DATABASE_URL;
-if (!dbUrl.startsWith('file:')) {
+// 5. Validate Persistence Location (ENFORCEMENT)
+if (!DATABASE_URL.startsWith('file:')) {
     console.warn('⚠️  Non-SQLite database detected. Ensure external DB persistence is handled.');
 } else {
     // SQLite Specific Enforcement
     // We expect patterns like: file:./data/prod.db (relative to CWD) OR file:../data/prod.db (relative to prisma/)
 
-    const isFragile = dbUrl.includes('/prisma/') ||
-        dbUrl.includes('/apps/') ||
-        dbUrl.includes('/dist/') ||
-        dbUrl.includes('./dev.db'); // default dev name
+    const isFragile = DATABASE_URL.includes('/prisma/') ||
+        DATABASE_URL.includes('/apps/') ||
+        DATABASE_URL.includes('/dist/') ||
+        DATABASE_URL.includes('./dev.db'); // default dev name
 
     if (isFragile) {
         console.error('❌ CRITICAL: DATABASE_URL points to a volatile directory.');
-        console.error(`   Current value: ${dbUrl}`);
+        console.error(`   Current value: ${DATABASE_URL}`);
         console.error('   Deployment will result in DATA LOSS as these directories are flushed.');
         console.error('   FIX: Update .env to use DATABASE_URL="file:../data/purrmission.db"');
         process.exit(1);
     }
 
-    if (!dbUrl.includes('/data/')) {
+    if (!DATABASE_URL.includes('/data/')) {
         console.error('❌ CRITICAL: DATABASE_URL must point to the "data/" directory for persistence.');
         console.error('   FIX: Update .env to use DATABASE_URL="file:../data/purrmission.db"');
         process.exit(1);

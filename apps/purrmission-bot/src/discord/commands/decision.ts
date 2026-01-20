@@ -113,9 +113,17 @@ async function updateDiscordMessage(
         }
 
         const message = await channel.messages.fetch(request.discordMessageId);
-        const embed = message.embeds[0];
+        if (!message) {
+            logger.warn('Could not fetch the original message.', {
+                messageId: request.discordMessageId,
+                requestId: request.id
+            });
+            return;
+        }
 
-        if (!embed) {
+        const embedData = message.embeds[0]?.data;
+
+        if (!embedData) {
             logger.warn('Original message has no embeds to update.', {
                 requestId: request.id,
                 messageId: message.id
@@ -129,8 +137,8 @@ async function updateDiscordMessage(
         }
 
         const newEmbed = {
-            ...embed.data,
-            title: `${embed.title} [${actionPastTense}]`,
+            ...embedData,
+            title: `${embedData.title || 'Approval Request'} [${actionPastTense}]`,
             color: decision === 'APPROVE' ? Colors.Green : Colors.Red
         };
 
