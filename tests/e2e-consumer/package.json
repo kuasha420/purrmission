@@ -1,0 +1,16 @@
+{
+  "name": "e2e-consumer",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "dependencies": {
+    "@psl-oss/pawthy": "file:../../dist-packages/psl-oss-pawthy-0.1.2.tgz"
+  }
+}
