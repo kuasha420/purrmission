@@ -1,7 +1,7 @@
-import { ChatInputCommandInteraction } from 'discord.js';
+import { ChatInputCommandInteraction, Colors } from 'discord.js';
 import type { Services } from '../../domain/services.js';
 import { logger } from '../../logging/logger.js';
-import type { ApprovalDecision } from '../../domain/models.js';
+import type { ApprovalDecision, ApprovalRequest } from '../../domain/models.js';
 
 /**
  * Handle approval/denial decision commands.
@@ -28,33 +28,10 @@ export async function handleDecisionCommand(
 
             // Update original message
             const { request } = result;
-            if (request && request.discordChannelId && request.discordMessageId) {
-                try {
-                    const channel = await interaction.client.channels.fetch(request.discordChannelId);
-                    if (channel && channel.isTextBased()) {
-                        const message = await channel.messages.fetch(request.discordMessageId);
-                        if (message) {
-                            const embed = message.embeds[0];
-                            // Remove buttons by passing empty components
-                            // Append decision to content or modify embed title?
-                            // Let's modify the embed title to include status
-                            const newEmbed = {
-                                ...embed.data,
-                                title: `${embed.title} [${actionPastTense}]`,
-                                color: decision === 'APPROVE' ? 0x00FF00 : 0xFF0000
-                            };
-
-                            await message.edit({
-                                content: `**Request ${actionPastTense}** by <@${userId}>`,
-                                embeds: [newEmbed],
-                                components: []
-                            });
-                        }
-                    }
-                } catch (err) {
-                    logger.error('Failed to update original discord message', { err, requestId });
-                }
+            if (request) {
+                await updateDiscordMessage(interaction, request, decision, userId, actionPastTense);
             }
+
 
             // Handle Callback logic
             if (result.action && result.action.type === 'CALL_CALLBACK_URL') {
@@ -108,5 +85,62 @@ export async function handleDecisionCommand(
         } catch (replyError) {
             logger.error('Failed to send error response', { err: replyError });
         }
+    }
+}
+
+/**
+ * Updates the original Discord request message with the decision.
+ */
+async function updateDiscordMessage(
+    interaction: ChatInputCommandInteraction,
+    request: ApprovalRequest,
+    decision: ApprovalDecision,
+    userId: string,
+    actionPastTense: string
+): Promise<void> {
+    if (!request.discordChannelId || !request.discordMessageId) {
+        return;
+    }
+
+    try {
+        const channel = await interaction.client.channels.fetch(request.discordChannelId);
+        if (!channel?.isTextBased()) {
+            logger.warn('Could not find a text-based channel to update the message.', {
+                channelId: request.discordChannelId,
+                requestId: request.id
+            });
+            return;
+        }
+
+        const message = await channel.messages.fetch(request.discordMessageId);
+        const embed = message.embeds[0];
+
+        if (!embed) {
+            logger.warn('Original message has no embeds to update.', {
+                requestId: request.id,
+                messageId: message.id
+            });
+            // Fallback: just update content and remove buttons
+            await message.edit({
+                content: `**Request ${actionPastTense}** by <@${userId}>`,
+                components: []
+            });
+            return;
+        }
+
+        const newEmbed = {
+            ...embed.data,
+            title: `${embed.title} [${actionPastTense}]`,
+            color: decision === 'APPROVE' ? Colors.Green : Colors.Red
+        };
+
+        await message.edit({
+            content: `**Request ${actionPastTense}** by <@${userId}>`,
+            embeds: [newEmbed],
+            components: []
+        });
+
+    } catch (err) {
+        logger.error('Failed to update original discord message', { err, requestId: request.id });
     }
 }
