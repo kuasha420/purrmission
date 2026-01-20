@@ -20,7 +20,6 @@ on:
       - 'prisma/**'
   workflow_dispatch:
 
-
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -43,7 +42,6 @@ jobs:
       - name: Install Dependencies
         run: pnpm install --frozen-lockfile
 
-
       - name: Generate Prisma Client
         run: pnpm prisma generate
 
@@ -63,7 +61,7 @@ jobs:
           DISCORD_BOT_TOKEN: ${{ secrets.DISCORD_BOT_TOKEN }}
           DISCORD_CLIENT_ID: ${{ secrets.DISCORD_CLIENT_ID }}
           DISCORD_GUILD_ID: ${{ secrets.DISCORD_GUILD_ID }}
-          DATABASE_URL: "file:./dev.db" # Required for core validation
+          DATABASE_URL: 'file:./dev.db' # Required for core validation
         run: pnpm discord:deploy-commands
 
       - name: Upload artifact
@@ -92,7 +90,6 @@ jobs:
         with:
           name: bot-build
 
-
       - name: Verify checksums
         run: |
           echo "Verifying artifact integrity..."
@@ -111,22 +108,30 @@ jobs:
             [ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"
             cd ${{ secrets.SSH_TARGET }}
 
-            # 1. PRE-FLIGHT VALIDATION (Atomic Fail)
-            # We copy the new version of the script separately or use the existing one if we can.
-            # Actually, scp happens after this. So we rely on a shell-based pre-check for the very first deploy or if script changes.
-            # But we can also scp just the script first. 
-            
+            # 1. PRE-FLIGHT PERSISTENCE VALIDATION
+            # This check runs BEFORE any data is deleted or PM2 is stopped.
+            # It uses shell tools to ensure the .env is configured safely.
+
             echo "Running pre-flight persistence check..."
             if [ ! -f ".env" ]; then
-                echo "❌ .env missing in root!"
+                echo "❌ .env missing in root! Please create it manually with required credentials."
                 exit 1
             fi
 
-            # Check for fragile DB paths manually in shell as a fallback
-            if grep -q "DATABASE_URL=.*prisma/" .env; then
-                echo "❌ CRITICAL: DATABASE_URL points to prisma/ folder. Deployment ABORTED to prevent data loss."
-                echo "Please move your DB to data/ and update .env manually."
-                exit 1
+            # Robust shell-based DATABASE_URL parsing
+            db_url_line="$(grep -E '^[[:space:]]*DATABASE_URL[[:space:]]*=' .env | tail -n 1 || true)"
+            if [ -n "$db_url_line" ]; then
+                db_url_value="${db_url_line#*=}"
+                # Trim surrounding whitespace and optional quotes
+                db_url_value="$(printf '%s\n' "$db_url_value" | sed -E 's/^[[:space:]]*["'\'']?//; s/["'\''][[:space:]]*$//')"
+                
+                case "$db_url_value" in
+                  *prisma/*|*apps/*|*dist/*|*./dev.db)
+                    echo "❌ CRITICAL: DATABASE_URL points to a volatile folder ($db_url_value)."
+                    echo "Deployment ABORTED to prevent data loss. Move your DB to data/ and update .env."
+                    exit 1
+                    ;;
+                esac
             fi
 
             # Double check for unexpected data in folders we are about to delete
@@ -137,9 +142,10 @@ jobs:
                 exit 1
             fi
 
+            # Stop the bot
             pm2 stop Purrmission || true
-            
-            # Check for write permissions
+
+            # 2. TARGET DIRECTORY PREPARATION
             if [ ! -w "." ]; then
                 echo "❌ CRITICAL: Target directory is not writable!"
                 exit 1
@@ -148,10 +154,36 @@ jobs:
             mkdir -p data
             mkdir -p backups
 
-            # Backup database before deployment
-            if [ -f "data/purrmission.db" ]; then
-                echo "Backing up database..."
-                cp "data/purrmission.db" "backups/purrmission.db.$(date +%Y%m%d%H%M%S).bak"
+            # 3. DYNAMIC DATABASE BACKUP
+            # Parse DATABASE_URL to find the actual file to backup
+            DB_PATH=""
+            if [ -n "$db_url_value" ]; then
+                case "$db_url_value" in
+                    file:*|sqlite:*)
+                        # Remove scheme and normalize
+                        path_part="${db_url_value#file:}"
+                        path_part="${path_part#sqlite:}"
+                        # Handle sqlite:/// absolute paths or file: relative
+                        while [ "${path_part#"/"}" != "$path_part" ]; do path_part="${path_part#"/"}"; done
+                        
+                        # If it doesn't start with /, treat as relative to root
+                        case "$path_part" in
+                            /*) DB_PATH="$path_part" ;;
+                            *) DB_PATH="./$path_part" ;;
+                        esac
+                        ;;
+                esac
+            fi
+
+            # Fallback to default if parsing failed
+            if [ -z "$DB_PATH" ]; then DB_PATH="data/purrmission.db"; fi
+
+            if [ -f "$DB_PATH" ]; then
+                echo "Backing up database from '$DB_PATH'..."
+                BACKUP_NAME="$(basename "$DB_PATH").$(date +%Y%m%d%H%M%S).bak"
+                cp "$DB_PATH" "backups/$BACKUP_NAME"
+            else
+                echo "No database file found at '$DB_PATH'; skipping backup."
             fi
 
             # Flush target directory except .env files and persistent data
@@ -176,7 +208,7 @@ jobs:
           key: ${{ secrets.SSH_KEY }}
           port: ${{ secrets.SSH_PORT || 22 }}
           target: ${{ secrets.SSH_TARGET }}
-          source: "apps,package.json,pnpm-lock.yaml,pnpm-workspace.yaml,ecosystem.config.cjs,dist-checksums.txt,prisma,dist-scripts,scripts/validate-env.cjs"
+          source: 'apps,package.json,pnpm-lock.yaml,pnpm-workspace.yaml,ecosystem.config.cjs,dist-checksums.txt,prisma,dist-scripts,scripts/validate-env.cjs'
 
       - name: Verify deployment integrity
         uses: appleboy/ssh-action@v1
@@ -203,39 +235,24 @@ jobs:
             export NVM_DIR="$HOME/.nvm"
             [ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"
             cd ${{ secrets.SSH_TARGET }}
-            
-            # Enable Corepack
+
             corepack enable
-            
-            # Prepare pnpm
             corepack prepare pnpm@9.15.1 --activate
 
-            # Ensure pm2 is installed globally if not present
             if ! command -v pm2 &> /dev/null; then
-                echo "pm2 not found, installing..."
                 pnpm add -g pm2
             fi
 
             pnpm install --frozen-lockfile
-            
-            echo "Generating Prisma Client..."
             pnpm prisma:generate
-
-            echo "Running database migrations..."
             pnpm prisma:deploy
 
-            echo "Checking for TOTP migration needs..."
-            # Note: Migration script requires ENCRYPTION_KEY in .env
-            # Run manually if upgrading from pre-encryption version:
-            # ENCRYPTION_KEY=<key> tsx scripts/encrypt-totp-secrets.ts --apply
-
-            # Run validation
-            echo "Validating environment..."
+            # 4. POST-DEPLOY VALIDATION
+            # Ensures the environment is complete and encryption key is valid
+            echo "Validating environment configuration..."
             node scripts/validate-env.cjs
 
-            # Consolidate .env: Remove any nested .env files to avoid confusion
+            # Cleanup rogue nested .env files
             find apps -name ".env" -type f -delete
 
             pm2 startOrRestart ecosystem.config.cjs
-
-
