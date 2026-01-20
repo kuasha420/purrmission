@@ -16,17 +16,21 @@ export interface AccessPolicyResult {
     reason?: string;
 }
 
+import type { Repositories } from './repositories.js';
+
 /**
  * Determine if an actor can access a resource.
  * 
  * Logic:
  * 1. Owners and Guardians have DIRECT access (no approval needed).
- * 2. Everyone else requires APPROVAL (if flow exists) or is DENIED (if flow not supported yet).
+ * 2. If an active, approved request exists for the actor -> ALLOWED.
+ * 3. Otherwise -> APPROVAL_REQUIRED (or DENIED if functionality limited).
  */
 export async function checkAccessPolicy(
     resource: Resource,
     guardians: Guardian[],
-    actorDiscordId: string
+    actorDiscordId: string,
+    repositories?: Repositories
 ): Promise<AccessPolicyResult> {
     const isGuardian = guardians.some(g => g.discordUserId === actorDiscordId);
 
@@ -38,8 +42,25 @@ export async function checkAccessPolicy(
         };
     }
 
-    // Future: Check if there's an active, approved request for this actor?
-    // For now, non-guardians always require approval flow to be initiated.
+    if (repositories) {
+        const activeRequest = await repositories.approvalRequests.findActiveByRequester(resource.id, actorDiscordId);
+        if (activeRequest && activeRequest.status === 'APPROVED') {
+            // Check expiry if applicable
+            if (activeRequest.expiresAt && activeRequest.expiresAt < new Date()) {
+                return {
+                    allowed: false,
+                    requiresApproval: true,
+                    reason: 'Previous approval has expired',
+                };
+            }
+
+            return {
+                allowed: true,
+                requiresApproval: false,
+                reason: 'Active approval granted',
+            };
+        }
+    }
 
     return {
         allowed: false,

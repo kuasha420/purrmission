@@ -542,7 +542,7 @@ async function handleFieldsGet(
 
     // Check access policy
     const guardians = await context.repositories.guardians.findByResourceId(resourceId);
-    const accessResult = await checkAccessPolicy(resource, guardians, userId);
+    const accessResult = await checkAccessPolicy(resource, guardians, userId, context.repositories);
 
     if (requiresApproval(accessResult)) {
         // Create approval request for field access
@@ -858,7 +858,7 @@ async function handleGet2FA(
 
     // Check access policy
     const guardians = await context.repositories.guardians.findByResourceId(resourceId);
-    const accessResult = await checkAccessPolicy(resource, guardians, userId);
+    const accessResult = await checkAccessPolicy(resource, guardians, userId, context.repositories);
 
     if (requiresApproval(accessResult)) {
         // Create approval request for 2FA access
