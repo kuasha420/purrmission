@@ -1,7 +1,34 @@
+import fs from 'fs';
+import path from 'path';
+import { fileURLToPath } from 'url';
 import dotenv from 'dotenv';
-
-dotenv.config();
 import { z } from 'zod';
+
+// Load local .env first
+dotenv.config();
+
+/**
+ * If core configuration is missing, search upward for a root .env file.
+ * This supports nested application structures during development where the
+ * .env file typically resides at the repository root.
+ */
+const CORE_VARS = ['DATABASE_URL', 'DISCORD_BOT_TOKEN', 'DISCORD_CLIENT_ID', 'DISCORD_GUILD_ID'];
+const isMissingCore = CORE_VARS.some((v) => !process.env[v]);
+
+if (isMissingCore) {
+  const __filename = fileURLToPath(import.meta.url);
+  let currentDir = path.dirname(__filename);
+
+  // Search upward until we find a .env file or reach the filesystem root
+  while (currentDir !== path.dirname(currentDir)) {
+    const candidatePath = path.join(currentDir, '.env');
+    if (fs.existsSync(candidatePath)) {
+      dotenv.config({ path: candidatePath });
+      break;
+    }
+    currentDir = path.dirname(currentDir);
+  }
+}
 
 /**
  * Environment configuration schema using Zod for validation.
@@ -24,7 +51,9 @@ const coreSchema = z.object({
 const encryptionSchema = z.object({
   // Encryption Configuration (required for encrypting TOTP secrets and resource fields at rest)
   // 32-byte hex string (64 characters)
-  ENCRYPTION_KEY: z.string().regex(/^[0-9a-fA-F]{64}$/, 'ENCRYPTION_KEY must be a 64-character hexadecimal string'),
+  ENCRYPTION_KEY: z
+    .string()
+    .regex(/^[0-9a-fA-F]{64}$/, 'ENCRYPTION_KEY must be a 64-character hexadecimal string'),
 });
 
 export const fullSchema = coreSchema.merge(encryptionSchema);
@@ -49,7 +78,7 @@ function loadEnv() {
     get ENCRYPTION_KEY() {
       const result = encryptionSchema.safeParse(process.env);
       if (!result.success) {
-        // Return undefined instead of crashing immediately, allowing callers to handle or 
+        // Return undefined instead of crashing immediately, allowing callers to handle or
         // the startup validator to catch it.
         return undefined as unknown as string; // Assert as string to match Env type
       }
