@@ -109,6 +109,33 @@ jobs:
             export NVM_DIR="$HOME/.nvm"
             [ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"
             cd ${{ secrets.SSH_TARGET }}
+
+            # 1. PRE-FLIGHT VALIDATION (Atomic Fail)
+            # We copy the new version of the script separately or use the existing one if we can.
+            # Actually, scp happens after this. So we rely on a shell-based pre-check for the very first deploy or if script changes.
+            # But we can also scp just the script first. 
+            
+            echo "Running pre-flight persistence check..."
+            if [ ! -f ".env" ]; then
+                echo "❌ .env missing in root!"
+                exit 1
+            fi
+
+            # Check for fragile DB paths manually in shell as a fallback
+            if grep -q "DATABASE_URL=.*prisma/" .env; then
+                echo "❌ CRITICAL: DATABASE_URL points to prisma/ folder. Deployment ABORTED to prevent data loss."
+                echo "Please move your DB to data/ and update .env manually."
+                exit 1
+            fi
+
+            # Double check for unexpected data in folders we are about to delete
+            if [ -d "prisma/data" ] || [ -d "prisma/db" ]; then
+                echo "❌ CRITICAL: Found database data in the 'prisma' directory."
+                echo "Deployment ABORTED because the 'prisma' directory is about to be DELETED."
+                echo "ACTION: Move the database to the root 'data' folder and update .env before redeploying."
+                exit 1
+            fi
+
             pm2 stop Purrmission || true
             mkdir -p data
             mkdir -p backups

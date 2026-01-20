@@ -40,6 +40,14 @@ The `deploy.yml` workflow now performs a safety backup **before** touching any f
 ### 4. Environment Variables
 - **Consolidation**: Nested `.env` files in `apps/` are **forbidden** and deleted during deployment.
 - **Root .env**: The repository root `.env` is the ONLY valid config file.
-- **Validation**: Deployment runs `scripts/validate-env.cjs` before startup. It fails the deploy if:
-  - `.env` is missing.
-  - Critical keys (`DATABASE_URL`, `ENCRYPTION_KEY`, etc.) are missing.
+- **Validation**: Deployment runs a two-tier validation:
+  1. **Pre-flight (Shell)**: Strictly checks for "volatile" `DATABASE_URL` patterns (e.g. `prisma/`, `dev.db`). Fails BEFORE any data is deleted.
+  2. **Post-copy (Node)**: Runs `scripts/validate-env.cjs` to ensure all keys like `ENCRYPTION_KEY` are present and valid.
+
+### 5. Failure Recovery
+If the deployment fails during "Pre-flight persistence check":
+1. Connect via SSH.
+2. Verify the location of your `.db` file (should be in root `data/`).
+3. If it's in `prisma/data/`, move it to `data/` manually.
+4. Update `.env` to `DATABASE_URL="file:../data/purrmission.db"`.
+5. Retrigger the deployment.
