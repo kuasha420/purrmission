@@ -111,8 +111,16 @@ jobs:
             cd ${{ secrets.SSH_TARGET }}
             pm2 stop Purrmission || true
             mkdir -p data
+            mkdir -p backups
+
+            # Backup database before deployment
+            if [ -f "data/purrmission.db" ]; then
+                echo "Backing up database..."
+                cp "data/purrmission.db" "backups/purrmission.db.$(date +%Y%m%d%H%M%S).bak"
+            fi
+
             # Flush target directory except .env files and persistent data
-            # Preserved: .env*, *.db, *.sqlite, *.sqlite3, WAL/SHM sidecars, data/
+            # Preserved: .env*, *.db (legacy), data/, backups/
             find . -mindepth 1 -maxdepth 1 \
               ! -name '.env*' \
               ! -name '*.db' \
@@ -122,6 +130,7 @@ jobs:
               ! -name '*.sqlite-*' \
               ! -name '*.sqlite3-*' \
               ! -name 'data' \
+              ! -name 'backups' \
               -exec rm -rf {} +
 
       - name: Copy files to server
