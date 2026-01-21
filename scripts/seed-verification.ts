@@ -1,14 +1,18 @@
 import { PrismaClient } from '@prisma/client';
-import { encryptValue } from '../apps/purrmission-bot/src/infra/crypto.js';
+import { encryptWithKey } from '../apps/purrmission-bot/src/infra/crypto.js';
 
 const prisma = new PrismaClient();
 
-if (!process.env.ENCRYPTION_KEY) {
+const encryptionKeyHex = process.env.ENCRYPTION_KEY;
+if (!encryptionKeyHex) {
     throw new Error('ENCRYPTION_KEY environment variable is not set. Please provide a 32-byte hex-encoded key.');
 }
+const encryptionKey = Buffer.from(encryptionKeyHex, 'hex');
 
 async function main() {
-    const userId = '342649576785838080';
+    const userId = process.env.SEED_USER_ID || '342649576785838080';
+    const apiKey = process.env.SEED_API_KEY || 'test-api-key';
+
     console.log(`Seeding data for User ID: ${userId}`);
 
     // 1. Create Project
@@ -25,7 +29,7 @@ async function main() {
                         create: {
                             name: 'Test Database Credentials',
                             mode: 'ONE_OF_N',
-                            apiKey: 'test-api-key',
+                            apiKey: apiKey,
                             guardians: {
                                 create: {
                                     discordUserId: userId,
@@ -34,9 +38,9 @@ async function main() {
                             },
                             fields: {
                                 create: [
-                                    { name: 'DB_HOST', value: encryptValue('localhost') },
-                                    { name: 'DB_USER', value: encryptValue('admin') },
-                                    { name: 'DB_PASS', value: encryptValue('super_secret_password') }
+                                    { name: 'DB_HOST', value: encryptWithKey('localhost', encryptionKey) },
+                                    { name: 'DB_USER', value: encryptWithKey('admin', encryptionKey) },
+                                    { name: 'DB_PASS', value: encryptWithKey('P@wthY-S3cr3t-V3r1fy-Pa$$', encryptionKey) }
                                 ]
                             }
                         }

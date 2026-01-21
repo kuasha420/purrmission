@@ -59,16 +59,15 @@ export function validateEncryptionConfig(): void {
 }
 
 /**
- * Encrypt a plaintext string using AES-256-GCM.
+ * Encrypt a plaintext string using AES-256-GCM with a specific key.
  *
  * @param plaintext - The string to encrypt
- * @param keyBuffer - Optional explicit key to use (defaults to env.ENCRYPTION_KEY)
+ * @param keyBuffer - The 32-byte key to use
  * @returns Versioned ciphertext string (e.g., "v1:iv:authTag:ciphertext")
  */
-export function encryptValue(plaintext: string, keyBuffer?: Buffer): string {
-    const key = keyBuffer || getEncryptionKey();
+export function encryptWithKey(plaintext: string, keyBuffer: Buffer): string {
     const iv = crypto.randomBytes(IV_LENGTH);
-    const cipher = crypto.createCipheriv(ALGORITHM, key, iv, {
+    const cipher = crypto.createCipheriv(ALGORITHM, keyBuffer, iv, {
         authTagLength: AUTH_TAG_LENGTH,
     });
 
@@ -77,6 +76,18 @@ export function encryptValue(plaintext: string, keyBuffer?: Buffer): string {
 
     // Format: v1:base64(iv):base64(authTag):base64(ciphertext)
     return `${V1_PREFIX}${iv.toString('base64')}:${authTag.toString('base64')}:${encrypted.toString('base64')}`;
+}
+
+/**
+ * Encrypt a plaintext string using AES-256-GCM.
+ *
+ * @param plaintext - The string to encrypt
+ * @param keyBuffer - Optional explicit key to use (defaults to env.ENCRYPTION_KEY)
+ * @returns Versioned ciphertext string (e.g., "v1:iv:authTag:ciphertext")
+ */
+export function encryptValue(plaintext: string, keyBuffer?: Buffer): string {
+    const key = keyBuffer || getEncryptionKey();
+    return encryptWithKey(plaintext, key);
 }
 
 /**
