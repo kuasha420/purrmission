@@ -40,9 +40,11 @@ const coreSchema = z.object({
   DISCORD_BOT_TOKEN: z.string().min(1, 'DISCORD_BOT_TOKEN is required'),
   DISCORD_CLIENT_ID: z.string().min(1, 'DISCORD_CLIENT_ID is required'),
   DISCORD_GUILD_ID: z.string().min(1, 'DISCORD_GUILD_ID is required'),
+  DISCORD_ANNOUNCE_CHANNEL_ID: z.string().min(1, 'DISCORD_ANNOUNCE_CHANNEL_ID is required'),
 
   // HTTP Server Configuration
   APP_PORT: z.coerce.number().default(3000),
+  EXTERNAL_API_URL: z.string().url().default('http://localhost:3000'),
 
   // Database Configuration
   DATABASE_URL: z.string().min(1, 'DATABASE_URL is required'),
