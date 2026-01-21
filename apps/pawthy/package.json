@@ -1,6 +1,6 @@
 {
     "name": "@psl-oss/pawthy",
-    "version": "0.1.2",
+    "version": "0.2.1",
     "description": "Credential Sync CLI for Purrmission",
     "repository": {
         "type": "git",
