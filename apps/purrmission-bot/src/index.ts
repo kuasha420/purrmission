@@ -80,7 +80,10 @@ async function main(): Promise<void> {
   const statusService = new StatusService();
   // Don't await this to avoid blocking startup if Discord API is slow
   statusService.sendOnlineAnnouncement(discordClient).catch(err => {
-    logger.error('Failed to send ready announcement', err);
+    logger.error('Failed to send ready announcement', {
+      error: err instanceof Error ? err.message : String(err),
+      stack: err instanceof Error ? err.stack : undefined,
+    });
   });
 
   // Log startup summary
@@ -101,7 +104,10 @@ async function main(): Promise<void> {
     try {
       await statusService.sendOfflineAnnouncement(discordClient, signal);
     } catch (err) {
-      logger.warn('Failed to send offline announcement during shutdown', err);
+      logger.warn('Failed to send offline announcement during shutdown', {
+        error: err instanceof Error ? err.message : String(err),
+        stack: err instanceof Error ? err.stack : undefined,
+      });
     }
 
     try {

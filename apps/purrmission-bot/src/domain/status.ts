@@ -35,13 +35,13 @@ export class StatusService {
 
             const textChannel = channel as TextChannel;
             // Use configured external URL or fallback to localhost
-            const apiUrL = env.EXTERNAL_API_URL || `http://localhost:${env.APP_PORT}`;
+            const apiUrl = env.EXTERNAL_API_URL || `http://localhost:${env.APP_PORT}`;
 
             const embed = new EmbedBuilder()
                 .setTitle('🐱 Purrmission Bot - Online')
                 .setDescription(`The bot is now online and protecting your resources! Built with 💖 by the PurrfectSoft Team.`)
                 .setColor(Colors.Green)
-                .setThumbnail(client.user?.displayAvatarURL() || null)
+                .setThumbnail(client.user?.displayAvatarURL() ?? null)
                 .addFields(
                     {
                         name: '🚀 Status',
@@ -50,7 +50,7 @@ export class StatusService {
                     },
                     {
                         name: '🌐 API Endpoint',
-                        value: `[${apiUrL}](${apiUrL}/health)`,
+                        value: `[${apiUrl}](${apiUrl}/health)`,
                         inline: true
                     },
                     {
@@ -59,7 +59,7 @@ export class StatusService {
                             '• `/purrmission resource list` - View protected resources',
                             '• `/purrmission 2fa get` - Get your 2FA codes',
                             '• `/purrmission guardian add` - Add a resource guardian',
-                            '• `/approve` - Approve a pending request (buttons prefered!)'
+                            '• `/approve` - Approve a pending request (buttons preferred!)'
                         ].join('\n')
                     },
                     {
@@ -69,7 +69,7 @@ export class StatusService {
                 )
                 .setFooter({
                     text: `Purrmission v${process.env.npm_package_version || '1.0.0'} • PID: ${process.pid}`,
-                    iconURL: client.user?.displayAvatarURL() || undefined
+                    iconURL: client.user?.displayAvatarURL() ?? undefined
                 })
                 .setTimestamp();
 
@@ -78,6 +78,7 @@ export class StatusService {
         } catch (error) {
             logger.error('Failed to send online announcement', {
                 error: error instanceof Error ? error.message : String(error),
+                stack: error instanceof Error ? error.stack : undefined,
             });
         }
     }
@@ -90,11 +91,17 @@ export class StatusService {
      */
     async sendOfflineAnnouncement(client: Client, reason: string): Promise<void> {
         const channelId = env.DISCORD_ANNOUNCE_CHANNEL_ID;
-        if (!channelId) return;
+        if (!channelId) {
+            logger.debug('No announcement channel configured, skipping offline status message.');
+            return;
+        }
 
         try {
             const channel = await client.channels.fetch(channelId);
-            if (!channel?.isTextBased()) return;
+            if (!channel?.isTextBased()) {
+                logger.warn('Announcement channel is not text-based', { channelId });
+                return;
+            }
 
             const textChannel = channel as TextChannel;
 
@@ -120,7 +127,10 @@ export class StatusService {
             await textChannel.send({ embeds: [embed] });
             logger.info('Status announcement sent: Offline', { channelId, reason });
         } catch (error) {
-            logger.warn('Failed to send offline announcement', { error });
+            logger.warn('Failed to send offline announcement', {
+                error: error instanceof Error ? error.message : String(error),
+                stack: error instanceof Error ? error.stack : undefined
+            });
         }
     }
 }
