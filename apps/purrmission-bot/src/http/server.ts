@@ -4,6 +4,7 @@
  * Provides the HTTP API for external services to request approvals.
  */
 
+import formBody from '@fastify/formbody';
 import Fastify, { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import type { Client, TextChannel } from 'discord.js';
 import { z } from 'zod';
@@ -59,6 +60,10 @@ export function createHttpServer(deps: HttpServerDeps): FastifyInstance {
   const server = Fastify({
     logger: false, // We use our own logger
   });
+
+  // Register formbody to support application/x-www-form-urlencoded (OAuth2 standard)
+  server.register(formBody);
+
 
   // Health check endpoint
   server.get('/health', async () => {

@@ -12,7 +12,7 @@ interface PawthyConfig {
 const config = new Conf<PawthyConfig>({
     projectName: 'pawthy',
     defaults: {
-        apiUrl: 'http://localhost:3000', // Default to local for now, can be changed via env or init
+        apiUrl: 'https://purrmission.infra.purrfecthq.com', // Default to production for release
     },
 });
 

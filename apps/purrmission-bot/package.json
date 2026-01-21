@@ -13,6 +13,7 @@
     "test": "node --import tsx --import ./src/test/setup.ts --test {src,scripts}/**/*.test.ts"
   },
   "dependencies": {
+    "@fastify/formbody": "^8.0.2",
     "discord.js": "^14.16.3",
     "dotenv": "^16.4.7",
     "fastify": "^5.2.1",
