@@ -1,20 +1,10 @@
 import { PrismaClient } from '@prisma/client';
-import { randomBytes, createCipheriv } from 'crypto';
+import { encryptValue } from '../apps/purrmission-bot/src/infra/crypto.js';
 
 const prisma = new PrismaClient();
 
-const ENCRYPTION_KEY = process.env.ENCRYPTION_KEY || '5079736da56b5626c6930f64372f22b65afd452a1d6594d86c1e220db6431119';
-
-function encrypt(text: string) {
-    const iv = randomBytes(12); // GCM standard IV length
-    const keyBuffer = Buffer.from(ENCRYPTION_KEY, 'hex');
-    const cipher = createCipheriv('aes-256-gcm', keyBuffer, iv);
-    const encrypted = Buffer.concat([cipher.update(text, 'utf8'), cipher.final()]);
-    const tag = cipher.getAuthTag();
-
-    // Format matching apps/purrmission-bot/src/infra/crypto.ts
-    // v1:base64(iv):base64(authTag):base64(ciphertext)
-    return `v1:${iv.toString('base64')}:${tag.toString('base64')}:${encrypted.toString('base64')}`;
+if (!process.env.ENCRYPTION_KEY) {
+    throw new Error('ENCRYPTION_KEY environment variable is not set. Please provide a 32-byte hex-encoded key.');
 }
 
 async function main() {
@@ -44,9 +34,9 @@ async function main() {
                             },
                             fields: {
                                 create: [
-                                    { name: 'DB_HOST', value: encrypt('localhost') },
-                                    { name: 'DB_USER', value: encrypt('admin') },
-                                    { name: 'DB_PASS', value: encrypt('super_secret_password') }
+                                    { name: 'DB_HOST', value: encryptValue('localhost') },
+                                    { name: 'DB_USER', value: encryptValue('admin') },
+                                    { name: 'DB_PASS', value: encryptValue('super_secret_password') }
                                 ]
                             }
                         }
