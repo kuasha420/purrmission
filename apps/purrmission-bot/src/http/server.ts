@@ -60,6 +60,9 @@ export function createHttpServer(deps: HttpServerDeps): FastifyInstance {
     logger: false, // We use our own logger
   });
 
+  // Register formbody to support application/x-www-form-urlencoded (OAuth2 standard)
+  server.register(import('@fastify/formbody'));
+
   // Health check endpoint
   server.get('/health', async () => {
     return {
