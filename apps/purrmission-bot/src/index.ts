@@ -20,6 +20,7 @@ import { createDiscordClient } from './discord/client.js';
 import { startHttpServer } from './http/server.js';
 import { getPrismaClient } from './infra/prismaClient.js';
 import { validateEncryptionConfig } from './infra/crypto.js';
+import { StatusService } from './domain/status.js';
 
 /**
  * Main application bootstrap.
@@ -75,6 +76,13 @@ async function main(): Promise<void> {
     discordClient,
   });
 
+  // Announce online status
+  const statusService = new StatusService();
+  // Don't await this to avoid blocking startup if Discord API is slow
+  statusService.sendOnlineAnnouncement(discordClient).catch(err => {
+    logger.error('Failed to send ready announcement', err);
+  });
+
   // Log startup summary
   logger.info('========================================');
   logger.info('🐱 Purrmission Bot is ready!');
@@ -88,6 +96,13 @@ async function main(): Promise<void> {
   // Graceful shutdown handling
   const shutdown = async (signal: string): Promise<void> => {
     logger.info(`Received ${signal}, shutting down gracefully...`);
+
+    // Announce offline
+    try {
+      await statusService.sendOfflineAnnouncement(discordClient, signal);
+    } catch (err) {
+      logger.warn('Failed to send offline announcement during shutdown', err);
+    }
 
     try {
       discordClient.destroy();
