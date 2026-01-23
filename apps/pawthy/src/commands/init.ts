@@ -36,11 +36,71 @@ export const initCommand = new Command('init')
                 headers: { Authorization: `Bearer ${token}` },
             });
 
-            const projects = projectsRes.data;
+            let projects = projectsRes.data;
 
             if (projects.length === 0) {
-                console.error(chalk.yellow('No projects found. Please create a project via the API or Web UI first.'));
-                process.exit(1);
+                const { shouldCreate } = await inquirer.prompt([{
+                    type: 'confirm',
+                    name: 'shouldCreate',
+                    message: 'No projects found. Create one?',
+                    default: false
+                }]);
+
+                if (!shouldCreate) {
+                    console.log(chalk.yellow('No project selected. Exiting.'));
+                    process.exit(0);
+                }
+
+                // Prompt for project details
+                const { projectName, projectDescription } = await inquirer.prompt([
+                    {
+                        type: 'input',
+                        name: 'projectName',
+                        message: 'Project name:',
+                        validate: (input: string) => input.trim().length > 0 || 'Project name is required'
+                    },
+                    {
+                        type: 'input',
+                        name: 'projectDescription',
+                        message: 'Project description (optional):',
+                    }
+                ]);
+
+                console.log(chalk.dim('Creating project...'));
+
+                try {
+                    const createRes = await axios.post<Project>(
+                        `${apiUrl}/api/projects`,
+                        {
+                            name: projectName.trim(),
+                            description: projectDescription?.trim() || undefined
+                        },
+                        { headers: { Authorization: `Bearer ${token}` } }
+                    );
+
+                    const newProject = createRes.data;
+                    console.log(chalk.green(`✅ Project "${newProject.name}" created!`));
+
+                    // Use the newly created project
+                    projects = [newProject];
+                } catch (error) {
+                    if (axios.isAxiosError(error)) {
+                        const status = error.response?.status;
+                        if (status === 409) {
+                            console.error(chalk.red('A project with this name already exists. Please choose a different name.'));
+                        } else if (status === 400) {
+                            const message = error.response?.data?.error || error.response?.data?.message;
+                            console.error(chalk.red(`Invalid project data.${message ? ` ${String(message)}` : ''}`));
+                        } else if (status === 403) {
+                            console.error(chalk.red('You do not have permission to create a project.'));
+                        } else {
+                            console.error(chalk.red(`Failed to create project: ${error.message}`));
+                        }
+                    } else {
+                        console.error(chalk.red(`An error occurred: ${error instanceof Error ? error.message : String(error)}`));
+                    }
+                    process.exit(1);
+                }
             }
 
             // 2. Select Project
@@ -59,10 +119,70 @@ export const initCommand = new Command('init')
                 headers: { Authorization: `Bearer ${token}` },
             });
 
-            const envs = envsRes.data;
+            let envs = envsRes.data;
+
             if (envs.length === 0) {
-                console.error(chalk.yellow('No environments found for this project.'));
-                process.exit(1);
+                const { shouldCreateEnv } = await inquirer.prompt([{
+                    type: 'confirm',
+                    name: 'shouldCreateEnv',
+                    message: 'No environments found. Create one?',
+                    default: true
+                }]);
+
+                if (!shouldCreateEnv) {
+                    console.log(chalk.yellow('No environment selected. Exiting.'));
+                    process.exit(0);
+                }
+
+                // Prompt for environment details
+                const { envName, envSlug } = await inquirer.prompt([
+                    {
+                        type: 'input',
+                        name: 'envName',
+                        message: 'Environment name (e.g., Production):',
+                        default: 'Production',
+                        validate: (input: string) => input.trim().length > 0 || 'Environment name is required'
+                    },
+                    {
+                        type: 'input',
+                        name: 'envSlug',
+                        message: 'Environment slug (e.g., prod):',
+                        default: 'prod',
+                        validate: (input: string) => input.trim().length > 0 || 'Environment slug is required'
+                    }
+                ]);
+
+                console.log(chalk.dim('Creating environment...'));
+
+                try {
+                    const createEnvRes = await axios.post<Environment>(
+                        `${apiUrl}/api/projects/${projectId}/environments`,
+                        {
+                            name: envName.trim(),
+                            slug: envSlug.trim()
+                        },
+                        { headers: { Authorization: `Bearer ${token}` } }
+                    );
+
+                    const newEnv = createEnvRes.data;
+                    console.log(chalk.green(`✅ Environment "${newEnv.name}" created!`));
+                    envs = [newEnv];
+                } catch (error) {
+                    if (axios.isAxiosError(error)) {
+                        const status = error.response?.status;
+                        if (status === 409) {
+                            console.error(chalk.red('An environment with this slug already exists.'));
+                        } else if (status === 400) {
+                            const message = error.response?.data?.error || error.response?.data?.message;
+                            console.error(chalk.red(`Invalid environment data.${message ? ` ${String(message)}` : ''}`));
+                        } else {
+                            console.error(chalk.red(`Failed to create environment: ${error.message}`));
+                        }
+                    } else {
+                        console.error(chalk.red(`An error occurred: ${error instanceof Error ? error.message : String(error)}`));
+                    }
+                    process.exit(1);
+                }
             }
 
             // 4. Select Environment
