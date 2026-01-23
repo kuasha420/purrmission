@@ -36,11 +36,52 @@ export const initCommand = new Command('init')
                 headers: { Authorization: `Bearer ${token}` },
             });
 
-            const projects = projectsRes.data;
+            let projects = projectsRes.data;
 
             if (projects.length === 0) {
-                console.error(chalk.yellow('No projects found. Please create a project via the API or Web UI first.'));
-                process.exit(1);
+                const { shouldCreate } = await inquirer.prompt([{
+                    type: 'confirm',
+                    name: 'shouldCreate',
+                    message: 'No projects found. Create one?',
+                    default: false
+                }]);
+
+                if (!shouldCreate) {
+                    console.log(chalk.yellow('No project selected. Exiting.'));
+                    process.exit(0);
+                }
+
+                // Prompt for project details
+                const { projectName, projectDescription } = await inquirer.prompt([
+                    {
+                        type: 'input',
+                        name: 'projectName',
+                        message: 'Project name:',
+                        validate: (input: string) => input.trim().length > 0 || 'Project name is required'
+                    },
+                    {
+                        type: 'input',
+                        name: 'projectDescription',
+                        message: 'Project description (optional):',
+                    }
+                ]);
+
+                console.log(chalk.dim('Creating project...'));
+
+                const createRes = await axios.post<Project>(
+                    `${apiUrl}/api/projects`,
+                    {
+                        name: projectName.trim(),
+                        description: projectDescription?.trim() || undefined
+                    },
+                    { headers: { Authorization: `Bearer ${token}` } }
+                );
+
+                const newProject = createRes.data;
+                console.log(chalk.green(`✅ Project "${newProject.name}" created!`));
+
+                // Use the newly created project
+                projects = [newProject];
             }
 
             // 2. Select Project
