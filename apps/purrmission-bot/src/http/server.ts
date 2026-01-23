@@ -133,7 +133,8 @@ export function createHttpServer(deps: HttpServerDeps): FastifyInstance {
     try {
       await sendApprovalMessage(deps, result, body.channelId);
     } catch (error) {
-      logger.error('Failed to send Discord message', {
+      logger.warn('Failed to send Discord notification for approval request', {
+        requestId: approvalRequest.id,
         error: error instanceof Error ? error.message : String(error),
       });
       // Continue anyway - the request was created successfully
@@ -456,6 +457,17 @@ export function createHttpServer(deps: HttpServerDeps): FastifyInstance {
         throw new Error(`Failed to create approval request: ${result.error || 'Unknown error'}`);
       }
       approval = result.request;
+
+      // Send Discord notification to guardians
+      try {
+        await sendApprovalMessage(deps, result);
+      } catch (notifyError) {
+        logger.warn('Failed to send Discord notification for approval request', {
+          requestId: approval.id,
+          error: notifyError instanceof Error ? notifyError.message : String(notifyError),
+        });
+        // Continue anyway - the request was created successfully
+      }
     }
 
     if (!approval) {
