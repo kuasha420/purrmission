@@ -133,7 +133,8 @@ export function createHttpServer(deps: HttpServerDeps): FastifyInstance {
     try {
       await sendApprovalMessage(deps, result, body.channelId);
     } catch (error) {
-      logger.error('Failed to send Discord message', {
+      logger.warn('Failed to send Discord notification for approval request', {
+        requestId: approvalRequest.id,
         error: error instanceof Error ? error.message : String(error),
       });
       // Continue anyway - the request was created successfully
