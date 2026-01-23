@@ -431,13 +431,14 @@ export function createHttpServer(deps: HttpServerDeps): FastifyInstance {
       return { secrets: fieldsToSecrets(fields) };
     }
 
-    // Non-owners must be guardians
+    // Guardians also have immediate access
     const isGuardian = await services.resource.isGuardian(resourceId, userId);
-    if (!isGuardian) {
-      throw new AccessDeniedError('Access denied: Only project owners or guardians can access secrets');
+    if (isGuardian) {
+      const fields = await services.resource.listFields(resourceId);
+      return { secrets: fieldsToSecrets(fields) };
     }
 
-    // Check for active approval
+    // Non-owner/non-guardian: Check for active approval or create one
     let approval: ApprovalRequest | null = await services.approval.findActiveApproval(resourceId, userId);
 
     if (!approval) {
