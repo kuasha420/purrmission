@@ -20,6 +20,7 @@ import {
 import { handleAddGuardian } from './addGuardian.js';
 import { handleRemoveGuardian } from './removeGuardian.js';
 import { handleListGuardians } from './listGuardians.js';
+import { handleRequestAccess } from './requestAccess.js';
 import { rateLimiter } from '../../infra/rateLimit.js';
 import { handleAuthLogin } from './auth.js';
 export const purrmissionCommand = new SlashCommandBuilder()
@@ -189,6 +190,18 @@ export const purrmissionCommand = new SlashCommandBuilder()
           .setRequired(true)
           .setMaxLength(9)
       )
+  )
+  .addSubcommand((subcommand) =>
+    subcommand
+      .setName('request-access')
+      .setDescription('Request access to a protected resource')
+      .addStringOption((option) =>
+        option
+          .setName('resource-id')
+          .setDescription('ID of the resource to request access to')
+          .setRequired(true)
+          .setAutocomplete(true)
+      )
   );
 
 export async function handlePurrmissionCommand(
@@ -200,6 +213,11 @@ export async function handlePurrmissionCommand(
 
   if (subcommand === 'cli-login') {
     await handleAuthLogin(interaction, context);
+    return;
+  }
+
+  if (subcommand === 'request-access') {
+    await handleRequestAccess(interaction, context);
     return;
   }
 
@@ -260,6 +278,13 @@ export async function handlePurrmissionAutocomplete(
   const subcommand = interaction.options.getSubcommand(false);
 
   if (subcommandGroup === 'resource') {
+    await handleResourceAutocomplete(interaction, context);
+    return;
+  }
+
+  // Handle request-access autocomplete (top-level subcommand)
+  // Reuse the resource autocomplete logic which finds resources by user's guardianships
+  if (subcommand === 'request-access') {
     await handleResourceAutocomplete(interaction, context);
     return;
   }
