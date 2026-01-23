@@ -31,11 +31,12 @@ export async function handleRequestAccess(
         return;
     }
 
-    // Check if user is already a guardian (they don't need to request access)
+    // Check if user is already a guardian or owner (they don't need to request access)
+    // Note: isGuardian returns true for both GUARDIAN and OWNER roles, consistent with server-side
     const isGuardian = await services.resource.isGuardian(resourceId, userId);
     if (isGuardian) {
         await interaction.reply({
-            content: `✅ You are already a guardian of **${resource.name}**. No approval needed.`,
+            content: `✅ You are already authorized for **${resource.name}**. No approval needed.`,
             ephemeral: true,
         });
         return;
