@@ -2,11 +2,12 @@ import { Command } from 'commander';
 import axios from 'axios';
 import boxen from 'boxen';
 import chalk from 'chalk';
-import { getApiUrl, setToken } from '../config.js';
+import { getApiUrl, setToken, ConfigScope } from '../config.js';
 
 export const loginCommand = new Command('login')
     .description('Authenticate with Purrmission using Device Flow')
-    .action(async () => {
+    .option('-l, --local', 'Store session locally in .pawthy/config.json (per-project)')
+    .action(async (options: { local?: boolean }) => {
         const apiUrl = getApiUrl();
         console.log(chalk.dim(`Connecting to ${apiUrl}...`));
 
@@ -62,8 +63,13 @@ export const loginCommand = new Command('login')
                     });
 
                     const { access_token } = tokenResponse.data;
-                    setToken(access_token);
+                    const scope: ConfigScope = options.local ? 'local' : 'global';
+                    setToken(access_token, scope);
+                    const locationMsg = options.local
+                        ? 'Saved to local config (.pawthy/config.json)'
+                        : 'Saved to global config';
                     console.log(chalk.green('\nSuccessfully authenticated! 🎉'));
+                    console.log(chalk.dim(locationMsg));
                     process.exit(0);
 
                 } catch (error) {
