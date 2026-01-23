@@ -282,8 +282,7 @@ export async function handlePurrmissionAutocomplete(
     return;
   }
 
-  // Handle request-access autocomplete (top-level subcommand)
-  // Reuse the resource autocomplete logic which finds resources by user's guardianships
+  // Handle request-access autocomplete (top-level subcommand) by reusing the resource autocomplete logic
   if (subcommand === 'request-access') {
     await handleResourceAutocomplete(interaction, context);
     return;
