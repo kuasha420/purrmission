@@ -42,30 +42,61 @@ function getLocalConfigPath(): string {
 
 /**
  * Read local config from .pawthy/config.json if it exists
+ * Note: Uses process.cwd() - local config is relative to where the command is run.
  */
 function readLocalConfig(): LocalConfig | null {
     const configPath = getLocalConfigPath();
     try {
         const content = fs.readFileSync(configPath, 'utf-8');
-        return JSON.parse(content);
-    } catch {
+        const parsed = JSON.parse(content);
+        // Validate token is a string if present
+        if (parsed.token !== undefined && typeof parsed.token !== 'string') {
+            console.log(chalk.yellow(`Warning: Invalid token type in local config at ${configPath}. Expected string.`));
+            return null;
+        }
+        return parsed as LocalConfig;
+    } catch (error: unknown) {
+        const err = error as NodeJS.ErrnoException;
+        // Silently return null if file doesn't exist (expected case)
+        if (err.code === 'ENOENT') {
+            return null;
+        }
+        // For other errors (permissions, malformed JSON), warn the user
+        console.log(chalk.yellow(`Warning: Could not read local config at ${configPath}. It may be malformed or have permission issues.`));
         return null;
     }
 }
 
 /**
  * Write local config to .pawthy/config.json
+ * Sets restrictive file permissions (chmod 600) for security.
  */
 function writeLocalConfig(localConfig: LocalConfig): void {
     const configDir = getLocalConfigDir();
     const configPath = getLocalConfigPath();
 
-    // Ensure .pawthy directory exists
-    if (!fs.existsSync(configDir)) {
-        fs.mkdirSync(configDir, { recursive: true });
-    }
+    try {
+        // Ensure .pawthy directory exists with restricted permissions
+        if (!fs.existsSync(configDir)) {
+            fs.mkdirSync(configDir, { recursive: true, mode: 0o700 });
+        }
 
-    fs.writeFileSync(configPath, JSON.stringify(localConfig, null, 2), 'utf-8');
+        // Write config file with restricted permissions (owner read/write only)
+        fs.writeFileSync(configPath, JSON.stringify(localConfig, null, 2), {
+            encoding: 'utf-8',
+            mode: 0o600,
+        });
+
+        // Best-effort: ensure permissions are set even on existing files
+        try {
+            fs.chmodSync(configPath, 0o600);
+        } catch {
+            // Ignore if permissions cannot be set (e.g., on some platforms)
+        }
+    } catch (error) {
+        console.error(chalk.red(`Error: Could not write to local config file at ${configPath}. Please check permissions.`));
+        process.exit(1);
+    }
 }
 
 /**
