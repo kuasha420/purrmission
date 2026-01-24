@@ -46,3 +46,4 @@ coverage/
 
 # Turbo cache
 .turbo/
+.pawthy/

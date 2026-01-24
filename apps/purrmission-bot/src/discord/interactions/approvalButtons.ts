@@ -22,7 +22,7 @@ import { logger } from '../../logging/logger.js';
  * Type guard for AccessRequestContext.
  * Validates that the context has the expected shape for field/2FA access requests.
  */
-function isAccessRequestContext(context: unknown): context is AccessRequestContext {
+export function isAccessRequestContext(context: unknown): context is AccessRequestContext {
   const ctx = context as AccessRequestContext;
   if (
     typeof ctx !== 'object' ||
@@ -40,7 +40,7 @@ function isAccessRequestContext(context: unknown): context is AccessRequestConte
     return typeof ctx.fieldName === 'string' && ctx.fieldName.trim().length > 0;
   }
 
-  if (ctx.type === 'TOTP_ACCESS') {
+  if (ctx.type === 'TOTP_ACCESS' || ctx.type === 'SECRET_ACCESS') {
     return true;
   }
 
@@ -275,6 +275,19 @@ async function revealAccessToRequester(
           resourceId,
         });
       }
+    } else if (context.type === 'SECRET_ACCESS') {
+      await dm.send(
+        [
+          '✅ **Access Approved!**',
+          '',
+          `Your request for secrets on **${resourceName}** was approved.`,
+          'You can now run your CLI command again to fetch them.',
+        ].join('\n')
+      );
+      logger.info('Notified requester of SECRET_ACCESS approval', {
+        requesterId: context.requesterId,
+        resourceId,
+      });
     }
   } catch (error) {
     logger.error('Failed to reveal access to requester', {
@@ -341,10 +354,23 @@ export function createAccessRequestEmbed(
   context: AccessRequestContext,
   expiresAt: Date | null
 ): EmbedBuilder {
-  const typeLabel = context.type === 'FIELD_ACCESS' ? '📝 Field Access' : '🔑 2FA Code Access';
-  const description = context.type === 'FIELD_ACCESS'
-    ? `<@${context.requesterId}> is requesting access to field **${context.fieldName}** on **${resourceName}**.`
-    : `<@${context.requesterId}> is requesting the linked 2FA code for **${resourceName}**.`;
+  let typeLabel = '';
+  let description = '';
+
+  switch (context.type) {
+    case 'FIELD_ACCESS':
+      typeLabel = '📝 Field Access';
+      description = `<@${context.requesterId}> is requesting access to field **${context.fieldName}** on **${resourceName}**.`;
+      break;
+    case 'TOTP_ACCESS':
+      typeLabel = '🔑 2FA Code Access';
+      description = `<@${context.requesterId}> is requesting the linked 2FA code for **${resourceName}**.`;
+      break;
+    case 'SECRET_ACCESS':
+      typeLabel = '🔐 Secrets Access';
+      description = `<@${context.requesterId}> is requesting access to **all secrets** on **${resourceName}**.`;
+      break;
+  }
 
   const embed = new EmbedBuilder()
     .setTitle(`🔐 ${typeLabel} Request`)

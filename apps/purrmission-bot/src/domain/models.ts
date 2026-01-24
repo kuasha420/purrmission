@@ -158,7 +158,7 @@ export type CreateApprovalRequestInput = Omit<ApprovalRequest, 'createdAt'>;
 /**
  * Type of access being requested via approval flow.
  */
-export type AccessRequestType = 'FIELD_ACCESS' | 'TOTP_ACCESS';
+export type AccessRequestType = 'FIELD_ACCESS' | 'TOTP_ACCESS' | 'SECRET_ACCESS';
 
 /**
  * Typed context for field/2FA access approval requests.

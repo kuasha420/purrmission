@@ -13,6 +13,8 @@ import type { Services } from '../domain/services.js';
 import {
   createApprovalButtons,
   createApprovalEmbed,
+  createAccessRequestEmbed,
+  isAccessRequestContext,
 } from '../discord/interactions/approvalButtons.js';
 import {
   InvalidGrantError,
@@ -448,8 +450,8 @@ export function createHttpServer(deps: HttpServerDeps): FastifyInstance {
         resourceId,
         context: {
           requesterId: userId,
-          action: 'SECRET_ACCESS',
-          reason: `CLI pull request for ${project.name}:${environment.name}`
+          type: 'SECRET_ACCESS',
+          description: `CLI pull request for ${project.name}:${environment.name}`
         }
       });
 
@@ -659,7 +661,9 @@ async function sendApprovalMessage(
       const dm = await user.createDM();
 
       // Create and send message
-      const embed = createApprovalEmbed(resource.name, request.context, request.expiresAt);
+      const embed = isAccessRequestContext(request.context)
+        ? createAccessRequestEmbed(resource.name, request.context, request.expiresAt)
+        : createApprovalEmbed(resource.name, request.context, request.expiresAt);
       const buttons = createApprovalButtons(request.id);
 
       // Mention other guardians
@@ -688,7 +692,9 @@ async function sendApprovalMessage(
 
   // Send to channel if available
   if (channel) {
-    const embed = createApprovalEmbed(resource.name, request.context, request.expiresAt);
+    const embed = isAccessRequestContext(request.context)
+      ? createAccessRequestEmbed(resource.name, request.context, request.expiresAt)
+      : createApprovalEmbed(resource.name, request.context, request.expiresAt);
     const buttons = createApprovalButtons(request.id);
 
     // Mention all guardians
