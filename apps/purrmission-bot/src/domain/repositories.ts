@@ -32,6 +32,9 @@ import type {
   Environment,
   CreateProjectInput,
   CreateEnvironmentInput,
+  ProjectMember,
+  CreateProjectMemberInput,
+  ProjectMemberRole,
 } from './models.js';
 import { encryptValue, decryptValue } from '../infra/crypto.js';
 import { DuplicateError, ResourceNotFoundError } from './errors.js';
@@ -959,6 +962,9 @@ export class PrismaAuthRepository implements AuthRepository {
   }
 }
 
+/**
+ * Prisma implementation of ProjectRepository.
+ */
 export class PrismaProjectRepository implements ProjectRepository {
   private readonly prisma: PrismaClient;
 
@@ -976,6 +982,7 @@ export class PrismaProjectRepository implements ProjectRepository {
     });
     return {
       ...project,
+      description: project.description ?? null,
     };
   }
 
@@ -1037,5 +1044,76 @@ export class PrismaProjectRepository implements ProjectRepository {
       ...row,
       resourceId: row.resourceId ?? undefined
     };
+  }
+
+  async getEnvironmentById(projectId: string, envId: string): Promise<Environment | null> {
+    const row = await this.prisma.environment.findFirst({
+      where: {
+        projectId,
+        id: envId
+      }
+    });
+    if (!row) return null;
+    return {
+      ...row,
+      resourceId: row.resourceId ?? undefined
+    };
+  }
+
+  async addMember(input: CreateProjectMemberInput): Promise<ProjectMember> {
+    try {
+      const member = await this.prisma.projectMember.create({
+        data: {
+          projectId: input.projectId,
+          userId: input.userId,
+          role: input.role ?? 'READER',
+          addedBy: input.addedBy,
+        }
+      });
+      return {
+        ...member,
+        role: member.role as ProjectMemberRole
+      };
+    } catch (error: any) {
+      if (error.code === 'P2002') {
+        // Already exists, try to update role? Or just throw duplicate. 
+        // For now, let's treat it as an update if they try to add again
+        const member = await this.prisma.projectMember.update({
+          where: { projectId_userId: { projectId: input.projectId, userId: input.userId } },
+          data: { role: input.role ?? 'READER' }
+        });
+        return { ...member, role: member.role as ProjectMemberRole };
+      }
+      throw error;
+    }
+  }
+
+  async removeMember(projectId: string, userId: string): Promise<void> {
+    try {
+      await this.prisma.projectMember.delete({
+        where: { projectId_userId: { projectId, userId } }
+      });
+    } catch (e: any) {
+      if (e.code === 'P2025') return; // Not found, ignore
+      throw e;
+    }
+  }
+
+  async getMemberRole(projectId: string, userId: string): Promise<ProjectMemberRole | null> {
+    const member = await this.prisma.projectMember.findUnique({
+      where: { projectId_userId: { projectId, userId } }
+    });
+    return member ? (member.role as ProjectMemberRole) : null;
+  }
+
+  async listMembers(projectId: string): Promise<ProjectMember[]> {
+    const members = await this.prisma.projectMember.findMany({
+      where: { projectId },
+      orderBy: { createdAt: 'desc' }
+    });
+    return members.map(m => ({
+      ...m,
+      role: m.role as ProjectMemberRole
+    }));
   }
 }

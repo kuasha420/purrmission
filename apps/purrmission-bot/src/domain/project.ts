@@ -1,6 +1,6 @@
 
 import { ProjectRepository } from './repositories.js';
-import { Project, Environment, CreateProjectInput, CreateEnvironmentInput, ResourceNotFoundError } from './models.js';
+import { Project, Environment, CreateProjectInput, CreateEnvironmentInput, ResourceNotFoundError, ProjectMember, ProjectMemberRole } from './models.js';
 
 export class ProjectService {
     constructor(
@@ -44,10 +44,6 @@ export class ProjectService {
         return this.projectRepo.findEnvironment(projectId, slug);
     }
 
-    /**
-     * Get an environment by its ID.
-     * Note: Currently uses listEnvironments internally. Optimized implementation would require repository update.
-     */
     async getEnvironmentById(projectId: string, envId: string): Promise<Environment | null> {
         const envs = await this.listEnvironments(projectId);
         return envs.find(e => e.id === envId) || null;
