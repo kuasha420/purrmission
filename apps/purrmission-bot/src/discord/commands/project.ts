@@ -73,7 +73,8 @@ async function handleAddMember(interaction: ChatInputCommandInteraction, service
 
     const projectId = interaction.options.getString('project_id', true);
     const targetUser = interaction.options.getUser('user', true);
-    const role = (interaction.options.getString('role') as ProjectMemberRole) || 'READER';
+    const roleInput = interaction.options.getString('role');
+    const role: ProjectMemberRole = roleInput === 'WRITER' ? 'WRITER' : 'READER';
     const actorId = interaction.user.id;
 
     try {

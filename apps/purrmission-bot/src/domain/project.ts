@@ -45,7 +45,6 @@ export class ProjectService {
     }
 
     async getEnvironmentById(projectId: string, envId: string): Promise<Environment | null> {
-        const envs = await this.listEnvironments(projectId);
-        return envs.find(e => e.id === envId) || null;
+        return this.projectRepo.getEnvironmentById(projectId, envId);
     }
 }

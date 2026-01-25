@@ -514,9 +514,7 @@ export function createHttpServer(deps: HttpServerDeps): FastifyInstance {
     let hasWriteAccess = project.ownerId === userId;
     if (!hasWriteAccess) {
       const role = await services.project.getMemberRole(projectId, userId);
-      if (role === 'WRITER') {
-        hasWriteAccess = true;
-      }
+      hasWriteAccess = role === 'WRITER';
     }
 
     if (!hasWriteAccess) throw new AccessDeniedError('Access denied');

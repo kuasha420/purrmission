@@ -826,6 +826,12 @@ export interface ProjectRepository {
   createEnvironment(input: CreateEnvironmentInput): Promise<Environment>;
   listEnvironments(projectId: string): Promise<Environment[]>;
   findEnvironment(projectId: string, slug: string): Promise<Environment | null>;
+  getEnvironmentById(projectId: string, envId: string): Promise<Environment | null>;
+
+  addMember(input: CreateProjectMemberInput): Promise<ProjectMember>;
+  removeMember(projectId: string, userId: string): Promise<void>;
+  getMemberRole(projectId: string, userId: string): Promise<ProjectMemberRole | null>;
+  listMembers(projectId: string): Promise<ProjectMember[]>;
 }
 
 
