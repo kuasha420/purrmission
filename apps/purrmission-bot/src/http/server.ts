@@ -434,6 +434,13 @@ export function createHttpServer(deps: HttpServerDeps): FastifyInstance {
       return { secrets: fieldsToSecrets(fields) };
     }
 
+    // Project Members (READER or WRITER) have immediate access
+    const memberRole = await services.project.getMemberRole(projectId, userId);
+    if (memberRole === 'READER' || memberRole === 'WRITER') {
+      const fields = await services.resource.listFields(resourceId);
+      return { secrets: fieldsToSecrets(fields) };
+    }
+
     // Guardians also have immediate access
     const isGuardian = await services.resource.isGuardian(resourceId, userId);
     if (isGuardian) {
@@ -502,7 +509,15 @@ export function createHttpServer(deps: HttpServerDeps): FastifyInstance {
 
     const project = await services.project.getProject(projectId);
     if (!project) throw new ResourceNotFoundError('Project not found');
-    if (project.ownerId !== userId) throw new AccessDeniedError('Access denied');
+
+    // Access Control: Owner OR Writer
+    let hasWriteAccess = project.ownerId === userId;
+    if (!hasWriteAccess) {
+      const role = await services.project.getMemberRole(projectId, userId);
+      hasWriteAccess = role === 'WRITER';
+    }
+
+    if (!hasWriteAccess) throw new AccessDeniedError('Access denied');
 
     const environment = await services.project.getEnvironmentById(projectId, envId);
     if (!environment) throw new ResourceNotFoundError('Environment not found');

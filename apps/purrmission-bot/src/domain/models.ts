@@ -338,3 +338,26 @@ export class ResourceNotFoundError extends Error {
     this.name = 'ResourceNotFoundError';
   }
 }
+
+// ----------------------------------------------------
+// Project Members
+// ----------------------------------------------------
+
+export type ProjectMemberRole = 'READER' | 'WRITER';
+
+export interface ProjectMember {
+  id: string;
+  projectId: string;
+  userId: string;
+  role: ProjectMemberRole;
+  addedBy: string;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+export interface CreateProjectMemberInput {
+  projectId: string;
+  userId: string;
+  role?: ProjectMemberRole;
+  addedBy: string;
+}
