@@ -56,16 +56,18 @@ Manage shared and personal 2FA accounts directly from Discord.
 
 ### Quickstart
 
+All commands below should be run from the **workspace root** (`/purrmission`):
+
 ```bash
 # 1. Configure environment
 cp .env.example .env
 # Edit .env with your Discord credentials
 
-# 2. Generate Prisma Client
+# 2. Generate Prisma Client (from workspace root)
 pnpm prisma:generate
 
-# 3. Run development server
-pnpm dev
+# 3. Run development server (from workspace root)
+pnpm dev:purrmission
 
 # 4. Deploy commands (if changed)
 pnpm discord:deploy-commands

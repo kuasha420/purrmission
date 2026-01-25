@@ -136,7 +136,7 @@ Purrmission uses a **Guardian-based approval system** for secure secret access.
 1. **Project Owner** creates the project and pushes initial secrets
 2. **Owner** adds team members as Guardians via Discord:
    ```
-   /purrmission guardian add resource:<resource-id> user:@teammate
+   /purrmission guardian add resource-id:<resource-id> user:@teammate
    ```
 3. **Guardians** can now:
    - Pull secrets directly (no approval needed)
@@ -219,7 +219,7 @@ Default session storage location:
 
 | Variable | Description |
 |----------|-------------|
-| `PAWTHY_API_URL` | Override the Purrmission server URL (default: production server) |
+| `PAWTHY_API_URL` | Override the Purrmission server URL (default: `http://localhost:3000` for local dev) |
 
 ---
 
@@ -263,10 +263,15 @@ pawthy init
 
 ### Cached Server URL
 
-If switching between local dev and production, clear config:
+If switching between local dev and production, you may need to clear the global configuration file.
+
+Refer to the "Global Configuration" section above for the file path on your OS:
+- **Linux/macOS:** `~/.config/configstore/pawthy.json`
+- **Windows:** `%APPDATA%\configstore\pawthy.json`
+
+After deleting the file, log in again:
 
 ```bash
-rm ~/.config/configstore/pawthy.json
 pawthy login
 ```
 

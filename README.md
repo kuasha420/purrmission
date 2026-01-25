@@ -79,7 +79,7 @@ See [Pawthy CLI Documentation](apps/pawthy/README.md) for full usage.
 
 | Action | Command |
 |--------|---------|
-| Add Account | `/purrmission 2fa add account:"..." mode:uri uri:...` |
+| Add Account | `/purrmission 2fa add account:"..." mode:uri` (then enter URI in modal) |
 | List Accounts | `/purrmission 2fa list [shared:True]` |
 | Get Code | `/purrmission 2fa get account:"..."` |
 | Update Key | `/purrmission 2fa update account:"..." backup_key:"..."` |
@@ -88,9 +88,9 @@ See [Pawthy CLI Documentation](apps/pawthy/README.md) for full usage.
 
 | Action | Command |
 |--------|---------|
-| Add Guardian | `/purrmission guardian add resource:<id> user:@someone` |
-| Remove Guardian | `/purrmission guardian remove resource:<id> user:@someone` |
-| List Guardians | `/purrmission guardian list resource:<id>` |
+| Add Guardian | `/purrmission guardian add resource-id:<id> user:@someone` |
+| Remove Guardian | `/purrmission guardian remove resource-id:<id> user:@someone` |
+| List Guardians | `/purrmission guardian list resource-id:<id>` |
 
 ### CLI Login
 
@@ -132,7 +132,7 @@ pnpm prisma:deploy
 pnpm discord:deploy-commands
 
 # 7. Start the bot
-pnpm dev
+pnpm dev:purrmission
 ```
 
 ### Environment Variables
@@ -200,7 +200,7 @@ purrmission/
 │   │   │   └── http/        # Fastify API server
 │   │   └── package.json
 │   └── pawthy/              # CLI tool
-│       ├── src/
+│       ├── src/             # Command implementations
 │       └── package.json
 ├── prisma/                  # Database schema & migrations
 ├── package.json             # Workspace root
@@ -211,7 +211,7 @@ purrmission/
 
 | Command | Description |
 |---------|-------------|
-| `pnpm dev` | Start bot in development mode |
+| `pnpm dev:purrmission` | Start bot in development mode |
 | `pnpm build` | Build all packages |
 | `pnpm test` | Run tests |
 | `pnpm lint` | Run ESLint |
