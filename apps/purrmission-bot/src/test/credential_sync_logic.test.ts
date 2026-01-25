@@ -13,7 +13,12 @@ import {
 } from '../domain/repositories.js';
 import {
     Project, Environment, Resource, Guardian, ResourceField, ApprovalRequest, ApprovalStatus, AuditLog,
-    CreateProjectInput, CreateEnvironmentInput, CreateResourceInput, AddGuardianInput, CreateResourceFieldInput, CreateApprovalRequestInput
+    CreateProjectInput,
+    CreateEnvironmentInput,
+    CreateProjectMemberInput,
+    ProjectMember,
+    ProjectMemberRole,
+    CreateResourceInput, AddGuardianInput, CreateResourceFieldInput, CreateApprovalRequestInput
 } from '../domain/models.js';
 import { randomUUID } from 'crypto';
 
@@ -56,6 +61,23 @@ class MemProjectRepo implements ProjectRepository {
     async findEnvironment(projectId: string, slug: string): Promise<Environment | null> {
         return this.environments.find(e => e.projectId === projectId && e.slug === slug) || null;
     }
+    async getEnvironmentById(projectId: string, envId: string): Promise<Environment | null> {
+        return this.environments.find(e => e.projectId === projectId && e.id === envId) || null;
+    }
+    async addMember(input: CreateProjectMemberInput): Promise<ProjectMember> {
+        return {
+            id: randomUUID(),
+            projectId: input.projectId,
+            userId: input.userId,
+            role: input.role || 'READER',
+            addedBy: input.addedBy,
+            createdAt: new Date(),
+            updatedAt: new Date()
+        };
+    }
+    async removeMember(projectId: string, userId: string): Promise<void> { }
+    async getMemberRole(projectId: string, userId: string): Promise<ProjectMemberRole | null> { return null; }
+    async listMembers(projectId: string): Promise<ProjectMember[]> { return []; }
 }
 
 class MemResourceRepo implements ResourceRepository {
