@@ -20,6 +20,7 @@ import {
 } from './twoFa.js';
 import { data as approveData, execute as approveExecute } from './approve.js';
 import { data as denyData, execute as denyExecute } from './deny.js';
+import { data as projectData, execute as projectExecute } from './project.js';
 import { logger } from '../../logging/logger.js';
 
 /**
@@ -41,6 +42,7 @@ export const commands: RESTPostAPIChatInputApplicationCommandsJSONBody[] = [
   purrmissionCommand.toJSON(),
   approveData.toJSON(),
   denyData.toJSON(),
+  projectData.toJSON(),
 ];
 
 /**
@@ -79,6 +81,10 @@ export async function handleSlashCommand(
 
     case 'deny':
       await denyExecute(interaction, services);
+      break;
+
+    case 'project':
+      await projectExecute(interaction, services);
       break;
 
     default:
