@@ -19,6 +19,9 @@ import type {
     Environment,
     CreateProjectInput,
     CreateEnvironmentInput,
+    CreateProjectMemberInput,
+    ProjectMember,
+    ProjectMemberRole,
 } from './models.js';
 import {
     ResourceRepository,
@@ -505,6 +508,32 @@ export class InMemoryProjectRepository implements ProjectRepository {
             }
         }
         return null;
+    }
+
+    async getEnvironmentById(projectId: string, envId: string): Promise<Environment | null> {
+        return Array.from(this.environments.values()).find(e => e.projectId === projectId && e.id === envId) || null;
+    }
+
+    async addMember(input: CreateProjectMemberInput): Promise<ProjectMember> {
+        return {
+            id: 'mock-member-' + Date.now(),
+            projectId: input.projectId,
+            userId: input.userId,
+            role: input.role || 'READER',
+            addedBy: input.addedBy,
+            createdAt: new Date(),
+            updatedAt: new Date(),
+        };
+    }
+
+    async removeMember(projectId: string, userId: string): Promise<void> { }
+
+    async getMemberRole(projectId: string, userId: string): Promise<ProjectMemberRole | null> {
+        return null;
+    }
+
+    async listMembers(projectId: string): Promise<ProjectMember[]> {
+        return [];
     }
 }
 
