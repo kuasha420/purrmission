@@ -47,4 +47,25 @@ export class ProjectService {
     async getEnvironmentById(projectId: string, envId: string): Promise<Environment | null> {
         return this.projectRepo.getEnvironmentById(projectId, envId);
     }
+
+    async addMember(projectId: string, userId: string, role: ProjectMemberRole, addedBy: string): Promise<ProjectMember> {
+        return this.projectRepo.addMember({
+            projectId,
+            userId,
+            role,
+            addedBy
+        });
+    }
+
+    async removeMember(projectId: string, userId: string): Promise<void> {
+        return this.projectRepo.removeMember(projectId, userId);
+    }
+
+    async getMemberRole(projectId: string, userId: string): Promise<ProjectMemberRole | null> {
+        return this.projectRepo.getMemberRole(projectId, userId);
+    }
+
+    async listMembers(projectId: string): Promise<ProjectMember[]> {
+        return this.projectRepo.listMembers(projectId);
+    }
 }
