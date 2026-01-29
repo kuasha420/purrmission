@@ -19,8 +19,8 @@ import type {
     Environment,
     CreateProjectInput,
     CreateEnvironmentInput,
-    CreateProjectMemberInput,
     ProjectMember,
+    CreateProjectMemberInput,
     ProjectMemberRole,
 } from './models.js';
 import {
@@ -457,6 +457,7 @@ export class InMemoryAuthRepository implements AuthRepository {
 export class InMemoryProjectRepository implements ProjectRepository {
     private projects: Map<string, Project> = new Map();
     private environments: Map<string, Environment> = new Map();
+    private members: Map<string, ProjectMember> = new Map();
 
     async createProject(input: CreateProjectInput): Promise<Project> {
         const project: Project = {
@@ -477,6 +478,37 @@ export class InMemoryProjectRepository implements ProjectRepository {
 
     async listProjectsByOwner(ownerId: string): Promise<Project[]> {
         return Array.from(this.projects.values()).filter(p => p.ownerId === ownerId);
+    }
+
+    async getEnvironmentById(projectId: string, envId: string): Promise<Environment | null> {
+        return Array.from(this.environments.values()).find(e => e.projectId === projectId && e.id === envId) || null;
+    }
+
+    async addMember(input: CreateProjectMemberInput): Promise<ProjectMember> {
+        const member: ProjectMember = {
+            id: 'mock-member-' + Date.now(),
+            projectId: input.projectId,
+            userId: input.userId,
+            role: input.role || 'READER',
+            addedBy: input.addedBy,
+            createdAt: new Date(),
+            updatedAt: new Date(),
+        };
+        this.members.set(`${input.projectId}::${input.userId}`, member);
+        return member;
+    }
+
+    async removeMember(projectId: string, userId: string): Promise<void> {
+        this.members.delete(`${projectId}::${userId}`);
+    }
+
+    async getMemberRole(projectId: string, userId: string): Promise<ProjectMemberRole | null> {
+        const member = this.members.get(`${projectId}::${userId}`);
+        return member?.role ?? null;
+    }
+
+    async listMembers(projectId: string): Promise<ProjectMember[]> {
+        return Array.from(this.members.values()).filter(m => m.projectId === projectId);
     }
 
     async createEnvironment(input: CreateEnvironmentInput): Promise<Environment> {
@@ -508,32 +540,6 @@ export class InMemoryProjectRepository implements ProjectRepository {
             }
         }
         return null;
-    }
-
-    async getEnvironmentById(projectId: string, envId: string): Promise<Environment | null> {
-        return Array.from(this.environments.values()).find(e => e.projectId === projectId && e.id === envId) || null;
-    }
-
-    async addMember(input: CreateProjectMemberInput): Promise<ProjectMember> {
-        return {
-            id: 'mock-member-' + Date.now(),
-            projectId: input.projectId,
-            userId: input.userId,
-            role: input.role || 'READER',
-            addedBy: input.addedBy,
-            createdAt: new Date(),
-            updatedAt: new Date(),
-        };
-    }
-
-    async removeMember(projectId: string, userId: string): Promise<void> { }
-
-    async getMemberRole(projectId: string, userId: string): Promise<ProjectMemberRole | null> {
-        return null;
-    }
-
-    async listMembers(projectId: string): Promise<ProjectMember[]> {
-        return [];
     }
 }
 

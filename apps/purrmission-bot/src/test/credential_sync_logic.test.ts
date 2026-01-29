@@ -13,12 +13,8 @@ import {
 } from '../domain/repositories.js';
 import {
     Project, Environment, Resource, Guardian, ResourceField, ApprovalRequest, ApprovalStatus, AuditLog,
-    CreateProjectInput,
-    CreateEnvironmentInput,
-    CreateProjectMemberInput,
-    ProjectMember,
-    ProjectMemberRole,
-    CreateResourceInput, AddGuardianInput, CreateResourceFieldInput, CreateApprovalRequestInput
+    CreateProjectInput, CreateEnvironmentInput, CreateResourceInput, AddGuardianInput, CreateResourceFieldInput, CreateApprovalRequestInput,
+    ProjectMember, CreateProjectMemberInput, ProjectMemberRole
 } from '../domain/models.js';
 import { randomUUID } from 'crypto';
 
@@ -27,6 +23,7 @@ import { randomUUID } from 'crypto';
 class MemProjectRepo implements ProjectRepository {
     projects: Project[] = [];
     environments: Environment[] = [];
+    members: ProjectMember[] = [];
 
     async createProject(input: CreateProjectInput): Promise<Project> {
         const p: Project = {
@@ -45,6 +42,9 @@ class MemProjectRepo implements ProjectRepository {
     async findById(id: string): Promise<Project | null> {
         return this.projects.find(p => p.id === id) || null;
     }
+    async getEnvironmentById(projectId: string, envId: string): Promise<Environment | null> {
+        return this.environments.find(e => e.projectId === projectId && e.id === envId) || null;
+    }
     async createEnvironment(input: CreateEnvironmentInput & { resourceId: string }): Promise<Environment> {
         const e: Environment = {
             id: randomUUID(),
@@ -55,17 +55,8 @@ class MemProjectRepo implements ProjectRepository {
         this.environments.push(e);
         return e;
     }
-    async listEnvironments(projectId: string): Promise<Environment[]> {
-        return this.environments.filter(e => e.projectId === projectId);
-    }
-    async findEnvironment(projectId: string, slug: string): Promise<Environment | null> {
-        return this.environments.find(e => e.projectId === projectId && e.slug === slug) || null;
-    }
-    async getEnvironmentById(projectId: string, envId: string): Promise<Environment | null> {
-        return this.environments.find(e => e.projectId === projectId && e.id === envId) || null;
-    }
     async addMember(input: CreateProjectMemberInput): Promise<ProjectMember> {
-        return {
+        const member: ProjectMember = {
             id: randomUUID(),
             projectId: input.projectId,
             userId: input.userId,
@@ -74,10 +65,25 @@ class MemProjectRepo implements ProjectRepository {
             createdAt: new Date(),
             updatedAt: new Date()
         };
+        this.members.push(member);
+        return member;
     }
-    async removeMember(projectId: string, userId: string): Promise<void> { }
-    async getMemberRole(projectId: string, userId: string): Promise<ProjectMemberRole | null> { return null; }
-    async listMembers(projectId: string): Promise<ProjectMember[]> { return []; }
+    async removeMember(projectId: string, userId: string): Promise<void> {
+        this.members = this.members.filter(m => !(m.projectId === projectId && m.userId === userId));
+    }
+    async getMemberRole(projectId: string, userId: string): Promise<ProjectMemberRole | null> {
+        const member = this.members.find(m => m.projectId === projectId && m.userId === userId);
+        return member?.role ?? null;
+    }
+    async listMembers(projectId: string): Promise<ProjectMember[]> {
+        return this.members.filter(m => m.projectId === projectId);
+    }
+    async listEnvironments(projectId: string): Promise<Environment[]> {
+        return this.environments.filter(e => e.projectId === projectId);
+    }
+    async findEnvironment(projectId: string, slug: string): Promise<Environment | null> {
+        return this.environments.find(e => e.projectId === projectId && e.slug === slug) || null;
+    }
 }
 
 class MemResourceRepo implements ResourceRepository {
@@ -224,7 +230,7 @@ describe('Credential Sync Logic Smoke Test', () => {
 
     beforeEach(() => {
         // Reset state
-        projectRepo.projects = []; projectRepo.environments = [];
+        projectRepo.projects = []; projectRepo.environments = []; projectRepo.members = [];
         resourceRepo.resources = [];
         guardianRepo.guardians = [];
         fieldRepo.fields = [];
