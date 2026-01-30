@@ -16,12 +16,14 @@ interface LocalConfig {
 
 export type ConfigScope = 'local' | 'global';
 
-const config = new Conf<PawthyConfig>({
+
+export const config = new Conf<PawthyConfig>({
     projectName: 'pawthy',
     defaults: {
-        apiUrl: 'https://purrmission.infra.purrfecthq.com', // Default to production for release
+        apiUrl: 'https://purrmission.infra.purrfecthq.com',
     },
 });
+
 
 const LOCAL_CONFIG_DIR = '.pawthy';
 const LOCAL_CONFIG_FILE = 'config.json';
@@ -169,9 +171,15 @@ export function setToken(token: string, scope: ConfigScope = 'global'): void {
     config.set('token', token);
 }
 
+
+
+
 export function getApiUrl(): string {
-    return process.env.PAWTHY_API_URL || config.get('apiUrl') || 'http://localhost:3000';
+    return process.env.PAWTHY_API_URL || config.get('apiUrl') as string;
 }
+
+
+
 
 export function setApiUrl(url: string): void {
     config.set('apiUrl', url);

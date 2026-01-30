@@ -1,5 +1,8 @@
 #!/usr/bin/env node
+
+import 'dotenv/config';
 import { Command } from "commander";
+
 import packageJson from '../package.json' with { type: 'json' };
 import { loginCommand } from './commands/login.js';
 import { initCommand } from './commands/init.js';
