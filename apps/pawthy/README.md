@@ -217,11 +217,10 @@ Default session storage location:
 
 ## Environment Variables
 
+
 | Variable | Description |
 |----------|-------------|
-
 | `PAWTHY_API_URL` | Override the Purrmission server URL (default: `https://purrmission.infra.purrfecthq.com`). Supports `.env` files. |
-
 
 ---
 

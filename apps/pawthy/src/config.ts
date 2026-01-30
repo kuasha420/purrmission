@@ -172,9 +172,13 @@ export function setToken(token: string, scope: ConfigScope = 'global'): void {
 }
 
 
+
+
 export function getApiUrl(): string {
-    return process.env.PAWTHY_API_URL || config.get('apiUrl') || 'https://purrmission.infra.purrfecthq.com';
+    return process.env.PAWTHY_API_URL || config.get('apiUrl') as string;
 }
+
+
 
 
 export function setApiUrl(url: string): void {

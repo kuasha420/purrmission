@@ -33,8 +33,12 @@ describe('Config', () => {
         process.env = { ...originalEnv };
         delete process.env.PAWTHY_API_URL;
 
-        // Mock config.get to return undefined/default
-        mock.method(config, 'get', () => undefined);
+
+        // Mock config.get to return default value
+        mock.method(config, 'get', (key: string) => {
+            return key === 'apiUrl' ? 'https://purrmission.infra.purrfecthq.com' : undefined;
+        });
+
 
         assert.strictEqual(getApiUrl(), 'https://purrmission.infra.purrfecthq.com');
     });
