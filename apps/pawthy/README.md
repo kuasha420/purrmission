@@ -217,7 +217,21 @@ Default session storage location:
 
 ---
 
+
+## User Roles & Permissions
+
+Pawthy respects project member roles assigned via the Discord bot. These roles determine your access level and approval requirements.
+
+| Role | Description | Capabilities |
+|------|-------------|--------------|
+| **Member** (Default) | Standard access | • Request secrets (requires approval)<br>• Cannot push secrets |
+| **Reader** | Pre-approved read access | • Pull secrets **without approval**<br>• Cannot push secrets |
+| **Writer** | Pre-approved read/write access | • Pull secrets **without approval**<br>• Push secrets **without approval** |
+
+To manage roles, use the `/project member` command in Discord.
+
 ## Environment Variables
+
 
 
 | Variable | Description |
