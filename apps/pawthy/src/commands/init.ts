@@ -38,19 +38,9 @@ export const initCommand = new Command('init')
 
             let projects = projectsRes.data;
 
-            if (projects.length === 0) {
-                const { shouldCreate } = await inquirer.prompt([{
-                    type: 'confirm',
-                    name: 'shouldCreate',
-                    message: 'No projects found. Create one?',
-                    default: false
-                }]);
 
-                if (!shouldCreate) {
-                    console.log(chalk.yellow('No project selected. Exiting.'));
-                    process.exit(0);
-                }
-
+            // Helper to create a project
+            const createProject = async () => {
                 // Prompt for project details
                 const { projectName, projectDescription } = await inquirer.prompt([
                     {
@@ -80,9 +70,8 @@ export const initCommand = new Command('init')
 
                     const newProject = createRes.data;
                     console.log(chalk.green(`✅ Project "${newProject.name}" created!`));
+                    return newProject;
 
-                    // Use the newly created project
-                    projects = [newProject];
                 } catch (error) {
                     if (axios.isAxiosError(error)) {
                         const status = error.response?.status;
@@ -101,21 +90,57 @@ export const initCommand = new Command('init')
                     }
                     process.exit(1);
                 }
+            };
+
+            let selectedProjectId: string;
+
+            if (projects.length === 0) {
+                const { shouldCreate } = await inquirer.prompt([{
+                    type: 'confirm',
+                    name: 'shouldCreate',
+                    message: 'No projects found. Create one?',
+                    default: false
+                }]);
+
+                if (!shouldCreate) {
+                    console.log(chalk.yellow('No project selected. Exiting.'));
+                    process.exit(0);
+                }
+
+                const newProject = await createProject();
+                projects = [newProject];
+                selectedProjectId = newProject.id;
+            } else {
+                // 2. Select Project (with Create Option)
+                const choices = [
+                    ...projects.map(p => ({
+                        name: p.name,
+                        value: p.id
+                    })),
+                    new inquirer.Separator(),
+                    { name: chalk.green('+ Create New Project'), value: 'CREATE_NEW' }
+                ];
+
+                const { projectId } = await inquirer.prompt([{
+                    type: 'list',
+                    name: 'projectId',
+                    message: 'Select a project:',
+                    choices: choices,
+                    loop: false
+                }]);
+
+                if (projectId === 'CREATE_NEW') {
+                    const newProject = await createProject();
+                    projects.push(newProject);
+                    selectedProjectId = newProject.id;
+                } else {
+                    selectedProjectId = projectId;
+                }
             }
 
-            // 2. Select Project
-            const { projectId } = await inquirer.prompt([{
-                type: 'list',
-                name: 'projectId',
-                message: 'Select a project:',
-                choices: projects.map(p => ({
-                    name: p.name,
-                    value: p.id
-                }))
-            }]);
 
             // 3. Fetch Environments
-            const envsRes = await axios.get<Environment[]>(`${apiUrl}/api/projects/${projectId}/environments`, {
+            const envsRes = await axios.get<Environment[]>(`${apiUrl}/api/projects/${selectedProjectId}/environments`, {
                 headers: { Authorization: `Bearer ${token}` },
             });
 
@@ -156,7 +181,7 @@ export const initCommand = new Command('init')
 
                 try {
                     const createEnvRes = await axios.post<Environment>(
-                        `${apiUrl}/api/projects/${projectId}/environments`,
+                        `${apiUrl}/api/projects/${selectedProjectId}/environments`,
                         {
                             name: envName.trim(),
                             slug: envSlug.trim()
@@ -198,7 +223,7 @@ export const initCommand = new Command('init')
 
             // 5. Write .pawthyrc
             const config = {
-                projectId,
+                projectId: selectedProjectId,
                 envId
             };
 

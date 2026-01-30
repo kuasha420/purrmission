@@ -66,9 +66,11 @@ pawthy init
 
 This interactive command will:
 1. Fetch available projects from your account
-2. Let you select a project (or create a new one)
-3. Let you select an environment (Production, Staging, etc.)
-4. Save the configuration to `.pawthyrc`
+2. Let you:
+   - Link the current directory to a Purrmission project.
+   - Select an existing project or create a new one directly from the list.
+   - Select an environment (e.g., Production, Staging, etc.).
+3. Save the configuration to `.pawthyrc`
 
 ---
 
