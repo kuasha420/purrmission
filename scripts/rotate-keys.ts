@@ -152,13 +152,16 @@ async function rotateEncryptedModel(
           updated++;
           if (!config.dryRun) {
             await modelDelegate.update({
-              where: { id: item.id },
+              where: { id: String(item.id) },
               data: { [encryptedFieldName]: newCiphertext },
             });
 
             // Verification
-            const check = await modelDelegate.findUnique({ where: { id: item.id } });
-            if (check && decryptValue(check[encryptedFieldName], config.newKey) === plaintext) {
+            const check = await modelDelegate.findUnique({ where: { id: String(item.id) } });
+            if (
+              check &&
+              decryptValue(check[encryptedFieldName] as string, config.newKey) === plaintext
+            ) {
               verified++;
             } else {
               logger.error(`❌ Verification failed for ${modelName} ${item.id}`);
