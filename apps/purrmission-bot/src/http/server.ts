@@ -3,27 +3,23 @@
  *
  * Provides the HTTP API for external services to request approvals.
  */
-
 import formBody from '@fastify/formbody';
-import Fastify, { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import type { Client, TextChannel } from 'discord.js';
+import Fastify, { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { z } from 'zod';
-import { logger } from '../logging/logger.js';
-import type { Services } from '../domain/services.js';
+
 import {
+  createAccessRequestEmbed,
   createApprovalButtons,
   createApprovalEmbed,
-  createAccessRequestEmbed,
   isAccessRequestContext,
 } from '../discord/interactions/approvalButtons.js';
-import {
-  InvalidGrantError,
-  ExpiredTokenError,
-  AccessDeniedError,
-} from '../domain/auth.js';
-import { generateTOTPCode } from '../domain/totp.js';
+import { AccessDeniedError, ExpiredTokenError, InvalidGrantError } from '../domain/auth.js';
 import { ResourceNotFoundError } from '../domain/errors.js';
 import type { ApprovalRequest, ResourceField } from '../domain/models.js';
+import type { Services } from '../domain/services.js';
+import { generateTOTPCode } from '../domain/totp.js';
+import { logger } from '../logging/logger.js';
 
 declare module 'fastify' {
   interface FastifyRequest {
@@ -65,7 +61,6 @@ export function createHttpServer(deps: HttpServerDeps): FastifyInstance {
 
   // Register formbody to support application/x-www-form-urlencoded (OAuth2 standard)
   server.register(formBody);
-
 
   // Health check endpoint
   server.get('/health', async () => {
@@ -129,7 +124,10 @@ export function createHttpServer(deps: HttpServerDeps): FastifyInstance {
       });
     }
 
-    const approvalRequest = result.request!;
+    if (!result.request) {
+      throw new Error('Approval request creation failed unexpectedly');
+    }
+    const approvalRequest = result.request;
 
     // Send Discord message to guardians
     try {
@@ -251,7 +249,11 @@ export function createHttpServer(deps: HttpServerDeps): FastifyInstance {
   });
 
   const CreateResourceFieldSchema = z.object({
-    name: z.string().min(1).max(64).regex(/^[A-Za-z0-9_-]+$/),
+    name: z
+      .string()
+      .min(1)
+      .max(64)
+      .regex(/^[A-Za-z0-9_-]+$/),
     value: z.string().max(10240),
   });
 
@@ -269,7 +271,7 @@ export function createHttpServer(deps: HttpServerDeps): FastifyInstance {
   });
 
   // Authentication Hook
-  const authenticate = async (req: FastifyRequest, rep: FastifyReply) => {
+  const authenticate = async (req: FastifyRequest, _rep: FastifyReply) => {
     const authHeader = req.headers.authorization;
     if (!authHeader || !authHeader.startsWith('Bearer ')) {
       throw new AccessDeniedError('Missing Bearer token');
@@ -281,7 +283,7 @@ export function createHttpServer(deps: HttpServerDeps): FastifyInstance {
     }
     // Attach user to request
     // Attach user to request
-    (req as any).user = { id: apiToken.userId };
+    req.user = { id: apiToken.userId };
   };
 
   // Authorization Hook: Verify Guardian/Owner Access
@@ -308,7 +310,7 @@ export function createHttpServer(deps: HttpServerDeps): FastifyInstance {
     if (error instanceof z.ZodError) {
       return reply.status(400).send({ error: 'validation_error', details: error.issues });
     }
-    const err = error as any;
+    const err = error as Error & { name?: string; message?: string };
     if (err.name === 'DuplicateError') {
       return reply.status(409).send({ error: err.message });
     }
@@ -329,314 +331,383 @@ export function createHttpServer(deps: HttpServerDeps): FastifyInstance {
     logger.error('Unhandled API error', { error });
     return reply.status(500).send({ error: 'internal_server_error' });
   });
-  server.post('/api/projects', {
-    preHandler: [authenticate],
-    schema: {
-      body: CreateProjectSchema
-    }
-  }, async (req, rep) => {
-    const { name, description } = req.body as z.infer<typeof CreateProjectSchema>;
-    const userId = (req as any).user.id;
+  server.post(
+    '/api/projects',
+    {
+      preHandler: [authenticate],
+      schema: {
+        body: CreateProjectSchema,
+      },
+    },
+    async (req, rep) => {
+      const { name, description } = req.body as z.infer<typeof CreateProjectSchema>;
+      const userId = req.user.id;
 
-    const project = await services.project.createProject({
-      name,
-      description,
-      ownerId: userId
-    });
-
-    return rep.status(201).send(project);
-  });
-
-  server.get('/api/projects', {
-    preHandler: [authenticate]
-  }, async (req, rep) => {
-    const userId = (req as any).user.id;
-    const projects = await services.project.listProjects(userId);
-    return projects;
-  });
-
-  server.get('/api/projects/:projectId', {
-    preHandler: [authenticate],
-    schema: {
-      params: ProjectParamsSchema
-    }
-  }, async (req, rep) => {
-    const { projectId } = req.params as z.infer<typeof ProjectParamsSchema>;
-    const userId = (req as any).user.id;
-
-    const project = await services.project.getProject(projectId);
-    if (!project) throw new ResourceNotFoundError('Project not found');
-
-    // Basic ACL: only owner can view (for now)
-    if (project.ownerId !== userId) throw new AccessDeniedError('Access denied');
-
-    return project;
-  });
-
-  server.post('/api/projects/:projectId/environments', {
-    preHandler: [authenticate],
-    schema: {
-      params: ProjectParamsSchema,
-      body: CreateEnvironmentSchema
-    }
-  }, async (req, rep) => {
-    const { projectId } = req.params as z.infer<typeof ProjectParamsSchema>;
-    const { name, slug } = req.body as z.infer<typeof CreateEnvironmentSchema>;
-    const userId = (req as any).user.id;
-
-    const project = await services.project.getProject(projectId);
-    if (!project) throw new ResourceNotFoundError('Project not found');
-    if (project.ownerId !== userId) throw new AccessDeniedError('Access denied');
-
-    const env = await services.project.createEnvironment({
-      name,
-      slug,
-      projectId
-    });
-    return rep.status(201).send(env);
-  });
-
-  server.get('/api/projects/:projectId/environments', {
-    preHandler: [authenticate],
-    schema: {
-      params: ProjectParamsSchema
-    }
-  }, async (req, rep) => {
-    const { projectId } = req.params as z.infer<typeof ProjectParamsSchema>;
-    const userId = (req as any).user.id;
-
-    const project = await services.project.getProject(projectId);
-    if (!project) throw new ResourceNotFoundError('Project not found');
-    if (project.ownerId !== userId) throw new AccessDeniedError('Access denied');
-
-    const envs = await services.project.listEnvironments(projectId);
-    return envs;
-  });
-
-  server.get('/api/projects/:projectId/environments/:envId/secrets', {
-    preHandler: [authenticate]
-  }, async (req, rep) => {
-    const { projectId, envId } = req.params as { projectId: string; envId: string };
-    const userId = (req as any).user.id;
-
-    const project = await services.project.getProject(projectId);
-    if (!project) throw new ResourceNotFoundError('Project not found');
-
-    const environment = await services.project.getEnvironmentById(projectId, envId);
-    if (!environment) throw new ResourceNotFoundError('Environment not found');
-    if (!environment.resourceId) throw new ResourceNotFoundError('Environment has no linked resource');
-
-    const resourceId = environment.resourceId;
-
-    // Project owner has immediate access
-    if (project.ownerId === userId) {
-      const fields = await services.resource.listFields(resourceId);
-      return { secrets: fieldsToSecrets(fields) };
-    }
-
-    // Project Members (READER or WRITER) have immediate access
-    const memberRole = await services.project.getMemberRole(projectId, userId);
-    if (memberRole === 'READER' || memberRole === 'WRITER') {
-      const fields = await services.resource.listFields(resourceId);
-      return { secrets: fieldsToSecrets(fields) };
-    }
-
-    // Guardians also have immediate access
-    const isGuardian = await services.resource.isGuardian(resourceId, userId);
-    if (isGuardian) {
-      const fields = await services.resource.listFields(resourceId);
-      return { secrets: fieldsToSecrets(fields) };
-    }
-
-    // Non-owner/non-guardian: Check for active approval or create one
-    let approval: ApprovalRequest | null = await services.approval.findActiveApproval(resourceId, userId);
-
-    if (!approval) {
-      // Create a new approval request
-      const result = await services.approval.createApprovalRequest({
-        resourceId,
-        context: {
-          requesterId: userId,
-          type: 'SECRET_ACCESS',
-          description: `CLI pull request for ${project.name}:${environment.name}`
-        }
+      const project = await services.project.createProject({
+        name,
+        description,
+        ownerId: userId,
       });
 
-      if (!result.success || !result.request) {
-        throw new Error(`Failed to create approval request: ${result.error || 'Unknown error'}`);
-      }
-      approval = result.request;
+      return rep.status(201).send(project);
+    }
+  );
 
-      // Send Discord notification to guardians
-      try {
-        await sendApprovalMessage(deps, result);
-      } catch (notifyError) {
-        logger.warn('Failed to send Discord notification for approval request', {
-          requestId: approval.id,
-          error: notifyError instanceof Error ? notifyError.message : String(notifyError),
+  server.get(
+    '/api/projects',
+    {
+      preHandler: [authenticate],
+    },
+    async (req, _rep) => {
+      const userId = req.user.id;
+      const projects = await services.project.listProjects(userId);
+      return projects;
+    }
+  );
+
+  server.get(
+    '/api/projects/:projectId',
+    {
+      preHandler: [authenticate],
+      schema: {
+        params: ProjectParamsSchema,
+      },
+    },
+    async (req, _rep) => {
+      const { projectId } = req.params as z.infer<typeof ProjectParamsSchema>;
+      const userId = req.user.id;
+
+      const project = await services.project.getProject(projectId);
+      if (!project) throw new ResourceNotFoundError('Project not found');
+
+      // Basic ACL: only owner can view (for now)
+      if (project.ownerId !== userId) throw new AccessDeniedError('Access denied');
+
+      return project;
+    }
+  );
+
+  server.post(
+    '/api/projects/:projectId/environments',
+    {
+      preHandler: [authenticate],
+      schema: {
+        params: ProjectParamsSchema,
+        body: CreateEnvironmentSchema,
+      },
+    },
+    async (req, rep) => {
+      const { projectId } = req.params as z.infer<typeof ProjectParamsSchema>;
+      const { name, slug } = req.body as z.infer<typeof CreateEnvironmentSchema>;
+      const userId = req.user.id;
+
+      const project = await services.project.getProject(projectId);
+      if (!project) throw new ResourceNotFoundError('Project not found');
+      if (project.ownerId !== userId) throw new AccessDeniedError('Access denied');
+
+      const env = await services.project.createEnvironment({
+        name,
+        slug,
+        projectId,
+      });
+      return rep.status(201).send(env);
+    }
+  );
+
+  server.get(
+    '/api/projects/:projectId/environments',
+    {
+      preHandler: [authenticate],
+      schema: {
+        params: ProjectParamsSchema,
+      },
+    },
+    async (req, _rep) => {
+      const { projectId } = req.params as z.infer<typeof ProjectParamsSchema>;
+      const userId = req.user.id;
+
+      const project = await services.project.getProject(projectId);
+      if (!project) throw new ResourceNotFoundError('Project not found');
+      if (project.ownerId !== userId) throw new AccessDeniedError('Access denied');
+
+      const envs = await services.project.listEnvironments(projectId);
+      return envs;
+    }
+  );
+
+  server.get(
+    '/api/projects/:projectId/environments/:envId/secrets',
+    {
+      preHandler: [authenticate],
+    },
+    async (req, rep) => {
+      const { projectId, envId } = req.params as { projectId: string; envId: string };
+      const userId = req.user.id;
+
+      const project = await services.project.getProject(projectId);
+      if (!project) throw new ResourceNotFoundError('Project not found');
+
+      const environment = await services.project.getEnvironmentById(projectId, envId);
+      if (!environment) throw new ResourceNotFoundError('Environment not found');
+      if (!environment.resourceId)
+        throw new ResourceNotFoundError('Environment has no linked resource');
+
+      const resourceId = environment.resourceId;
+
+      // Project owner has immediate access
+      if (project.ownerId === userId) {
+        const fields = await services.resource.listFields(resourceId);
+        return { secrets: fieldsToSecrets(fields) };
+      }
+
+      // Project Members (READER or WRITER) have immediate access
+      const memberRole = await services.project.getMemberRole(projectId, userId);
+      if (memberRole === 'READER' || memberRole === 'WRITER') {
+        const fields = await services.resource.listFields(resourceId);
+        return { secrets: fieldsToSecrets(fields) };
+      }
+
+      // Guardians also have immediate access
+      const isGuardian = await services.resource.isGuardian(resourceId, userId);
+      if (isGuardian) {
+        const fields = await services.resource.listFields(resourceId);
+        return { secrets: fieldsToSecrets(fields) };
+      }
+
+      // Non-owner/non-guardian: Check for active approval or create one
+      let approval: ApprovalRequest | null = await services.approval.findActiveApproval(
+        resourceId,
+        userId
+      );
+
+      if (!approval) {
+        // Create a new approval request
+        const result = await services.approval.createApprovalRequest({
+          resourceId,
+          context: {
+            requesterId: userId,
+            type: 'SECRET_ACCESS',
+            description: `CLI pull request for ${project.name}:${environment.name}`,
+          },
         });
-        // Continue anyway - the request was created successfully
+
+        if (!result.success || !result.request) {
+          throw new Error(`Failed to create approval request: ${result.error || 'Unknown error'}`);
+        }
+        approval = result.request;
+
+        // Send Discord notification to guardians
+        try {
+          await sendApprovalMessage(deps, result);
+        } catch (notifyError) {
+          logger.warn('Failed to send Discord notification for approval request', {
+            requestId: approval.id,
+            error: notifyError instanceof Error ? notifyError.message : String(notifyError),
+          });
+          // Continue anyway - the request was created successfully
+        }
       }
+
+      if (!approval) {
+        throw new Error('Approval request could not be found or created');
+      }
+
+      if (approval.status === 'PENDING') {
+        rep.status(202);
+        return {
+          status: 'pending',
+          message: 'Secret access is pending approval in Discord',
+          requestId: approval.id,
+        };
+      }
+
+      if (approval.status === 'APPROVED') {
+        const fields = await services.resource.listFields(resourceId);
+        return { secrets: fieldsToSecrets(fields) };
+      }
+
+      throw new AccessDeniedError('Access denied: Secrets access not approved');
     }
+  );
 
-    if (!approval) {
-      throw new Error('Approval request could not be found or created');
+  server.put(
+    '/api/projects/:projectId/environments/:envId/secrets',
+    {
+      preHandler: [authenticate],
+    },
+    async (req, _rep) => {
+      const { projectId, envId } = req.params as { projectId: string; envId: string };
+      const { secrets } = req.body as { secrets: Record<string, string> };
+      const userId = req.user.id;
+
+      const project = await services.project.getProject(projectId);
+      if (!project) throw new ResourceNotFoundError('Project not found');
+
+      // Access Control: Owner OR Writer
+      let hasWriteAccess = project.ownerId === userId;
+      if (!hasWriteAccess) {
+        const role = await services.project.getMemberRole(projectId, userId);
+        hasWriteAccess = role === 'WRITER';
+      }
+
+      if (!hasWriteAccess) throw new AccessDeniedError('Access denied');
+
+      const environment = await services.project.getEnvironmentById(projectId, envId);
+      if (!environment) throw new ResourceNotFoundError('Environment not found');
+      if (!environment.resourceId)
+        throw new ResourceNotFoundError('Environment has no linked resource');
+
+      const resourceId = environment.resourceId;
+
+      // Upsert fields in parallel to improve performance when many secrets are provided
+      await Promise.all(
+        Object.entries(secrets).map(([key, value]) =>
+          services.resource.upsertField(resourceId, key, value)
+        )
+      );
+
+      return { success: true };
     }
-
-    if (approval.status === 'PENDING') {
-      rep.status(202);
-      return {
-        status: 'pending',
-        message: 'Secret access is pending approval in Discord',
-        requestId: approval.id
-      };
-    }
-
-    if (approval.status === 'APPROVED') {
-      const fields = await services.resource.listFields(resourceId);
-      return { secrets: fieldsToSecrets(fields) };
-    }
-
-    throw new AccessDeniedError('Access denied: Secrets access not approved');
-  });
-
-  server.put('/api/projects/:projectId/environments/:envId/secrets', {
-    preHandler: [authenticate]
-  }, async (req, rep) => {
-    const { projectId, envId } = req.params as { projectId: string; envId: string };
-    const { secrets } = req.body as { secrets: Record<string, string> };
-    const userId = (req as any).user.id;
-
-    const project = await services.project.getProject(projectId);
-    if (!project) throw new ResourceNotFoundError('Project not found');
-
-    // Access Control: Owner OR Writer
-    let hasWriteAccess = project.ownerId === userId;
-    if (!hasWriteAccess) {
-      const role = await services.project.getMemberRole(projectId, userId);
-      hasWriteAccess = role === 'WRITER';
-    }
-
-    if (!hasWriteAccess) throw new AccessDeniedError('Access denied');
-
-    const environment = await services.project.getEnvironmentById(projectId, envId);
-    if (!environment) throw new ResourceNotFoundError('Environment not found');
-    if (!environment.resourceId) throw new ResourceNotFoundError('Environment has no linked resource');
-
-    // Upsert fields in parallel to improve performance when many secrets are provided
-    await Promise.all(
-      Object.entries(secrets).map(([key, value]) =>
-        services.resource.upsertField(environment.resourceId!, key, value)
-      )
-    );
-
-    return { success: true };
-  });
+  );
 
   // ---------------------------------------------------------------------------
   // Resource Field Endpoints
   // ---------------------------------------------------------------------------
 
-  server.get<{ Params: z.infer<typeof ResourceParamsSchema> }>('/api/resources/:id/fields', {
-    preHandler: [authenticate, verifyIsGuardian],
-    schema: {
-      params: ResourceParamsSchema
+  server.get<{ Params: z.infer<typeof ResourceParamsSchema> }>(
+    '/api/resources/:id/fields',
+    {
+      preHandler: [authenticate, verifyIsGuardian],
+      schema: {
+        params: ResourceParamsSchema,
+      },
+    },
+    async (req) => {
+      const { id } = req.params;
+      const fields = await services.resource.listFields(id);
+      return fields.map((f) => f.name);
     }
-  }, async (req) => {
-    const { id } = req.params;
-    const fields = await services.resource.listFields(id);
-    return fields.map(f => f.name);
-  });
+  );
 
-  server.post<{ Params: z.infer<typeof ResourceParamsSchema>, Body: z.infer<typeof CreateResourceFieldSchema> }>('/api/resources/:id/fields', {
-    preHandler: [authenticate, verifyIsGuardian],
-    schema: {
-      params: ResourceParamsSchema,
-      body: CreateResourceFieldSchema
+  server.post<{
+    Params: z.infer<typeof ResourceParamsSchema>;
+    Body: z.infer<typeof CreateResourceFieldSchema>;
+  }>(
+    '/api/resources/:id/fields',
+    {
+      preHandler: [authenticate, verifyIsGuardian],
+      schema: {
+        params: ResourceParamsSchema,
+        body: CreateResourceFieldSchema,
+      },
+    },
+    async (req, rep) => {
+      const { id } = req.params;
+      const { name, value } = req.body;
+
+      const field = await services.resource.createField(id, name, value);
+      return rep.status(201).send(field);
     }
-  }, async (req, rep) => {
-    const { id } = req.params;
-    const { name, value } = req.body;
+  );
 
-    const field = await services.resource.createField(id, name, value);
-    return rep.status(201).send(field);
-  });
+  server.get<{ Params: z.infer<typeof FieldParamsSchema> }>(
+    '/api/resources/:id/fields/:name',
+    {
+      preHandler: [authenticate, verifyIsGuardian],
+      schema: {
+        params: FieldParamsSchema,
+      },
+    },
+    async (req) => {
+      const { id, name } = req.params;
 
-  server.get<{ Params: z.infer<typeof FieldParamsSchema> }>('/api/resources/:id/fields/:name', {
-    preHandler: [authenticate, verifyIsGuardian],
-    schema: {
-      params: FieldParamsSchema
+      const field = await services.resource.getField(id, name);
+      if (!field) {
+        throw new ResourceNotFoundError(`Field '${name}' not found`);
+      }
+
+      return { name: field.name, value: field.value };
     }
-  }, async (req) => {
-    const { id, name } = req.params;
+  );
 
-    const field = await services.resource.getField(id, name);
-    if (!field) {
-      throw new ResourceNotFoundError(`Field '${name}' not found`);
+  server.delete<{ Params: z.infer<typeof FieldParamsSchema> }>(
+    '/api/resources/:id/fields/:name',
+    {
+      preHandler: [authenticate, verifyIsGuardian],
+      schema: {
+        params: FieldParamsSchema,
+      },
+    },
+    async (req, rep) => {
+      const { id, name } = req.params;
+
+      await services.resource.deleteField(id, name);
+      return rep.status(204).send();
     }
-
-    return { name: field.name, value: field.value };
-  });
-
-  server.delete<{ Params: z.infer<typeof FieldParamsSchema> }>('/api/resources/:id/fields/:name', {
-    preHandler: [authenticate, verifyIsGuardian],
-    schema: {
-      params: FieldParamsSchema
-    }
-  }, async (req, rep) => {
-    const { id, name } = req.params;
-
-    await services.resource.deleteField(id, name);
-    return rep.status(204).send();
-  });
+  );
 
   // ---------------------------------------------------------------------------
   // Resource 2FA Endpoints
   // ---------------------------------------------------------------------------
 
-  server.get<{ Params: z.infer<typeof ResourceParamsSchema> }>('/api/resources/:id/2fa', {
-    preHandler: [authenticate, verifyIsGuardian],
-    schema: {
-      params: ResourceParamsSchema
+  server.get<{ Params: z.infer<typeof ResourceParamsSchema> }>(
+    '/api/resources/:id/2fa',
+    {
+      preHandler: [authenticate, verifyIsGuardian],
+      schema: {
+        params: ResourceParamsSchema,
+      },
+    },
+    async (req) => {
+      const { id } = req.params;
+
+      const account = await services.resource.getLinkedTOTPAccount(id);
+      if (!account) {
+        throw new ResourceNotFoundError('No 2FA account linked to this resource');
+      }
+
+      const code = generateTOTPCode(account);
+      return { code };
     }
-  }, async (req) => {
-    const { id } = req.params;
+  );
 
-    const account = await services.resource.getLinkedTOTPAccount(id);
-    if (!account) {
-      throw new ResourceNotFoundError('No 2FA account linked to this resource');
+  server.post<{
+    Params: z.infer<typeof ResourceParamsSchema>;
+    Body: z.infer<typeof LinkTotpSchema>;
+  }>(
+    '/api/resources/:id/2fa/link',
+    {
+      preHandler: [authenticate, verifyIsGuardian],
+      schema: {
+        params: ResourceParamsSchema,
+        body: LinkTotpSchema,
+      },
+    },
+    async (req, rep) => {
+      const { id } = req.params;
+      const { totpAccountId } = req.body;
+      const userId = req.user.id; // Actor ID
+
+      await services.resource.linkTOTPAccount(id, totpAccountId, userId);
+      return rep.status(200).send({ success: true });
     }
+  );
 
-    const code = generateTOTPCode(account);
-    return { code };
-  });
+  server.delete<{ Params: z.infer<typeof ResourceParamsSchema> }>(
+    '/api/resources/:id/2fa/link',
+    {
+      preHandler: [authenticate, verifyIsGuardian],
+      schema: {
+        params: ResourceParamsSchema,
+      },
+    },
+    async (req, rep) => {
+      const { id } = req.params;
 
-  server.post<{ Params: z.infer<typeof ResourceParamsSchema>, Body: z.infer<typeof LinkTotpSchema> }>('/api/resources/:id/2fa/link', {
-    preHandler: [authenticate, verifyIsGuardian],
-    schema: {
-      params: ResourceParamsSchema,
-      body: LinkTotpSchema
+      await services.resource.unlinkTOTPAccount(id);
+      return rep.status(204).send();
     }
-  }, async (req, rep) => {
-    const { id } = req.params;
-    const { totpAccountId } = req.body;
-    const userId = req.user.id; // Actor ID
-
-    await services.resource.linkTOTPAccount(id, totpAccountId, userId);
-    return rep.status(200).send({ success: true });
-  });
-
-  server.delete<{ Params: z.infer<typeof ResourceParamsSchema> }>('/api/resources/:id/2fa/link', {
-    preHandler: [authenticate, verifyIsGuardian],
-    schema: {
-      params: ResourceParamsSchema
-    }
-  }, async (req, rep) => {
-    const { id } = req.params;
-
-    await services.resource.unlinkTOTPAccount(id);
-    return rep.status(204).send();
-  });
+  );
 
   return server;
 }
@@ -744,5 +815,5 @@ export async function startHttpServer(
 }
 
 function fieldsToSecrets(fields: ResourceField[]): Record<string, string> {
-  return Object.fromEntries(fields.map(f => [f.name, f.value]));
+  return Object.fromEntries(fields.map((f) => [f.name, f.value]));
 }

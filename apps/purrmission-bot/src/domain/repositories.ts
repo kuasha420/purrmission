@@ -7,42 +7,38 @@
  *
  * TODO: Replace in-memory implementations with Postgres/Prisma for production.
  */
+import type { Prisma, PrismaClient } from '@prisma/client';
 
-import type { PrismaClient, Prisma } from '@prisma/client';
+import { decryptValue, encryptValue } from '../infra/crypto.js';
+import { logger } from '../logging/logger.js';
+import { DuplicateError } from './errors.js';
 import type {
-  Resource,
-  Guardian,
-  GuardianRole,
-  ApprovalRequest,
-  CreateResourceInput,
   AddGuardianInput,
-  CreateApprovalRequestInput,
-  ApprovalStatus,
+  ApiToken,
   ApprovalMode,
-  TOTPAccount,
-  ResourceField,
-  CreateResourceFieldInput,
+  ApprovalRequest,
+  ApprovalStatus,
   AuditLog,
-  CreateAuditLogInput,
   AuthSession,
   AuthSessionStatus,
-  ApiToken,
   CreateApiTokenInput,
-  Project,
-  Environment,
-  CreateProjectInput,
+  CreateApprovalRequestInput,
+  CreateAuditLogInput,
   CreateEnvironmentInput,
-  ProjectMember,
+  CreateProjectInput,
   CreateProjectMemberInput,
+  CreateResourceFieldInput,
+  CreateResourceInput,
+  Environment,
+  Guardian,
+  GuardianRole,
+  Project,
+  ProjectMember,
   ProjectMemberRole,
+  Resource,
+  ResourceField,
+  TOTPAccount,
 } from './models.js';
-import { encryptValue, decryptValue } from '../infra/crypto.js';
-import { DuplicateError, ResourceNotFoundError } from './errors.js';
-
-import crypto from 'node:crypto';
-import { logger } from '../logging/logger.js';
-
-
 
 export interface ResourceRepository {
   create(resource: CreateResourceInput): Promise<Resource>;
@@ -176,8 +172,6 @@ export interface ResourceFieldRepository {
   delete(id: string): Promise<void>;
 }
 
-
-
 /**
  * Prisma implementation of ResourceRepository.
  * Persists resources to the database for production use.
@@ -258,14 +252,6 @@ export class PrismaResourceRepository implements ResourceRepository {
     };
   }
 }
-
-
-
-
-
-
-
-
 
 export class PrismaTOTPRepository implements TOTPRepository {
   private readonly prisma: PrismaClient;
@@ -753,21 +739,24 @@ export class PrismaApprovalRequestRepository implements ApprovalRequestRepositor
     return rows.map((row) => this.mapPrismaToDomain(row));
   }
 
-  async findActiveByRequester(resourceId: string, requesterId: string): Promise<ApprovalRequest | null> {
+  async findActiveByRequester(
+    resourceId: string,
+    requesterId: string
+  ): Promise<ApprovalRequest | null> {
     const rows = await this.prisma.approvalRequest.findMany({
       where: {
         resourceId,
         status: { in: ['PENDING', 'APPROVED'] },
       },
       orderBy: {
-        createdAt: 'desc'
-      }
+        createdAt: 'desc',
+      },
     });
 
     // NOTE: In-memory filtering is used here as a workaround for Prisma's SQLite provider,
     // which has limitations with JSON path queries. This may have performance implications
     // for resources with a very large number of approval requests.
-    const match = rows.find(row => {
+    const match = rows.find((row) => {
       const ctx = row.context;
       if (ctx && typeof ctx === 'object' && !Array.isArray(ctx)) {
         return (ctx as Record<string, unknown>)['requesterId'] === requesterId;
@@ -782,7 +771,7 @@ export class PrismaApprovalRequestRepository implements ApprovalRequestRepositor
     id: string;
     resourceId: string;
     status: string;
-    context: any;
+    context: unknown;
     callbackUrl: string | null;
     createdAt: Date;
     expiresAt: Date | null;
@@ -795,7 +784,7 @@ export class PrismaApprovalRequestRepository implements ApprovalRequestRepositor
       id: row.id,
       resourceId: row.resourceId,
       status: row.status as ApprovalStatus,
-      context: row.context,
+      context: (row.context as Record<string, unknown>) ?? {},
       callbackUrl: row.callbackUrl ?? undefined,
       createdAt: row.createdAt,
       expiresAt: row.expiresAt,
@@ -808,7 +797,11 @@ export class PrismaApprovalRequestRepository implements ApprovalRequestRepositor
 }
 
 export interface AuthRepository {
-  createSession(input: { deviceCode: string; userCode: string; expiresAt: Date }): Promise<AuthSession>;
+  createSession(input: {
+    deviceCode: string;
+    userCode: string;
+    expiresAt: Date;
+  }): Promise<AuthSession>;
   findSessionByDeviceCode(deviceCode: string): Promise<AuthSession | null>;
   findSessionByUserCode(userCode: string): Promise<AuthSession | null>;
   updateSessionStatus(id: string, status: AuthSessionStatus, userId?: string): Promise<void>;
@@ -834,7 +827,6 @@ export interface ProjectRepository {
   listMembers(projectId: string): Promise<ProjectMember[]>;
 }
 
-
 export class PrismaAuthRepository implements AuthRepository {
   private readonly prisma: PrismaClient;
 
@@ -842,7 +834,11 @@ export class PrismaAuthRepository implements AuthRepository {
     this.prisma = prisma;
   }
 
-  async createSession(input: { deviceCode: string; userCode: string; expiresAt: Date }): Promise<AuthSession> {
+  async createSession(input: {
+    deviceCode: string;
+    userCode: string;
+    expiresAt: Date;
+  }): Promise<AuthSession> {
     const session = await this.prisma.authSession.create({
       data: {
         deviceCode: input.deviceCode,
@@ -902,11 +898,7 @@ export class PrismaAuthRepository implements AuthRepository {
   async deleteExpiredSessions(): Promise<number> {
     const result = await this.prisma.authSession.deleteMany({
       where: {
-        OR: [
-          { status: 'EXPIRED' },
-          { status: 'CONSUMED' },
-          { expiresAt: { lt: new Date() } },
-        ],
+        OR: [{ status: 'EXPIRED' }, { status: 'CONSUMED' }, { expiresAt: { lt: new Date() } }],
       },
     });
     return result.count;
@@ -984,7 +976,7 @@ export class PrismaProjectRepository implements ProjectRepository {
         name: input.name,
         description: input.description ?? null,
         ownerId: input.ownerId,
-      }
+      },
     });
     return {
       ...project,
@@ -1002,8 +994,11 @@ export class PrismaProjectRepository implements ProjectRepository {
   }
 
   async listProjectsByOwner(ownerId: string): Promise<Project[]> {
-    const rows = await this.prisma.project.findMany({ where: { ownerId }, orderBy: { createdAt: 'desc' } });
-    return rows.map(row => ({
+    const rows = await this.prisma.project.findMany({
+      where: { ownerId },
+      orderBy: { createdAt: 'desc' },
+    });
+    return rows.map((row) => ({
       ...row,
       description: row.description ?? null,
     }));
@@ -1017,38 +1012,48 @@ export class PrismaProjectRepository implements ProjectRepository {
           slug: input.slug,
           projectId: input.projectId,
           resourceId: input.resourceId,
-        }
+        },
       });
       return {
         ...env,
-        resourceId: env.resourceId ?? undefined
+        resourceId: env.resourceId ?? undefined,
       };
-    } catch (error: any) {
-      if (error.code === 'P2002') {
-        throw new DuplicateError(`Environment with slug "${input.slug}" already exists in this project.`);
+    } catch (error: unknown) {
+      if (
+        error &&
+        typeof error === 'object' &&
+        'code' in error &&
+        (error as { code: string }).code === 'P2002'
+      ) {
+        throw new DuplicateError(
+          `Environment with slug "${input.slug}" already exists in this project.`
+        );
       }
       throw error;
     }
   }
 
   async listEnvironments(projectId: string): Promise<Environment[]> {
-    const rows = await this.prisma.environment.findMany({ where: { projectId }, orderBy: { name: 'asc' } });
-    return rows.map(row => ({
+    const rows = await this.prisma.environment.findMany({
+      where: { projectId },
+      orderBy: { name: 'asc' },
+    });
+    return rows.map((row) => ({
       ...row,
-      resourceId: row.resourceId ?? undefined
+      resourceId: row.resourceId ?? undefined,
     }));
   }
 
   async findEnvironment(projectId: string, slug: string): Promise<Environment | null> {
     const row = await this.prisma.environment.findUnique({
       where: {
-        projectId_slug: { projectId, slug }
-      }
+        projectId_slug: { projectId, slug },
+      },
     });
     if (!row) return null;
     return {
       ...row,
-      resourceId: row.resourceId ?? undefined
+      resourceId: row.resourceId ?? undefined,
     };
   }
 
@@ -1056,13 +1061,13 @@ export class PrismaProjectRepository implements ProjectRepository {
     const row = await this.prisma.environment.findFirst({
       where: {
         projectId,
-        id: envId
-      }
+        id: envId,
+      },
     });
     if (!row) return null;
     return {
       ...row,
-      resourceId: row.resourceId ?? undefined
+      resourceId: row.resourceId ?? undefined,
     };
   }
 
@@ -1074,19 +1079,24 @@ export class PrismaProjectRepository implements ProjectRepository {
           userId: input.userId,
           role: input.role ?? 'READER',
           addedBy: input.addedBy,
-        }
+        },
       });
       return {
         ...member,
-        role: member.role as ProjectMemberRole
+        role: member.role as ProjectMemberRole,
       };
-    } catch (error: any) {
-      if (error.code === 'P2002') {
-        // Already exists, try to update role? Or just throw duplicate. 
+    } catch (error: unknown) {
+      if (
+        error &&
+        typeof error === 'object' &&
+        'code' in error &&
+        (error as { code: string }).code === 'P2002'
+      ) {
+        // Already exists, try to update role? Or just throw duplicate.
         // For now, let's treat it as an update if they try to add again
         const member = await this.prisma.projectMember.update({
           where: { projectId_userId: { projectId: input.projectId, userId: input.userId } },
-          data: { role: input.role ?? 'READER' }
+          data: { role: input.role ?? 'READER' },
         });
         return { ...member, role: member.role as ProjectMemberRole };
       }
@@ -1097,17 +1107,18 @@ export class PrismaProjectRepository implements ProjectRepository {
   async removeMember(projectId: string, userId: string): Promise<void> {
     try {
       await this.prisma.projectMember.delete({
-        where: { projectId_userId: { projectId, userId } }
+        where: { projectId_userId: { projectId, userId } },
       });
-    } catch (e: any) {
-      if (e.code === 'P2025') return; // Not found, ignore
+    } catch (e: unknown) {
+      if (e && typeof e === 'object' && 'code' in e && (e as { code: string }).code === 'P2025')
+        return; // Not found, ignore
       throw e;
     }
   }
 
   async getMemberRole(projectId: string, userId: string): Promise<ProjectMemberRole | null> {
     const member = await this.prisma.projectMember.findUnique({
-      where: { projectId_userId: { projectId, userId } }
+      where: { projectId_userId: { projectId, userId } },
     });
     return member ? (member.role as ProjectMemberRole) : null;
   }
@@ -1115,11 +1126,11 @@ export class PrismaProjectRepository implements ProjectRepository {
   async listMembers(projectId: string): Promise<ProjectMember[]> {
     const members = await this.prisma.projectMember.findMany({
       where: { projectId },
-      orderBy: { createdAt: 'desc' }
+      orderBy: { createdAt: 'desc' },
     });
-    return members.map(m => ({
+    return members.map((m) => ({
       ...m,
-      role: m.role as ProjectMemberRole
+      role: m.role as ProjectMemberRole,
     }));
   }
 }
