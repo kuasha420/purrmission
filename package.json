@@ -7,6 +7,15 @@
   "workspaces": [
     "apps/*"
   ],
+  "lint-staged": {
+    "*.{js,ts,tsx}": [
+      "eslint --fix",
+      "prettier --write"
+    ],
+    "*.{json,md,yml}": [
+      "prettier --write"
+    ]
+  },
   "scripts": {
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",
@@ -31,7 +40,8 @@
     "prod:ops:encrypt-totp": "node dist-scripts/encrypt-totp-secrets.js",
     "mcp:sync": "node scripts/sync-mcp.cjs",
     "antigravity": "node scripts/antigravity.cjs",
-    "quick-start": "bash scripts/quick-start.sh"
+    "quick-start": "bash scripts/quick-start.sh",
+    "prepare": "husky"
   },
   "packageManager": "pnpm@9.15.1",
   "dependencies": {

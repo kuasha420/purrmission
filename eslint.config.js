@@ -17,11 +17,9 @@ export default tseslint.config(
       // Prefer explicit types for function returns
       '@typescript-eslint/explicit-function-return-type': 'off',
 
-      // Allow any for MVP, tighten in production
-      '@typescript-eslint/no-explicit-any': 'warn',
-
-      // Allow non-null assertions for MVP
-      '@typescript-eslint/no-non-null-assertion': 'warn',
+      // Strict type safety
+      '@typescript-eslint/no-explicit-any': 'error',
+      '@typescript-eslint/no-non-null-assertion': 'error',
     },
   }
 );
