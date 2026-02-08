@@ -1,0 +1,26 @@
+services:
+  purrmission-bot:
+    build:
+      context: .
+      dockerfile: apps/purrmission-bot/Dockerfile
+    restart: always
+    env_file: .env
+    environment:
+      - DATABASE_URL=file:./dev.db
+    volumes:
+      - ./prisma/dev.db:/app/prisma/dev.db
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+
+  modmail-bot:
+    build:
+      context: .
+      dockerfile: apps/modmail-bot/Dockerfile
+    restart: always
+    env_file: .env
+    deploy:
+      resources:
+        limits:
+          memory: 256M

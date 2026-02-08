@@ -30,8 +30,8 @@ describe('Project API', () => {
     let server: FastifyInstance;
     let services: Services;
     let repositories: Repositories;
-    let validToken = 'valid-token';
-    let userId = 'user-123';
+    const validToken = 'valid-token';
+    const userId = 'user-123';
 
     beforeEach(async () => {
         repositories = createInMemoryRepositories();
