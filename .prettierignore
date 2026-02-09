@@ -1,8 +1,5 @@
-dist
 node_modules
-.yarn
-.pnp.*
-.git
-.cache
-coverage
-**.d.ts
+dist
+.turbo
+js
+.DS_Store

@@ -31,7 +31,8 @@
     "prod:ops:encrypt-totp": "node dist-scripts/encrypt-totp-secrets.js",
     "mcp:sync": "node scripts/sync-mcp.cjs",
     "antigravity": "node scripts/antigravity.cjs",
-    "quick-start": "bash scripts/quick-start.sh"
+    "quick-start": "bash scripts/quick-start.sh",
+    "prepare": "husky"
   },
   "packageManager": "pnpm@9.15.1",
   "dependencies": {
@@ -40,10 +41,16 @@
     "zod": "^3.24.1"
   },
   "devDependencies": {
+    "@commitlint/cli": "20.4.1",
+    "@commitlint/config-conventional": "20.4.1",
+    "@trivago/prettier-plugin-sort-imports": "6.0.2",
     "@typescript-eslint/eslint-plugin": "^8.49.0",
     "@typescript-eslint/parser": "^8.49.0",
     "eslint": "^9.39.1",
+    "husky": "9.1.7",
+    "lint-staged": "16.2.7",
     "prettier": "^3.7.4",
+    "prettier-plugin-tailwindcss": "0.7.2",
     "prisma": "6.19.1",
     "tsup": "^8.3.5",
     "tsx": "^4.21.0",
