@@ -22,10 +22,7 @@ import { logger } from '../logging/logger.js';
 import { AuditService } from './audit.js';
 import { AuthService } from './auth.js';
 import { ProjectService } from './project.js';
-import {
-  ResourceNotFoundError,
-  DuplicateError,
-} from './errors.js';
+import { ResourceNotFoundError, DuplicateError } from './errors.js';
 
 /**
  * Service dependencies.
@@ -205,7 +202,7 @@ export class ApprovalService {
 
     // Extract requester (actor) ID from the original request context, if available
     let requesterId: string | null = null;
-    const requestContext = request.context as any;
+    const requestContext = request.context as Record<string, unknown>;
     if (requestContext && typeof requestContext === 'object' && 'requesterId' in requestContext) {
       requesterId = String(requestContext.requesterId);
     }
@@ -247,7 +244,10 @@ export class ApprovalService {
   /**
    * Find an active (PENDING or APPROVED) approval request for a resource and requester.
    */
-  async findActiveApproval(resourceId: string, requesterId: string): Promise<ApprovalRequest | null> {
+  async findActiveApproval(
+    resourceId: string,
+    requesterId: string
+  ): Promise<ApprovalRequest | null> {
     return this.deps.repositories.approvalRequests.findActiveByRequester(resourceId, requesterId);
   }
 }
@@ -273,7 +273,10 @@ export class ResourceService {
    * Check if a user is a guardian (or owner) of a resource.
    */
   async isGuardian(resourceId: string, userId: string): Promise<boolean> {
-    const guardian = await this.deps.repositories.guardians.findByResourceAndUser(resourceId, userId);
+    const guardian = await this.deps.repositories.guardians.findByResourceAndUser(
+      resourceId,
+      userId
+    );
     return !!guardian;
   }
 
@@ -383,7 +386,10 @@ export class ResourceService {
     }
 
     // Verify Target is a Guardian
-    const targetGuardian = await repositories.guardians.findByResourceAndUser(resourceId, targetUserId);
+    const targetGuardian = await repositories.guardians.findByResourceAndUser(
+      resourceId,
+      targetUserId
+    );
     if (!targetGuardian) {
       return { success: false, error: 'User is not a guardian of this resource.' };
     }
