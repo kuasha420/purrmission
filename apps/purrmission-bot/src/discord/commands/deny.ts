@@ -1,7 +1,7 @@
 /**
  * Deny command handler.
  *
- * Previously a standalone /deny command, now routed via /purrmission access deny.
+ * Previously a standalone /deny command, now routed via /access deny.
  * The execute function is kept for test compatibility.
  */
 

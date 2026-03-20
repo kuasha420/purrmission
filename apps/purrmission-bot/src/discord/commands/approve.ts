@@ -1,7 +1,7 @@
 /**
  * Approve command handler.
  *
- * Previously a standalone /approve command, now routed via /purrmission access approve.
+ * Previously a standalone /approve command, now routed via /access approve.
  * The execute function is kept for test compatibility.
  */
 
