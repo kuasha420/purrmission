@@ -18,10 +18,12 @@ dist-scripts/
 .env
 .env.local
 .env.*.local
+mcp.local.json
 
 # IDE
 .idea/
 .vscode/
+.codex/
 *.swp
 *.swo
 

@@ -40,6 +40,37 @@ See [Pawthy CLI Documentation](apps/pawthy/README.md) for full usage.
 
 ---
 
+## Codex IDE
+
+This repo now includes a Codex-native setup:
+
+- `AGENTS.md` files give Codex project and package-specific instructions.
+- `pnpm mcp:sync` generates `.codex/config.toml` for project-scoped Codex MCP wiring.
+- `pnpm mcp:sync` also keeps this repo trusted in `~/.codex/config.toml` so Codex is allowed to load the generated project config.
+- The generated Codex config uses Codex's native `command` / `args` / `cwd` / `env` settings, resolved from `mcp.json`, optional `mcp.local.json`, and the repo-root `.env`.
+
+This is additive to the existing Antigravity, Claude Desktop, and VS Code flows. `mcp.json` stays the shared source of truth, and `scripts/sync-mcp.cjs` / `pnpm mcp:sync` continue to support the other MCP-aware clients.
+
+Codex follows the same tooling convention as the other agent platforms here: run `pnpm mcp:sync`, then open or re-open the repo in Codex.
+
+If `GITHUB_PERSONAL_ACCESS_TOKEN` is present in your local `.env`, the generated Codex config will also enable the GitHub MCP server automatically.
+
+Optional MCP-related environment variables:
+
+| Variable                       | Description                                                      |
+| ------------------------------ | ---------------------------------------------------------------- |
+| `CONTEXT7_API_KEY`             | Optional API key for Context7 MCP                                |
+| `GITHUB_PERSONAL_ACCESS_TOKEN` | Optional GitHub token for enabling the GitHub MCP server locally |
+
+To verify the setup:
+
+```bash
+pnpm mcp:sync
+codex "Show which instruction files are active for this repo."
+```
+
+---
+
 ## How It Works
 
 ### Credential Sync Flow
@@ -133,11 +164,11 @@ Purrmission now exposes six top-level Discord slash commands:
 
 ### `/project`
 
-| Action        | Command                                                         |
-| ------------- | --------------------------------------------------------------- | -------- |
-| Add Member    | `/project member add project_id:<id> user:@someone [role:READER | WRITER]` |
-| Remove Member | `/project member remove project_id:<id> user:@someone`          |
-| List Members  | `/project member list project_id:<id>`                          |
+| Action        | Command                                                                     |
+| ------------- | --------------------------------------------------------------------------- |
+| Add Member    | `/project member add project_id:<id> user:@someone [role:READER or WRITER]` |
+| Remove Member | `/project member remove project_id:<id> user:@someone`                      |
+| List Members  | `/project member list project_id:<id>`                                      |
 
 ---
 
@@ -178,15 +209,17 @@ pnpm dev:purrmission
 
 ### Environment Variables
 
-| Variable            | Description                                              |
-| ------------------- | -------------------------------------------------------- |
-| `DISCORD_BOT_TOKEN` | Your Discord bot token                                   |
-| `DISCORD_CLIENT_ID` | Your Discord application client ID                       |
-| `DISCORD_GUILD_ID`  | Guild ID for development (commands deploy here)          |
-| `APP_PORT`          | HTTP server port (default: 3001)                         |
-| `DATABASE_URL`      | Database URL (e.g., `file:./data/prod.db`)               |
-| `ENCRYPTION_KEY`    | **Required** - 32-byte hex for at-rest encryption        |
-| `EXTERNAL_API_URL`  | Public API URL (e.g., `https://purrmission.example.com`) |
+| Variable                       | Description                                              |
+| ------------------------------ | -------------------------------------------------------- |
+| `DISCORD_BOT_TOKEN`            | Your Discord bot token                                   |
+| `DISCORD_CLIENT_ID`            | Your Discord application client ID                       |
+| `DISCORD_GUILD_ID`             | Guild ID for development (commands deploy here)          |
+| `APP_PORT`                     | HTTP server port (default: 3001)                         |
+| `DATABASE_URL`                 | Database URL (e.g., `file:./data/prod.db`)               |
+| `ENCRYPTION_KEY`               | **Required** - 32-byte hex for at-rest encryption        |
+| `EXTERNAL_API_URL`             | Public API URL (e.g., `https://purrmission.example.com`) |
+| `CONTEXT7_API_KEY`             | Optional - API key for Context7 MCP                      |
+| `GITHUB_PERSONAL_ACCESS_TOKEN` | Optional - token for GitHub MCP tooling                  |
 
 Generate an encryption key:
 
