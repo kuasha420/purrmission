@@ -1,7 +1,7 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { describe, it, beforeEach } from 'node:test';
 import assert from 'node:assert';
-import { handleResourceAutocomplete } from './resource.js';
+import { handleResourceAutocomplete, resourceCommand } from './resource.js';
 import type { CommandContext } from './context.js';
 import type { AutocompleteInteraction } from 'discord.js';
 
@@ -11,12 +11,14 @@ describe('handleResourceAutocomplete', () => {
   let respondCalls: any[] = [];
   let findByUserIdOverrides: any[] = [];
   let findManyByIdsOverrides: any[] = [];
+  let findManyByIdsCalls: Array<{ ids: string[]; query?: string }> = [];
   let findByResourceIdOverrides: any[] = [];
 
   beforeEach(() => {
     respondCalls = [];
     findByUserIdOverrides = [];
     findManyByIdsOverrides = [];
+    findManyByIdsCalls = [];
     findByResourceIdOverrides = [];
 
     mockInteraction = {
@@ -50,7 +52,8 @@ describe('handleResourceAutocomplete', () => {
           },
         } as any,
         resources: {
-          findManyByIds: async (_ids: string[]) => {
+          findManyByIds: async (ids: string[], query?: string) => {
+            findManyByIdsCalls.push({ ids, query });
             return findManyByIdsOverrides;
           },
         } as any,
@@ -89,6 +92,10 @@ describe('handleResourceAutocomplete', () => {
     // Verify
     assert.strictEqual(respondCalls.length, 1);
     assert.deepStrictEqual(respondCalls[0], [{ name: 'My Cool Resource', value: 'res-1' }]);
+    assert.deepStrictEqual(findManyByIdsCalls[0], {
+      ids: ['res-1', 'res-2'],
+      query: 'cool',
+    });
   });
 
   it('should return nothing if user has no guardianships', async () => {
@@ -152,5 +159,14 @@ describe('handleResourceAutocomplete', () => {
     // Verify
     assert.strictEqual(respondCalls.length, 1);
     assert.deepStrictEqual(respondCalls[0], [{ name: 'password', value: 'password' }]);
+  });
+
+  it('should cap /resource register names at 100 characters', () => {
+    const registerOption = resourceCommand
+      .toJSON()
+      .options?.find((option: any) => option.name === 'register');
+    const nameOption = registerOption?.options?.find((option: any) => option.name === 'name');
+
+    assert.strictEqual(nameOption?.max_length, 100);
   });
 });

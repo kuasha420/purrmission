@@ -56,7 +56,7 @@ We will leverage the existing robust domain models:
 
 1. TUI asks for Project Name (e.g., "my-website") and Environment (e.g., "dev").
 2. CLI checks if `Resource` "my-website:dev" exists.
-   - If no: Calls API to crate it (User must be Owner).
+   - If no: Calls API to create it (User must be Owner).
    - If yes: Checks permissions.
 3. Creates local `.pawthyrc` linking current dir to that Resource ID.
 

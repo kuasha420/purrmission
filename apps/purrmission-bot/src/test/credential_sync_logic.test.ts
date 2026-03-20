@@ -126,8 +126,12 @@ class MemResourceRepo implements ResourceRepository {
   async findByApiKey(_apiKey: string): Promise<Resource | null> {
     throw new Error('Not implemented');
   }
-  async findManyByIds(ids: string[]): Promise<Resource[]> {
-    return this.resources.filter((r) => ids.includes(r.id));
+  async findManyByIds(ids: string[], query?: string): Promise<Resource[]> {
+    const normalizedQuery = query?.toLowerCase();
+    return this.resources.filter(
+      (r) =>
+        ids.includes(r.id) && (!normalizedQuery || r.name.toLowerCase().includes(normalizedQuery))
+    );
   }
 }
 

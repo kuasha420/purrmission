@@ -123,7 +123,7 @@ export class AuthService {
       const tokenString = 'paw_' + randomBytes(32).toString('hex'); // 'paw_' prefix
 
       // Hash the token for storage
-      const tokenHash = createHash('sha256').update(tokenString).digest('hex');
+      const tokenHash = this.hashToken(tokenString);
 
       // Default expiry
       const tokenExpiresAt = new Date(Date.now() + DEFAULT_TOKEN_EXPIRY_DAYS * 24 * 60 * 60 * 1000);
@@ -147,7 +147,7 @@ export class AuthService {
 
   async validateToken(token: string): Promise<ApiToken | null> {
     // Token is provided in plaintext, we must hash it to lookup
-    const tokenHash = createHash('sha256').update(token).digest('hex');
+    const tokenHash = this.hashToken(token);
 
     const apiToken = await this.authRepo.findApiToken(tokenHash);
     if (!apiToken) return null;

@@ -13,6 +13,7 @@ import {
 import type { CommandContext } from './context.js';
 import { handleRequestAccess } from './requestAccess.js';
 import { handleDecisionCommand } from './decision.js';
+import { handleResourceIdAutocomplete } from './resourceAutocomplete.js';
 
 export const accessCommand = new SlashCommandBuilder()
   .setName('access')
@@ -86,25 +87,7 @@ export async function handleAccessAutocomplete(
   interaction: AutocompleteInteraction,
   context: CommandContext
 ): Promise<void> {
-  const focusedOption = interaction.options.getFocused(true);
-
-  if (focusedOption.name === 'resource-id') {
-    const userId = interaction.user.id;
-    const { guardians, resources } = context.repositories;
-
-    const userGuardianships = await guardians.findByUserId(userId);
-    const resourceIds = userGuardianships.map((g) => g.resourceId);
-    const validResources = resourceIds.length > 0 ? await resources.findManyByIds(resourceIds) : [];
-
-    const query = String(focusedOption.value).toLowerCase();
-    const filtered = validResources.filter((r) => r.name.toLowerCase().includes(query));
-
-    await interaction.respond(
-      filtered.slice(0, 25).map((r) => ({
-        name: r.name,
-        value: r.id,
-      }))
-    );
+  if (await handleResourceIdAutocomplete(interaction, context)) {
     return;
   }
 

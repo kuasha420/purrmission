@@ -22,6 +22,9 @@ import {
 } from '../interactions/approvalButtons.js';
 import { rateLimiter } from '../../infra/rateLimit.js';
 import { checkAccessPolicy, requiresApproval } from '../../domain/policy.js';
+import { handleResourceIdAutocomplete } from './resourceAutocomplete.js';
+
+const MAX_RESOURCE_NAME_LENGTH = 100;
 
 /**
  * The /resource top-level command.
@@ -34,7 +37,11 @@ export const resourceCommand = new SlashCommandBuilder()
       .setName('register')
       .setDescription('Register a new protected resource')
       .addStringOption((option) =>
-        option.setName('name').setDescription('Name for the new resource').setRequired(true)
+        option
+          .setName('name')
+          .setDescription('Name for the new resource')
+          .setRequired(true)
+          .setMaxLength(MAX_RESOURCE_NAME_LENGTH)
       )
   )
   .addSubcommand((subcommand) =>
@@ -255,33 +262,14 @@ export async function handleResourceAutocomplete(
   interaction: AutocompleteInteraction,
   context: CommandContext
 ): Promise<void> {
-  const focusedOption = interaction.options.getFocused(true);
   const subcommandGroup = interaction.options.getSubcommandGroup(false);
   const subcommand = interaction.options.getSubcommand(false);
 
-  if (focusedOption.name === 'resource-id') {
-    const userId = interaction.user.id;
-    const { guardians, resources } = context.repositories;
-
-    // Find all resources where the user is a guardian
-    const userGuardianships = await guardians.findByUserId(userId);
-    const resourceIds = userGuardianships.map((g) => g.resourceId);
-
-    // Fetch resource details optimized
-    const validResources = resourceIds.length > 0 ? await resources.findManyByIds(resourceIds) : [];
-
-    // Filter valid resources and match query
-    const query = String(focusedOption.value).toLowerCase();
-    const filteredResources = validResources.filter((r) => r.name.toLowerCase().includes(query));
-
-    await interaction.respond(
-      filteredResources.slice(0, 25).map((r) => ({
-        name: r.name,
-        value: r.id,
-      }))
-    );
+  if (await handleResourceIdAutocomplete(interaction, context)) {
     return;
   }
+
+  const focusedOption = interaction.options.getFocused(true);
 
   if (subcommandGroup === 'fields' && ['get', 'remove'].includes(subcommand ?? '')) {
     if (focusedOption.name !== 'name') {
@@ -364,8 +352,16 @@ async function handleRegisterResource(
   interaction: ChatInputCommandInteraction,
   context: CommandContext
 ): Promise<void> {
-  const name = interaction.options.getString('name', true);
+  const name = interaction.options.getString('name', true).trim();
   const userId = interaction.user.id;
+
+  if (name.length === 0 || name.length > MAX_RESOURCE_NAME_LENGTH) {
+    await interaction.reply({
+      content: `❌ Resource name must be between 1 and ${MAX_RESOURCE_NAME_LENGTH} characters.`,
+      ephemeral: true,
+    });
+    return;
+  }
 
   logger.info('Registering new resource', {
     name,
