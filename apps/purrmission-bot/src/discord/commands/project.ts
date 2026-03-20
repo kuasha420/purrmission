@@ -1,73 +1,21 @@
-import { SlashCommandBuilder, ChatInputCommandInteraction } from 'discord.js';
-import { Command } from '../types/command.js';
+/**
+ * Project member management handlers.
+ *
+ * These handlers are used by the /purrmission project subcommand group.
+ */
+
+import type { ChatInputCommandInteraction } from 'discord.js';
 import { logger } from '../../logging/logger.js';
 import { ProjectMemberRole } from '../../domain/models.js';
-import { Services } from '../../domain/services.js';
+import type { Services } from '../../domain/services.js';
 
-export const data = new SlashCommandBuilder()
-  .setName('project')
-  .setDescription('Manage project settings and members')
-  .addSubcommandGroup((group) =>
-    group
-      .setName('member')
-      .setDescription('Manage project members')
-      .addSubcommand((subcommand) =>
-        subcommand
-          .setName('add')
-          .setDescription('Add a member to a project')
-          .addStringOption((option) =>
-            option.setName('project_id').setDescription('The ID of the project').setRequired(true)
-          )
-          .addUserOption((option) =>
-            option.setName('user').setDescription('The user to add').setRequired(true)
-          )
-          .addStringOption((option) =>
-            option
-              .setName('role')
-              .setDescription('Access role (default: READER)')
-              .addChoices(
-                { name: 'Reader (Read-Only)', value: 'READER' },
-                { name: 'Writer (Read/Write)', value: 'WRITER' }
-              )
-          )
-      )
-      .addSubcommand((subcommand) =>
-        subcommand
-          .setName('remove')
-          .setDescription('Remove a member from a project')
-          .addStringOption((option) =>
-            option.setName('project_id').setDescription('The ID of the project').setRequired(true)
-          )
-          .addUserOption((option) =>
-            option.setName('user').setDescription('The user to remove').setRequired(true)
-          )
-      )
-      .addSubcommand((subcommand) =>
-        subcommand
-          .setName('list')
-          .setDescription('List all members of a project')
-          .addStringOption((option) =>
-            option.setName('project_id').setDescription('The ID of the project').setRequired(true)
-          )
-      )
-  );
-
-export async function execute(interaction: ChatInputCommandInteraction, services: Services) {
-  const subcommandGroup = interaction.options.getSubcommandGroup();
-  const subcommand = interaction.options.getSubcommand();
-
-  if (subcommandGroup === 'member') {
-    if (subcommand === 'add') {
-      await handleAddMember(interaction, services);
-    } else if (subcommand === 'remove') {
-      await handleRemoveMember(interaction, services);
-    } else if (subcommand === 'list') {
-      await handleListMembers(interaction, services);
-    }
-  }
-}
-
-async function handleAddMember(interaction: ChatInputCommandInteraction, services: Services) {
+/**
+ * Handle adding a member to a project.
+ */
+export async function handleAddMember(
+  interaction: ChatInputCommandInteraction,
+  services: Services
+) {
   await interaction.deferReply({ ephemeral: true });
 
   const projectId = interaction.options.getString('project_id', true);
@@ -104,7 +52,13 @@ async function handleAddMember(interaction: ChatInputCommandInteraction, service
   }
 }
 
-async function handleRemoveMember(interaction: ChatInputCommandInteraction, services: Services) {
+/**
+ * Handle removing a member from a project.
+ */
+export async function handleRemoveMember(
+  interaction: ChatInputCommandInteraction,
+  services: Services
+) {
   await interaction.deferReply({ ephemeral: true });
 
   const projectId = interaction.options.getString('project_id', true);
@@ -133,7 +87,13 @@ async function handleRemoveMember(interaction: ChatInputCommandInteraction, serv
   }
 }
 
-async function handleListMembers(interaction: ChatInputCommandInteraction, services: Services) {
+/**
+ * Handle listing members of a project.
+ */
+export async function handleListMembers(
+  interaction: ChatInputCommandInteraction,
+  services: Services
+) {
   await interaction.deferReply({ ephemeral: true });
 
   const projectId = interaction.options.getString('project_id', true);
@@ -146,8 +106,7 @@ async function handleListMembers(interaction: ChatInputCommandInteraction, servi
       return;
     }
 
-    // Auth check: Owner or Member can list?
-    // Let's say Owner OR Member can list.
+    // Auth check: Owner or Member can list
     const memberRole = await services.project.getMemberRole(projectId, actorId);
     if (project.ownerId !== actorId && !memberRole) {
       await interaction.editReply('❌ You do not have access to view members of this project.');
@@ -174,5 +133,3 @@ async function handleListMembers(interaction: ChatInputCommandInteraction, servi
     await interaction.editReply('❌ An error occurred while listing members.');
   }
 }
-
-export default { data, execute } satisfies Command;
