@@ -8,11 +8,13 @@
     "apps/*"
   ],
   "scripts": {
+    "dev": "pnpm dev:purrmission",
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "build": "turbo run build && pnpm build:scripts",
+    "test": "pnpm --filter @purrfecthq/purrmission-bot test && pnpm --filter @psl-oss/pawthy test && pnpm dev:ops:test",
     "dev:purrmission": "turbo run dev --filter @purrfecthq/purrmission-bot",
     "discord:deploy-commands": "turbo run discord:deploy-commands",
     "prod:purrmission": "node apps/purrmission-bot/dist/index.js",

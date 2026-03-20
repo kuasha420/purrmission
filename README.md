@@ -40,6 +40,37 @@ See [Pawthy CLI Documentation](apps/pawthy/README.md) for full usage.
 
 ---
 
+## Codex IDE
+
+This repo now includes a Codex-native setup:
+
+- `AGENTS.md` files give Codex project and package-specific instructions.
+- `pnpm mcp:sync` generates `.codex/config.toml` for project-scoped Codex MCP wiring.
+- `pnpm mcp:sync` also keeps this repo trusted in `~/.codex/config.toml` so Codex is allowed to load the generated project config.
+- The generated Codex config uses Codex's native `command` / `args` / `cwd` / `env` settings, resolved from `mcp.json`, optional `mcp.local.json`, and the repo-root `.env`.
+
+This is additive to the existing Antigravity, Claude Desktop, and VS Code flows. `mcp.json` stays the shared source of truth, and `scripts/sync-mcp.cjs` / `pnpm mcp:sync` continue to support the other MCP-aware clients.
+
+Codex follows the same tooling convention as the other agent platforms here: run `pnpm mcp:sync`, then open or re-open the repo in Codex.
+
+If `GITHUB_PERSONAL_ACCESS_TOKEN` is present in your local `.env`, the generated Codex config will also enable the GitHub MCP server automatically.
+
+Optional MCP-related environment variables:
+
+| Variable                       | Description                                                      |
+| ------------------------------ | ---------------------------------------------------------------- |
+| `CONTEXT7_API_KEY`             | Optional API key for Context7 MCP                                |
+| `GITHUB_PERSONAL_ACCESS_TOKEN` | Optional GitHub token for enabling the GitHub MCP server locally |
+
+To verify the setup:
+
+```bash
+pnpm mcp:sync
+codex "Show which instruction files are active for this repo."
+```
+
+---
+
 ## How It Works
 
 ### Credential Sync Flow
@@ -63,13 +94,13 @@ See [Pawthy CLI Documentation](apps/pawthy/README.md) for full usage.
 
 ### Key Concepts
 
-| Concept | Description |
-|---------|-------------|
-| **Project** | A collection of environments (e.g., "my-app") |
-| **Environment** | A set of secrets (e.g., Production, Staging) |
-| **Resource** | The underlying protected entity with access controls |
-| **Guardian** | Discord user who can approve/deny access requests |
-| **Owner** | Project creator with full control |
+| Concept         | Description                                          |
+| --------------- | ---------------------------------------------------- |
+| **Project**     | A collection of environments (e.g., "my-app")        |
+| **Environment** | A set of secrets (e.g., Production, Staging)         |
+| **Resource**    | The underlying protected entity with access controls |
+| **Guardian**    | Discord user who can approve/deny access requests    |
+| **Owner**       | Project creator with full control                    |
 
 ---
 
@@ -77,25 +108,25 @@ See [Pawthy CLI Documentation](apps/pawthy/README.md) for full usage.
 
 ### 2FA Management
 
-| Action | Command |
-|--------|---------|
-| Add Account | `/purrmission 2fa add account:"..." mode:uri` (then enter URI in modal) |
-| List Accounts | `/purrmission 2fa list [shared:True]` |
-| Get Code | `/purrmission 2fa get account:"..."` |
-| Update Key | `/purrmission 2fa update account:"..." backup_key:"..."` |
+| Action        | Command                                                                 |
+| ------------- | ----------------------------------------------------------------------- |
+| Add Account   | `/purrmission 2fa add account:"..." mode:uri` (then enter URI in modal) |
+| List Accounts | `/purrmission 2fa list [shared:True]`                                   |
+| Get Code      | `/purrmission 2fa get account:"..."`                                    |
+| Update Key    | `/purrmission 2fa update account:"..." backup_key:"..."`                |
 
 ### Guardian Management
 
-| Action | Command |
-|--------|---------|
-| Add Guardian | `/purrmission guardian add resource-id:<id> user:@someone` |
+| Action          | Command                                                       |
+| --------------- | ------------------------------------------------------------- |
+| Add Guardian    | `/purrmission guardian add resource-id:<id> user:@someone`    |
 | Remove Guardian | `/purrmission guardian remove resource-id:<id> user:@someone` |
-| List Guardians | `/purrmission guardian list resource-id:<id>` |
+| List Guardians  | `/purrmission guardian list resource-id:<id>`                 |
 
 ### CLI Login
 
-| Action | Command |
-|--------|---------|
+| Action            | Command                                 |
+| ----------------- | --------------------------------------- |
 | Approve CLI Login | `/purrmission cli-login code:XXXX-XXXX` |
 
 ---
@@ -137,17 +168,20 @@ pnpm dev:purrmission
 
 ### Environment Variables
 
-| Variable | Description |
-|----------|-------------|
-| `DISCORD_BOT_TOKEN` | Your Discord bot token |
-| `DISCORD_CLIENT_ID` | Your Discord application client ID |
-| `DISCORD_GUILD_ID` | Guild ID for development (commands deploy here) |
-| `APP_PORT` | HTTP server port (default: 3001) |
-| `DATABASE_URL` | Database URL (e.g., `file:./data/prod.db`) |
-| `ENCRYPTION_KEY` | **Required** - 32-byte hex for at-rest encryption |
-| `EXTERNAL_API_URL` | Public API URL (e.g., `https://purrmission.example.com`) |
+| Variable                       | Description                                              |
+| ------------------------------ | -------------------------------------------------------- |
+| `DISCORD_BOT_TOKEN`            | Your Discord bot token                                   |
+| `DISCORD_CLIENT_ID`            | Your Discord application client ID                       |
+| `DISCORD_GUILD_ID`             | Guild ID for development (commands deploy here)          |
+| `APP_PORT`                     | HTTP server port (default: 3001)                         |
+| `DATABASE_URL`                 | Database URL (e.g., `file:./data/prod.db`)               |
+| `ENCRYPTION_KEY`               | **Required** - 32-byte hex for at-rest encryption        |
+| `EXTERNAL_API_URL`             | Public API URL (e.g., `https://purrmission.example.com`) |
+| `CONTEXT7_API_KEY`             | Optional - API key for Context7 MCP                      |
+| `GITHUB_PERSONAL_ACCESS_TOKEN` | Optional - token for GitHub MCP tooling                  |
 
 Generate an encryption key:
+
 ```bash
 node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
 ```
@@ -209,17 +243,17 @@ purrmission/
 
 ### Scripts
 
-| Command | Description |
-|---------|-------------|
-| `pnpm dev:purrmission` | Start bot in development mode |
-| `pnpm build` | Build all packages |
-| `pnpm test` | Run tests |
-| `pnpm lint` | Run ESLint |
-| `pnpm format` | Format code with Prettier |
-| `pnpm discord:deploy-commands` | Register slash commands |
-| `pnpm prisma:generate` | Generate Prisma Client |
-| `pnpm prisma:deploy` | Apply database migrations |
-| `pnpm prisma:studio` | Open Prisma Studio |
+| Command                        | Description                   |
+| ------------------------------ | ----------------------------- |
+| `pnpm dev:purrmission`         | Start bot in development mode |
+| `pnpm build`                   | Build all packages            |
+| `pnpm test`                    | Run tests                     |
+| `pnpm lint`                    | Run ESLint                    |
+| `pnpm format`                  | Format code with Prettier     |
+| `pnpm discord:deploy-commands` | Register slash commands       |
+| `pnpm prisma:generate`         | Generate Prisma Client        |
+| `pnpm prisma:deploy`           | Apply database migrations     |
+| `pnpm prisma:studio`           | Open Prisma Studio            |
 
 ---
 
@@ -236,15 +270,15 @@ This project is classified under the **Purrfect Universe Licensing Directive** a
 **🟧 Company-Supported Personal IP (CSP-IP)**  
 A category for employee-created projects that are:
 
-* Built by the employee as their personal intellectual property
-* Actively supported by **Purrfect Software Limited**
-* Strategically aligned with the **Purrfect Universe** ecosystem
+- Built by the employee as their personal intellectual property
+- Actively supported by **Purrfect Software Limited**
+- Strategically aligned with the **Purrfect Universe** ecosystem
 
 Under this classification:
 
-* **Primary Author:** Project Contributors
-* **Support:** **Purrfect Software Limited** — Engineering, DevOps & Infrastructure
-* **Usage Rights:** Community-friendly, zero-penalty experimentation encouraged
+- **Primary Author:** Project Contributors
+- **Support:** **Purrfect Software Limited** — Engineering, DevOps & Infrastructure
+- **Usage Rights:** Community-friendly, zero-penalty experimentation encouraged
 
 ---
 
