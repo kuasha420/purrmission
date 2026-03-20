@@ -1,26 +1,40 @@
-import { describe, it, beforeEach, mock } from 'node:test';
+import { describe, it, beforeEach, mock, type Mock } from 'node:test';
 import assert from 'node:assert';
 import { ProjectService } from './project.js';
 import { ProjectRepository } from './repositories.js';
 import { Project, Environment } from './models.js';
 
+type ResourceServiceDependency = ConstructorParameters<typeof ProjectService>[1];
+type MockedProjectRepository = {
+  createProject: Mock<ProjectRepository['createProject']>;
+  listProjectsByOwner: Mock<ProjectRepository['listProjectsByOwner']>;
+  findById: Mock<ProjectRepository['findById']>;
+  createEnvironment: Mock<ProjectRepository['createEnvironment']>;
+  listEnvironments: Mock<ProjectRepository['listEnvironments']>;
+  findEnvironment: Mock<ProjectRepository['findEnvironment']>;
+};
+
 describe('ProjectService', () => {
-  let projectRepo: ProjectRepository;
+  let projectRepo: MockedProjectRepository;
   let projectService: ProjectService;
-  let resourceService: any;
+  let resourceService: ResourceServiceDependency;
+  let createResourceMock: Mock<ResourceServiceDependency['createResource']>;
 
   beforeEach(() => {
     projectRepo = {
-      createProject: mock.fn(),
-      listProjectsByOwner: mock.fn(),
-      findById: mock.fn(),
-      createEnvironment: mock.fn(),
-      listEnvironments: mock.fn(),
-      findEnvironment: mock.fn(),
-    } as unknown as ProjectRepository;
+      createProject: mock.fn<ProjectRepository['createProject']>(),
+      listProjectsByOwner: mock.fn<ProjectRepository['listProjectsByOwner']>(),
+      findById: mock.fn<ProjectRepository['findById']>(),
+      createEnvironment: mock.fn<ProjectRepository['createEnvironment']>(),
+      listEnvironments: mock.fn<ProjectRepository['listEnvironments']>(),
+      findEnvironment: mock.fn<ProjectRepository['findEnvironment']>(),
+    };
 
+    createResourceMock = mock.fn<ResourceServiceDependency['createResource']>(async () => ({
+      resource: { id: 'res-1' },
+    }));
     resourceService = {
-      createResource: mock.fn(async () => ({ resource: { id: 'res-1' } })),
+      createResource: createResourceMock,
     };
 
     projectService = new ProjectService(projectRepo, resourceService);
@@ -35,13 +49,13 @@ describe('ProjectService', () => {
       createdAt: new Date(),
       updatedAt: new Date(),
     };
-    (projectRepo.createProject as any).mock.mockImplementation(async () => created);
+    projectRepo.createProject.mock.mockImplementation(async () => created);
 
     const result = await projectService.createProject(input);
 
     assert.deepStrictEqual(result, created);
-    assert.strictEqual((projectRepo.createProject as any).mock.callCount(), 1);
-    assert.deepStrictEqual((projectRepo.createProject as any).mock.calls[0].arguments, [input]);
+    assert.strictEqual(projectRepo.createProject.mock.callCount(), 1);
+    assert.deepStrictEqual(projectRepo.createProject.mock.calls[0].arguments, [input]);
   });
 
   it('should list projects by owner', async () => {
@@ -56,15 +70,13 @@ describe('ProjectService', () => {
         updatedAt: new Date(),
       },
     ];
-    (projectRepo.listProjectsByOwner as any).mock.mockImplementation(async () => projects);
+    projectRepo.listProjectsByOwner.mock.mockImplementation(async () => projects);
 
     const result = await projectService.listProjects(userId);
 
     assert.deepStrictEqual(result, projects);
-    assert.strictEqual((projectRepo.listProjectsByOwner as any).mock.callCount(), 1);
-    assert.deepStrictEqual((projectRepo.listProjectsByOwner as any).mock.calls[0].arguments, [
-      userId,
-    ]);
+    assert.strictEqual(projectRepo.listProjectsByOwner.mock.callCount(), 1);
+    assert.deepStrictEqual(projectRepo.listProjectsByOwner.mock.calls[0].arguments, [userId]);
   });
 
   it('should get project by id', async () => {
@@ -77,13 +89,13 @@ describe('ProjectService', () => {
       createdAt: new Date(),
       updatedAt: new Date(),
     };
-    (projectRepo.findById as any).mock.mockImplementation(async () => project);
+    projectRepo.findById.mock.mockImplementation(async () => project);
 
     const result = await projectService.getProject(projectId);
 
     assert.deepStrictEqual(result, project);
-    assert.strictEqual((projectRepo.findById as any).mock.callCount(), 1);
-    assert.deepStrictEqual((projectRepo.findById as any).mock.calls[0].arguments, [projectId]);
+    assert.strictEqual(projectRepo.findById.mock.callCount(), 1);
+    assert.deepStrictEqual(projectRepo.findById.mock.calls[0].arguments, [projectId]);
   });
 
   it('should create an environment', async () => {
@@ -103,12 +115,12 @@ describe('ProjectService', () => {
       createdAt: new Date(),
       updatedAt: new Date(),
     };
-    (projectRepo.findById as any).mock.mockImplementation(async () => project);
-    (projectRepo.createEnvironment as any).mock.mockImplementation(async () => created);
+    projectRepo.findById.mock.mockImplementation(async () => project);
+    projectRepo.createEnvironment.mock.mockImplementation(async () => created);
 
     const result = await projectService.createEnvironment(input);
 
     assert.deepStrictEqual(result, created);
-    assert.strictEqual((projectRepo.createEnvironment as any).mock.callCount(), 1);
+    assert.strictEqual(projectRepo.createEnvironment.mock.callCount(), 1);
   });
 });

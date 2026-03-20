@@ -7,6 +7,7 @@ import type { AutocompleteInteraction } from 'discord.js';
 
 describe('handleResourceAutocomplete', () => {
   let mockInteraction: AutocompleteInteraction;
+  let mockOptions: AutocompleteInteraction['options'];
   let mockContext: CommandContext;
   let respondCalls: any[] = [];
   let findByUserIdOverrides: any[] = [];
@@ -21,23 +22,25 @@ describe('handleResourceAutocomplete', () => {
     findManyByIdsCalls = [];
     findByResourceIdOverrides = [];
 
+    mockOptions = {
+      getSubcommandGroup: ((_required?: boolean) => {
+        return null;
+      }) as any,
+      getSubcommand: ((_required?: boolean) => {
+        return null;
+      }) as any,
+      getFocused: ((_full: boolean) => {
+        // Default implementation, overridden in tests
+        return { name: 'unknown', value: '' };
+      }) as any,
+      getString: ((_name: string) => {
+        return '';
+      }) as any,
+    } as AutocompleteInteraction['options'];
+
     mockInteraction = {
       user: { id: 'user-1' } as any,
-      options: {
-        getSubcommandGroup: ((_required?: boolean) => {
-          return null;
-        }) as any,
-        getSubcommand: ((_required?: boolean) => {
-          return null;
-        }) as any,
-        getFocused: ((_full: boolean) => {
-          // Default implementation, overridden in tests
-          return { name: 'unknown', value: '' };
-        }) as any,
-        getString: ((_name: string) => {
-          return '';
-        }) as any,
-      } as any,
+      options: mockOptions,
       respond: ((options: any[]) => {
         respondCalls.push(options);
         return Promise.resolve();
@@ -69,7 +72,7 @@ describe('handleResourceAutocomplete', () => {
 
   it('should return matching resources for resource-id autocomplete', async () => {
     // Setup
-    mockInteraction.options!.getFocused = () => ({ name: 'resource-id', value: 'cool' }) as any;
+    mockOptions.getFocused = () => ({ name: 'resource-id', value: 'cool' }) as any;
 
     // User is guardian of 2 resources
     findByUserIdOverrides = [
@@ -100,7 +103,7 @@ describe('handleResourceAutocomplete', () => {
 
   it('should return nothing if user has no guardianships', async () => {
     // Setup
-    mockInteraction.options!.getFocused = () => ({ name: 'resource-id', value: '' }) as any;
+    mockOptions.getFocused = () => ({ name: 'resource-id', value: '' }) as any;
     findByUserIdOverrides = [];
 
     // Execute
@@ -116,7 +119,7 @@ describe('handleResourceAutocomplete', () => {
 
   it('should handle cases where some resources are not found', async () => {
     // Setup
-    mockInteraction.options!.getFocused = () => ({ name: 'resource-id', value: '' }) as any;
+    mockOptions.getFocused = () => ({ name: 'resource-id', value: '' }) as any;
 
     // User is guardian of 2 resources
     findByUserIdOverrides = [
@@ -140,10 +143,10 @@ describe('handleResourceAutocomplete', () => {
 
   it('should autocomplete fields for a given resource-id', async () => {
     // Setup
-    mockInteraction.options!.getSubcommandGroup = () => 'fields';
-    mockInteraction.options!.getSubcommand = () => 'get';
-    mockInteraction.options!.getFocused = () => ({ name: 'name', value: 'pass' }) as any;
-    mockInteraction.options!.getString = () => 'res-1';
+    mockOptions.getSubcommandGroup = () => 'fields';
+    mockOptions.getSubcommand = () => 'get';
+    mockOptions.getFocused = () => ({ name: 'name', value: 'pass' }) as any;
+    mockOptions.getString = () => 'res-1';
 
     findByResourceIdOverrides = [
       { name: 'password', id: 'f1', value: 'enc', resourceId: 'res-1' },

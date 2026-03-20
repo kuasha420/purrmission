@@ -33,6 +33,7 @@ interface MockServices {
 
 describe('handleGuardianCommand', () => {
   let mockInteraction: Partial<ChatInputCommandInteraction>;
+  let mockOptions: CommandInteractionOptionResolver<CacheType>;
   let mockContext: CommandContext;
   let addGuardianCalls: { resourceId: string; userId: string }[] = [];
   let removeGuardianCalls: { resourceId: string; targetUserId: string; actorId: string }[] = [];
@@ -45,25 +46,27 @@ describe('handleGuardianCommand', () => {
     listGuardiansCalls = [];
     replyCalls = [];
 
+    mockOptions = {
+      getSubcommandGroup: ((_required?: boolean) => {
+        return null; // overridden
+      }) as CommandInteractionOptionResolver['getSubcommandGroup'],
+      getSubcommand: ((_required?: boolean) => {
+        return null; // overridden
+      }) as CommandInteractionOptionResolver['getSubcommand'],
+      getString: ((name: string) => {
+        if (name === 'resource-id') return 'res-123';
+        return null;
+      }) as CommandInteractionOptionResolver['getString'],
+      getUser: ((name: string) => {
+        if (name === 'user') return { id: 'target-user-id', tag: 'Tag#1234' } as User;
+        return null;
+      }) as CommandInteractionOptionResolver['getUser'],
+    } as CommandInteractionOptionResolver<CacheType>;
+
     mockInteraction = {
       commandName: 'guardian',
       user: { id: 'caller-id' } as User,
-      options: {
-        getSubcommandGroup: ((_required?: boolean) => {
-          return null; // overridden
-        }) as CommandInteractionOptionResolver['getSubcommandGroup'],
-        getSubcommand: ((_required?: boolean) => {
-          return null; // overridden
-        }) as CommandInteractionOptionResolver['getSubcommand'],
-        getString: ((name: string) => {
-          if (name === 'resource-id') return 'res-123';
-          return null;
-        }) as CommandInteractionOptionResolver['getString'],
-        getUser: ((name: string) => {
-          if (name === 'user') return { id: 'target-user-id', tag: 'Tag#1234' } as User;
-          return null;
-        }) as CommandInteractionOptionResolver['getUser'],
-      } as CommandInteractionOptionResolver<CacheType>,
+      options: mockOptions,
       reply: ((options: unknown) => {
         replyCalls.push(options);
         return Promise.resolve(null as unknown); // Return unknown enabling cast to InteractionCallbackResponse if needed, but for void return in test it's fine
@@ -100,7 +103,7 @@ describe('handleGuardianCommand', () => {
 
   it('should route /guardian add to handleAddGuardian logic', async () => {
     // Setup
-    mockInteraction.options!.getSubcommand = () => 'add';
+    mockOptions.getSubcommand = () => 'add';
 
     // Execute
     await handleGuardianCommand(mockInteraction as ChatInputCommandInteraction, mockContext);
@@ -121,7 +124,7 @@ describe('handleGuardianCommand', () => {
 
   it('should route /guardian remove to handleRemoveGuardian logic', async () => {
     // Setup
-    mockInteraction.options!.getSubcommand = () => 'remove';
+    mockOptions.getSubcommand = () => 'remove';
 
     // Execute
     await handleGuardianCommand(mockInteraction as ChatInputCommandInteraction, mockContext);
@@ -141,7 +144,7 @@ describe('handleGuardianCommand', () => {
 
   it('should route /guardian list to handleListGuardians logic', async () => {
     // Setup
-    mockInteraction.options!.getSubcommand = () => 'list';
+    mockOptions.getSubcommand = () => 'list';
 
     // Execute
     await handleGuardianCommand(mockInteraction as ChatInputCommandInteraction, mockContext);
@@ -157,7 +160,7 @@ describe('handleGuardianCommand', () => {
 
   it('should show error for unknown guardian subcommand', async () => {
     // Setup
-    mockInteraction.options!.getSubcommand = () => 'unknown_cmd';
+    mockOptions.getSubcommand = () => 'unknown_cmd';
 
     // Execute
     await handleGuardianCommand(mockInteraction as ChatInputCommandInteraction, mockContext);

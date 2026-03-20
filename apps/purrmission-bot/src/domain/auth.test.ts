@@ -1,25 +1,36 @@
-import { test, describe, beforeEach, mock } from 'node:test';
+import { test, describe, beforeEach, mock, type Mock } from 'node:test';
 import assert from 'node:assert';
 import { AuthService, ExpiredTokenError, AccessDeniedError } from './auth.js';
 import { AuthRepository } from './repositories.js';
 import { AuthSession, ApiToken } from './models.js';
 import { createHash } from 'node:crypto';
 
+type MockedAuthRepository = {
+  createSession: Mock<AuthRepository['createSession']>;
+  findSessionByDeviceCode: Mock<AuthRepository['findSessionByDeviceCode']>;
+  findSessionByUserCode: Mock<AuthRepository['findSessionByUserCode']>;
+  updateSessionStatus: Mock<AuthRepository['updateSessionStatus']>;
+  createApiToken: Mock<AuthRepository['createApiToken']>;
+  findApiToken: Mock<AuthRepository['findApiToken']>;
+  updateApiTokenLastUsed: Mock<AuthRepository['updateApiTokenLastUsed']>;
+  deleteExpiredSessions: Mock<AuthRepository['deleteExpiredSessions']>;
+};
+
 describe('AuthService', () => {
   let authService: AuthService;
-  let mockRepo: AuthRepository;
+  let mockRepo: MockedAuthRepository;
 
   beforeEach(() => {
     // Initialize with mocks. Note: We use type assertions because we are mocking the interface.
     mockRepo = {
-      createSession: mock.fn(),
-      findSessionByDeviceCode: mock.fn(),
-      findSessionByUserCode: mock.fn(),
-      updateSessionStatus: mock.fn(),
-      createApiToken: mock.fn(),
-      findApiToken: mock.fn(),
-      updateApiTokenLastUsed: mock.fn(),
-      deleteExpiredSessions: mock.fn(),
+      createSession: mock.fn<AuthRepository['createSession']>(),
+      findSessionByDeviceCode: mock.fn<AuthRepository['findSessionByDeviceCode']>(),
+      findSessionByUserCode: mock.fn<AuthRepository['findSessionByUserCode']>(),
+      updateSessionStatus: mock.fn<AuthRepository['updateSessionStatus']>(),
+      createApiToken: mock.fn<AuthRepository['createApiToken']>(),
+      findApiToken: mock.fn<AuthRepository['findApiToken']>(),
+      updateApiTokenLastUsed: mock.fn<AuthRepository['updateApiTokenLastUsed']>(),
+      deleteExpiredSessions: mock.fn<AuthRepository['deleteExpiredSessions']>(),
     };
     authService = new AuthService(mockRepo);
   });
@@ -27,7 +38,7 @@ describe('AuthService', () => {
   describe('initiateDeviceFlow', () => {
     test('should generate device code and user code', async () => {
       // Mock implementation to return a valid AuthSession
-      mockRepo.createSession = mock.fn(async (input: any) => ({
+      mockRepo.createSession.mock.mockImplementation(async (input) => ({
         id: 'session-id-1',
         status: 'PENDING',
         createdAt: new Date(),
@@ -43,7 +54,7 @@ describe('AuthService', () => {
       assert.strictEqual(result.verificationUri, '/auth login');
       assert.strictEqual(result.expiresIn, 1800);
 
-      assert.strictEqual((mockRepo.createSession as any).mock.callCount(), 1);
+      assert.strictEqual(mockRepo.createSession.mock.callCount(), 1);
     });
   });
 
@@ -65,8 +76,8 @@ describe('AuthService', () => {
       const success = await authService.approveSession('ABCD-1234', 'user-123');
 
       assert.strictEqual(success, true);
-      assert.strictEqual((mockRepo.updateSessionStatus as any).mock.callCount(), 1);
-      assert.deepStrictEqual((mockRepo.updateSessionStatus as any).mock.calls[0].arguments, [
+      assert.strictEqual(mockRepo.updateSessionStatus.mock.callCount(), 1);
+      assert.deepStrictEqual(mockRepo.updateSessionStatus.mock.calls[0].arguments, [
         'session-1',
         'APPROVED',
         'user-123',
@@ -97,8 +108,8 @@ describe('AuthService', () => {
       const success = await authService.approveSession('ABCD-1234', 'user-123');
 
       assert.strictEqual(success, false);
-      assert.strictEqual((mockRepo.updateSessionStatus as any).mock.callCount(), 1);
-      assert.deepStrictEqual((mockRepo.updateSessionStatus as any).mock.calls[0].arguments, [
+      assert.strictEqual(mockRepo.updateSessionStatus.mock.callCount(), 1);
+      assert.deepStrictEqual(mockRepo.updateSessionStatus.mock.calls[0].arguments, [
         'session-1',
         'EXPIRED',
       ]);
@@ -136,10 +147,7 @@ describe('AuthService', () => {
       mockRepo.updateSessionStatus = mock.fn(async () => undefined);
 
       await assert.rejects(() => authService.exchangeCodeForToken('device-1'), ExpiredTokenError);
-      assert.strictEqual(
-        (mockRepo.updateSessionStatus as any).mock.calls[0].arguments[1],
-        'EXPIRED'
-      );
+      assert.strictEqual(mockRepo.updateSessionStatus.mock.calls[0].arguments[1], 'EXPIRED');
     });
 
     test('should issue token for approved session and mark session consumed', async () => {
@@ -156,7 +164,7 @@ describe('AuthService', () => {
       mockRepo.findSessionByDeviceCode = mock.fn(async () => approvedSession);
       mockRepo.updateSessionStatus = mock.fn(async () => undefined);
 
-      mockRepo.createApiToken = mock.fn(async (input: any) => ({
+      mockRepo.createApiToken.mock.mockImplementation(async (input) => ({
         id: 'token-1',
         ...input,
         createdAt: new Date(),
@@ -169,11 +177,11 @@ describe('AuthService', () => {
       assert.ok(result?.token.startsWith('paw_')); // Returns plaintext
 
       // Check hashing in repo
-      const createCall = (mockRepo.createApiToken as any).mock.calls[0].arguments[0];
+      const createCall = mockRepo.createApiToken.mock.calls[0].arguments[0];
       assert.notStrictEqual(createCall.token, result?.token); // Stored token should be hash, result is plain
 
       // Should mark session as CONSUMED
-      assert.deepStrictEqual((mockRepo.updateSessionStatus as any).mock.calls[0].arguments, [
+      assert.deepStrictEqual(mockRepo.updateSessionStatus.mock.calls[0].arguments, [
         'session-1',
         'CONSUMED',
       ]);
@@ -194,10 +202,7 @@ describe('AuthService', () => {
       mockRepo.updateSessionStatus = mock.fn(async () => undefined);
 
       await assert.rejects(authService.exchangeCodeForToken('device-1'), ExpiredTokenError);
-      assert.strictEqual(
-        (mockRepo.updateSessionStatus as any).mock.calls[0].arguments[1],
-        'EXPIRED'
-      );
+      assert.strictEqual(mockRepo.updateSessionStatus.mock.calls[0].arguments[1], 'EXPIRED');
     });
 
     test('should throw AccessDeniedError if session is DENIED', async () => {
@@ -254,7 +259,7 @@ describe('AuthService', () => {
       const result = await authService.validateToken(plainToken);
 
       assert.deepStrictEqual(result, apiToken);
-      assert.strictEqual((mockRepo.findApiToken as any).mock.calls[0].arguments[0], hashedToken);
+      assert.strictEqual(mockRepo.findApiToken.mock.calls[0].arguments[0], hashedToken);
     });
 
     test('should return null for expired token', async () => {
@@ -282,7 +287,7 @@ describe('AuthService', () => {
       const result = await authService.cleanupExpiredSessions();
 
       assert.strictEqual(result, 5);
-      assert.strictEqual((mockRepo.deleteExpiredSessions as any).mock.calls.length, 1);
+      assert.strictEqual(mockRepo.deleteExpiredSessions.mock.calls.length, 1);
     });
   });
 });

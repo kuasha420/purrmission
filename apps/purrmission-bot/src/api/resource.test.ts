@@ -47,7 +47,7 @@ describe('Resource API', () => {
     await repositories.resources.create({
       id: resourceId,
       name: 'Test Resource',
-      mode: 'ONE_OF_N' as any,
+      mode: 'ONE_OF_N',
       apiKey: 'api-key-1',
     });
 
@@ -183,7 +183,7 @@ describe('Resource API', () => {
     await repositories.resources.create({
       id: otherResourceId,
       name: 'Other Resource',
-      mode: 'ONE_OF_N' as any,
+      mode: 'ONE_OF_N',
       apiKey: 'api-key-2',
     });
 

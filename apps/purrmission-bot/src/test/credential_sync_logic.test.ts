@@ -231,7 +231,7 @@ class MemApprovalRepo implements ApprovalRequestRepository {
         (r) =>
           r.resourceId === resourceId &&
           ['PENDING', 'APPROVED'].includes(r.status) &&
-          (r.context as any)?.requesterId === requesterId
+          r.context['requesterId'] === requesterId
       ) || null
     );
   }
@@ -310,7 +310,7 @@ describe('Credential Sync Logic Smoke Test', () => {
     assert.ok(env.resourceId);
 
     // Verify Resource was created and Owner assigned
-    const resource = await services.resource.getResource(env.resourceId!);
+    const resource = await services.resource.getResource(env.resourceId);
     assert.ok(resource);
     assert.strictEqual(resource.name, 'smoke-test-proj:Development'); // Check naming convention
 
@@ -340,7 +340,8 @@ describe('Credential Sync Logic Smoke Test', () => {
       context: { requesterId: guardianId, reason: 'Test Access' },
     });
     assert.strictEqual(requestResult.success, true);
-    const reqId = requestResult.request!.id;
+    assert.ok(requestResult.request);
+    const reqId = requestResult.request.id;
 
     // Verify Pending State
     activeApproval = await services.approval.findActiveApproval(resource.id, guardianId);
