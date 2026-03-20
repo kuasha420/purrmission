@@ -4,7 +4,11 @@
  * Manages project settings and members.
  */
 
-import { SlashCommandBuilder, type ChatInputCommandInteraction } from 'discord.js';
+import {
+  SlashCommandBuilder,
+  type ChatInputCommandInteraction,
+  type SlashCommandSubcommandGroupBuilder,
+} from 'discord.js';
 
 import type { CommandContext } from './context.js';
 import { logger } from '../../logging/logger.js';
@@ -14,43 +18,48 @@ import type { Services } from '../../domain/services.js';
 export const projectCommand = new SlashCommandBuilder()
   .setName('project')
   .setDescription('Manage project settings and members')
-  .addSubcommand((subcommand) =>
-    subcommand
-      .setName('member-add')
-      .setDescription('Add a member to a project')
-      .addStringOption((option) =>
-        option.setName('project_id').setDescription('The ID of the project').setRequired(true)
-      )
-      .addUserOption((option) =>
-        option.setName('user').setDescription('The user to add').setRequired(true)
-      )
-      .addStringOption((option) =>
-        option
-          .setName('role')
-          .setDescription('Access role (default: READER)')
-          .addChoices(
-            { name: 'Reader (Read-Only)', value: 'READER' },
-            { name: 'Writer (Read/Write)', value: 'WRITER' }
+  .addSubcommandGroup((group: SlashCommandSubcommandGroupBuilder) =>
+    group
+      .setName('member')
+      .setDescription('Manage project members')
+      .addSubcommand((subcommand) =>
+        subcommand
+          .setName('add')
+          .setDescription('Add a member to a project')
+          .addStringOption((option) =>
+            option.setName('project_id').setDescription('The ID of the project').setRequired(true)
+          )
+          .addUserOption((option) =>
+            option.setName('user').setDescription('The user to add').setRequired(true)
+          )
+          .addStringOption((option) =>
+            option
+              .setName('role')
+              .setDescription('Access role (default: READER)')
+              .addChoices(
+                { name: 'Reader (Read-Only)', value: 'READER' },
+                { name: 'Writer (Read/Write)', value: 'WRITER' }
+              )
           )
       )
-  )
-  .addSubcommand((subcommand) =>
-    subcommand
-      .setName('member-remove')
-      .setDescription('Remove a member from a project')
-      .addStringOption((option) =>
-        option.setName('project_id').setDescription('The ID of the project').setRequired(true)
+      .addSubcommand((subcommand) =>
+        subcommand
+          .setName('remove')
+          .setDescription('Remove a member from a project')
+          .addStringOption((option) =>
+            option.setName('project_id').setDescription('The ID of the project').setRequired(true)
+          )
+          .addUserOption((option) =>
+            option.setName('user').setDescription('The user to remove').setRequired(true)
+          )
       )
-      .addUserOption((option) =>
-        option.setName('user').setDescription('The user to remove').setRequired(true)
-      )
-  )
-  .addSubcommand((subcommand) =>
-    subcommand
-      .setName('member-list')
-      .setDescription('List all members of a project')
-      .addStringOption((option) =>
-        option.setName('project_id').setDescription('The ID of the project').setRequired(true)
+      .addSubcommand((subcommand) =>
+        subcommand
+          .setName('list')
+          .setDescription('List all members of a project')
+          .addStringOption((option) =>
+            option.setName('project_id').setDescription('The ID of the project').setRequired(true)
+          )
       )
   );
 
@@ -61,21 +70,31 @@ export async function handleProjectCommand(
   interaction: ChatInputCommandInteraction,
   context: CommandContext
 ): Promise<void> {
+  const subcommandGroup = interaction.options.getSubcommandGroup(false);
   const subcommand = interaction.options.getSubcommand();
 
-  switch (subcommand) {
-    case 'member-add':
-      await handleAddMember(interaction, context.services);
-      return;
-    case 'member-remove':
-      await handleRemoveMember(interaction, context.services);
-      return;
-    case 'member-list':
-      await handleListMembers(interaction, context.services);
-      return;
+  switch (subcommandGroup) {
+    case 'member':
+      switch (subcommand) {
+        case 'add':
+          await handleAddMember(interaction, context.services);
+          return;
+        case 'remove':
+          await handleRemoveMember(interaction, context.services);
+          return;
+        case 'list':
+          await handleListMembers(interaction, context.services);
+          return;
+        default:
+          await interaction.reply({
+            content: `Unknown project member subcommand: ${subcommand}`,
+            ephemeral: true,
+          });
+          return;
+      }
     default:
       await interaction.reply({
-        content: `Unknown subcommand: ${subcommand}`,
+        content: `Unknown subcommand group: ${subcommandGroup}`,
         ephemeral: true,
       });
   }

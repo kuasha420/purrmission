@@ -8,6 +8,7 @@ import {
   SlashCommandBuilder,
   type ChatInputCommandInteraction,
   type AutocompleteInteraction,
+  type SlashCommandSubcommandGroupBuilder,
 } from 'discord.js';
 
 import type { CommandContext } from './context.js';
@@ -39,111 +40,128 @@ export const resourceCommand = new SlashCommandBuilder()
   .addSubcommand((subcommand) =>
     subcommand.setName('list').setDescription('List all resources you own or represent')
   )
-  .addSubcommand((subcommand) =>
-    subcommand
-      .setName('fields-add')
-      .setDescription('Add a field to a resource')
-      .addStringOption((option) =>
-        option
-          .setName('resource-id')
-          .setDescription('ID of the resource')
-          .setRequired(true)
-          .setAutocomplete(true)
+  .addSubcommandGroup((group: SlashCommandSubcommandGroupBuilder) =>
+    group
+      .setName('fields')
+      .setDescription('Manage resource fields')
+      .addSubcommand((subcommand) =>
+        subcommand
+          .setName('add')
+          .setDescription('Add a field to a resource')
+          .addStringOption((option) =>
+            option
+              .setName('resource-id')
+              .setDescription('ID of the resource')
+              .setRequired(true)
+              .setAutocomplete(true)
+          )
+          .addStringOption((option) =>
+            option.setName('name').setDescription('Field name (e.g. "password")').setRequired(true)
+          )
+          .addStringOption((option) =>
+            option
+              .setName('value')
+              .setDescription('Field value (will be encrypted)')
+              .setRequired(true)
+          )
       )
-      .addStringOption((option) =>
-        option.setName('name').setDescription('Field name (e.g. "password")').setRequired(true)
+      .addSubcommand((subcommand) =>
+        subcommand
+          .setName('list')
+          .setDescription('List all fields on a resource')
+          .addStringOption((option) =>
+            option
+              .setName('resource-id')
+              .setDescription('ID of the resource')
+              .setRequired(true)
+              .setAutocomplete(true)
+          )
       )
-      .addStringOption((option) =>
-        option.setName('value').setDescription('Field value (will be encrypted)').setRequired(true)
+      .addSubcommand((subcommand) =>
+        subcommand
+          .setName('get')
+          .setDescription('Get a field value from a resource')
+          .addStringOption((option) =>
+            option
+              .setName('resource-id')
+              .setDescription('ID of the resource')
+              .setRequired(true)
+              .setAutocomplete(true)
+          )
+          .addStringOption((option) =>
+            option
+              .setName('name')
+              .setDescription('Field name')
+              .setRequired(true)
+              .setAutocomplete(true)
+          )
       )
-  )
-  .addSubcommand((subcommand) =>
-    subcommand
-      .setName('fields-list')
-      .setDescription('List all fields on a resource')
-      .addStringOption((option) =>
-        option
-          .setName('resource-id')
-          .setDescription('ID of the resource')
-          .setRequired(true)
-          .setAutocomplete(true)
-      )
-  )
-  .addSubcommand((subcommand) =>
-    subcommand
-      .setName('fields-get')
-      .setDescription('Get a field value from a resource')
-      .addStringOption((option) =>
-        option
-          .setName('resource-id')
-          .setDescription('ID of the resource')
-          .setRequired(true)
-          .setAutocomplete(true)
-      )
-      .addStringOption((option) =>
-        option.setName('name').setDescription('Field name').setRequired(true).setAutocomplete(true)
-      )
-  )
-  .addSubcommand((subcommand) =>
-    subcommand
-      .setName('fields-remove')
-      .setDescription('Remove a field from a resource')
-      .addStringOption((option) =>
-        option
-          .setName('resource-id')
-          .setDescription('ID of the resource')
-          .setRequired(true)
-          .setAutocomplete(true)
-      )
-      .addStringOption((option) =>
-        option
-          .setName('name')
-          .setDescription('Field name to remove')
-          .setRequired(true)
-          .setAutocomplete(true)
-      )
-  )
-  .addSubcommand((subcommand) =>
-    subcommand
-      .setName('link-2fa')
-      .setDescription('Link a 2FA account to this resource')
-      .addStringOption((option) =>
-        option
-          .setName('resource-id')
-          .setDescription('ID of the resource')
-          .setRequired(true)
-          .setAutocomplete(true)
-      )
-      .addStringOption((option) =>
-        option
-          .setName('account')
-          .setDescription('2FA account name to link')
-          .setRequired(true)
-          .setAutocomplete(true)
+      .addSubcommand((subcommand) =>
+        subcommand
+          .setName('remove')
+          .setDescription('Remove a field from a resource')
+          .addStringOption((option) =>
+            option
+              .setName('resource-id')
+              .setDescription('ID of the resource')
+              .setRequired(true)
+              .setAutocomplete(true)
+          )
+          .addStringOption((option) =>
+            option
+              .setName('name')
+              .setDescription('Field name to remove')
+              .setRequired(true)
+              .setAutocomplete(true)
+          )
       )
   )
-  .addSubcommand((subcommand) =>
-    subcommand
-      .setName('unlink-2fa')
-      .setDescription('Unlink 2FA account from this resource')
-      .addStringOption((option) =>
-        option
-          .setName('resource-id')
-          .setDescription('ID of the resource')
-          .setRequired(true)
-          .setAutocomplete(true)
+  .addSubcommandGroup((group: SlashCommandSubcommandGroupBuilder) =>
+    group
+      .setName('2fa')
+      .setDescription('Manage linked 2FA accounts')
+      .addSubcommand((subcommand) =>
+        subcommand
+          .setName('link')
+          .setDescription('Link a 2FA account to this resource')
+          .addStringOption((option) =>
+            option
+              .setName('resource-id')
+              .setDescription('ID of the resource')
+              .setRequired(true)
+              .setAutocomplete(true)
+          )
+          .addStringOption((option) =>
+            option
+              .setName('account')
+              .setDescription('2FA account name to link')
+              .setRequired(true)
+              .setAutocomplete(true)
+          )
       )
-  )
-  .addSubcommand((subcommand) =>
-    subcommand
-      .setName('get-2fa')
-      .setDescription('Get the linked 2FA code for this resource')
-      .addStringOption((option) =>
-        option
-          .setName('resource-id')
-          .setDescription('ID of the resource')
-          .setRequired(true)
-          .setAutocomplete(true)
+      .addSubcommand((subcommand) =>
+        subcommand
+          .setName('unlink')
+          .setDescription('Unlink 2FA account from this resource')
+          .addStringOption((option) =>
+            option
+              .setName('resource-id')
+              .setDescription('ID of the resource')
+              .setRequired(true)
+              .setAutocomplete(true)
+          )
+      )
+      .addSubcommand((subcommand) =>
+        subcommand
+          .setName('get')
+          .setDescription('Get the linked 2FA code for this resource')
+          .addStringOption((option) =>
+            option
+              .setName('resource-id')
+              .setDescription('ID of the resource')
+              .setRequired(true)
+              .setAutocomplete(true)
+          )
       )
   );
 
@@ -154,12 +172,11 @@ export async function handleResourceCommand(
   interaction: ChatInputCommandInteraction,
   context: CommandContext
 ): Promise<void> {
+  const subcommandGroup = interaction.options.getSubcommandGroup(false);
   const subcommand = interaction.options.getSubcommand();
 
   // Only field commands require ENCRYPTION_KEY
-  const isFieldCommand = ['fields-add', 'fields-list', 'fields-get', 'fields-remove'].includes(
-    subcommand
-  );
+  const isFieldCommand = subcommandGroup === 'fields';
   if (isFieldCommand && !env.ENCRYPTION_KEY) {
     await interaction.reply({
       content: '❌ Resource field commands are disabled. The `ENCRYPTION_KEY` is not configured.',
@@ -168,37 +185,64 @@ export async function handleResourceCommand(
     return;
   }
 
-  switch (subcommand) {
-    case 'register':
-      await handleRegisterResource(interaction, context);
+  switch (subcommandGroup) {
+    case null:
+      switch (subcommand) {
+        case 'register':
+          await handleRegisterResource(interaction, context);
+          break;
+        case 'list':
+          await handleResourceList(interaction, context);
+          break;
+        default:
+          await interaction.reply({
+            content: `Unknown subcommand: ${subcommand}`,
+            ephemeral: true,
+          });
+      }
       break;
-    case 'list':
-      await handleResourceList(interaction, context);
+    case 'fields':
+      switch (subcommand) {
+        case 'add':
+          await handleFieldsAdd(interaction, context);
+          break;
+        case 'list':
+          await handleFieldsList(interaction, context);
+          break;
+        case 'get':
+          await handleFieldsGet(interaction, context);
+          break;
+        case 'remove':
+          await handleFieldsRemove(interaction, context);
+          break;
+        default:
+          await interaction.reply({
+            content: `Unknown resource fields subcommand: ${subcommand}`,
+            ephemeral: true,
+          });
+      }
       break;
-    case 'fields-add':
-      await handleFieldsAdd(interaction, context);
-      break;
-    case 'fields-list':
-      await handleFieldsList(interaction, context);
-      break;
-    case 'fields-get':
-      await handleFieldsGet(interaction, context);
-      break;
-    case 'fields-remove':
-      await handleFieldsRemove(interaction, context);
-      break;
-    case 'link-2fa':
-      await handleLink2FA(interaction, context);
-      break;
-    case 'unlink-2fa':
-      await handleUnlink2FA(interaction, context);
-      break;
-    case 'get-2fa':
-      await handleGet2FA(interaction, context);
+    case '2fa':
+      switch (subcommand) {
+        case 'link':
+          await handleLink2FA(interaction, context);
+          break;
+        case 'unlink':
+          await handleUnlink2FA(interaction, context);
+          break;
+        case 'get':
+          await handleGet2FA(interaction, context);
+          break;
+        default:
+          await interaction.reply({
+            content: `Unknown resource 2fa subcommand: ${subcommand}`,
+            ephemeral: true,
+          });
+      }
       break;
     default:
       await interaction.reply({
-        content: `Unknown subcommand: ${subcommand}`,
+        content: `Unknown subcommand group: ${subcommandGroup}`,
         ephemeral: true,
       });
   }
@@ -212,6 +256,8 @@ export async function handleResourceAutocomplete(
   context: CommandContext
 ): Promise<void> {
   const focusedOption = interaction.options.getFocused(true);
+  const subcommandGroup = interaction.options.getSubcommandGroup(false);
+  const subcommand = interaction.options.getSubcommand(false);
 
   if (focusedOption.name === 'resource-id') {
     const userId = interaction.user.id;
@@ -237,7 +283,12 @@ export async function handleResourceAutocomplete(
     return;
   }
 
-  if (focusedOption.name === 'name') {
+  if (subcommandGroup === 'fields' && ['get', 'remove'].includes(subcommand ?? '')) {
+    if (focusedOption.name !== 'name') {
+      await interaction.respond([]);
+      return;
+    }
+
     // Autocomplete field names for the given resource
     const resourceId = interaction.options.getString('resource-id');
     if (!resourceId) {
@@ -260,8 +311,8 @@ export async function handleResourceAutocomplete(
     return;
   }
 
-  if (focusedOption.name === 'account') {
-    // Autocomplete TOTP account names for link-2fa command (personal + shared)
+  if (subcommandGroup === '2fa' && subcommand === 'link' && focusedOption.name === 'account') {
+    // Autocomplete TOTP account names for /resource 2fa link (personal + shared)
     const userId = interaction.user.id;
     const { totp } = context.repositories;
 
@@ -555,7 +606,7 @@ async function handleFieldsList(
     '',
     ...fields.map((f) => `• \`${f.name}\``),
     '',
-    '_Use `/resource fields-get` to retrieve values._',
+    '_Use `/resource fields get` to retrieve values._',
   ];
 
   await interaction.reply({
@@ -811,7 +862,7 @@ async function handleLink2FA(
         `**Resource:** ${resource.name}`,
         `**2FA Account:** ${account.accountName}`,
         '',
-        '_Use `/resource get-2fa` to retrieve codes._',
+        '_Use `/resource 2fa get` to retrieve codes._',
       ].join('\n'),
       ephemeral: true,
     });

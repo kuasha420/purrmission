@@ -20,6 +20,7 @@ describe('handleResourceCommand - list', () => {
     mockInteraction = {
       user: { id: 'user-1' } as any,
       options: {
+        getSubcommandGroup: () => null,
         getSubcommand: () => 'list',
       } as any,
       reply: ((options: any) => {
