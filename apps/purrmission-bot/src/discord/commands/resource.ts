@@ -1,11 +1,11 @@
 /**
- * Handler for /purrmission resource commands.
+ * Handler for /resource command.
  *
- * Manages resource fields (add, list, get, remove) and 2FA linking.
+ * Manages resources, resource fields (add, list, get, remove) and 2FA linking.
  */
 
 import {
-  SlashCommandSubcommandGroupBuilder,
+  SlashCommandBuilder,
   type ChatInputCommandInteraction,
   type AutocompleteInteraction,
 } from 'discord.js';
@@ -23,141 +23,132 @@ import { rateLimiter } from '../../infra/rateLimit.js';
 import { checkAccessPolicy, requiresApproval } from '../../domain/policy.js';
 
 /**
- * Build the 'resource' subcommand group for the /purrmission command.
+ * The /resource top-level command.
  */
-export function buildResourceSubcommandGroup(): SlashCommandSubcommandGroupBuilder {
-  return new SlashCommandSubcommandGroupBuilder()
-    .setName('resource')
-    .setDescription('Manage resources and their fields')
-    .addSubcommand((subcommand) =>
-      subcommand
-        .setName('register')
-        .setDescription('Register a new protected resource')
-        .addStringOption((option) =>
-          option.setName('name').setDescription('Name for the new resource').setRequired(true)
-        )
-    )
-    .addSubcommand((subcommand) =>
-      subcommand.setName('list').setDescription('List all resources you own or represent')
-    )
-    .addSubcommand((subcommand) =>
-      subcommand
-        .setName('fields-add')
-        .setDescription('Add a field to a resource')
-        .addStringOption((option) =>
-          option
-            .setName('resource-id')
-            .setDescription('ID of the resource')
-            .setRequired(true)
-            .setAutocomplete(true)
-        )
-        .addStringOption((option) =>
-          option.setName('name').setDescription('Field name (e.g. "password")').setRequired(true)
-        )
-        .addStringOption((option) =>
-          option
-            .setName('value')
-            .setDescription('Field value (will be encrypted)')
-            .setRequired(true)
-        )
-    )
-    .addSubcommand((subcommand) =>
-      subcommand
-        .setName('fields-list')
-        .setDescription('List all fields on a resource')
-        .addStringOption((option) =>
-          option
-            .setName('resource-id')
-            .setDescription('ID of the resource')
-            .setRequired(true)
-            .setAutocomplete(true)
-        )
-    )
-    .addSubcommand((subcommand) =>
-      subcommand
-        .setName('fields-get')
-        .setDescription('Get a field value from a resource')
-        .addStringOption((option) =>
-          option
-            .setName('resource-id')
-            .setDescription('ID of the resource')
-            .setRequired(true)
-            .setAutocomplete(true)
-        )
-        .addStringOption((option) =>
-          option
-            .setName('name')
-            .setDescription('Field name')
-            .setRequired(true)
-            .setAutocomplete(true)
-        )
-    )
-    .addSubcommand((subcommand) =>
-      subcommand
-        .setName('fields-remove')
-        .setDescription('Remove a field from a resource')
-        .addStringOption((option) =>
-          option
-            .setName('resource-id')
-            .setDescription('ID of the resource')
-            .setRequired(true)
-            .setAutocomplete(true)
-        )
-        .addStringOption((option) =>
-          option
-            .setName('name')
-            .setDescription('Field name to remove')
-            .setRequired(true)
-            .setAutocomplete(true)
-        )
-    )
-    .addSubcommand((subcommand) =>
-      subcommand
-        .setName('link-2fa')
-        .setDescription('Link a 2FA account to this resource')
-        .addStringOption((option) =>
-          option
-            .setName('resource-id')
-            .setDescription('ID of the resource')
-            .setRequired(true)
-            .setAutocomplete(true)
-        )
-        .addStringOption((option) =>
-          option
-            .setName('account')
-            .setDescription('2FA account name to link')
-            .setRequired(true)
-            .setAutocomplete(true)
-        )
-    )
-    .addSubcommand((subcommand) =>
-      subcommand
-        .setName('unlink-2fa')
-        .setDescription('Unlink 2FA account from this resource')
-        .addStringOption((option) =>
-          option
-            .setName('resource-id')
-            .setDescription('ID of the resource')
-            .setRequired(true)
-            .setAutocomplete(true)
-        )
-    )
-    .addSubcommand((subcommand) =>
-      subcommand
-        .setName('get-2fa')
-        .setDescription('Get the linked 2FA code for this resource')
-        .addStringOption((option) =>
-          option
-            .setName('resource-id')
-            .setDescription('ID of the resource')
-            .setRequired(true)
-            .setAutocomplete(true)
-        )
-    );
-}
+export const resourceCommand = new SlashCommandBuilder()
+  .setName('resource')
+  .setDescription('Manage resources and their fields')
+  .addSubcommand((subcommand) =>
+    subcommand
+      .setName('register')
+      .setDescription('Register a new protected resource')
+      .addStringOption((option) =>
+        option.setName('name').setDescription('Name for the new resource').setRequired(true)
+      )
+  )
+  .addSubcommand((subcommand) =>
+    subcommand.setName('list').setDescription('List all resources you own or represent')
+  )
+  .addSubcommand((subcommand) =>
+    subcommand
+      .setName('fields-add')
+      .setDescription('Add a field to a resource')
+      .addStringOption((option) =>
+        option
+          .setName('resource-id')
+          .setDescription('ID of the resource')
+          .setRequired(true)
+          .setAutocomplete(true)
+      )
+      .addStringOption((option) =>
+        option.setName('name').setDescription('Field name (e.g. "password")').setRequired(true)
+      )
+      .addStringOption((option) =>
+        option.setName('value').setDescription('Field value (will be encrypted)').setRequired(true)
+      )
+  )
+  .addSubcommand((subcommand) =>
+    subcommand
+      .setName('fields-list')
+      .setDescription('List all fields on a resource')
+      .addStringOption((option) =>
+        option
+          .setName('resource-id')
+          .setDescription('ID of the resource')
+          .setRequired(true)
+          .setAutocomplete(true)
+      )
+  )
+  .addSubcommand((subcommand) =>
+    subcommand
+      .setName('fields-get')
+      .setDescription('Get a field value from a resource')
+      .addStringOption((option) =>
+        option
+          .setName('resource-id')
+          .setDescription('ID of the resource')
+          .setRequired(true)
+          .setAutocomplete(true)
+      )
+      .addStringOption((option) =>
+        option.setName('name').setDescription('Field name').setRequired(true).setAutocomplete(true)
+      )
+  )
+  .addSubcommand((subcommand) =>
+    subcommand
+      .setName('fields-remove')
+      .setDescription('Remove a field from a resource')
+      .addStringOption((option) =>
+        option
+          .setName('resource-id')
+          .setDescription('ID of the resource')
+          .setRequired(true)
+          .setAutocomplete(true)
+      )
+      .addStringOption((option) =>
+        option
+          .setName('name')
+          .setDescription('Field name to remove')
+          .setRequired(true)
+          .setAutocomplete(true)
+      )
+  )
+  .addSubcommand((subcommand) =>
+    subcommand
+      .setName('link-2fa')
+      .setDescription('Link a 2FA account to this resource')
+      .addStringOption((option) =>
+        option
+          .setName('resource-id')
+          .setDescription('ID of the resource')
+          .setRequired(true)
+          .setAutocomplete(true)
+      )
+      .addStringOption((option) =>
+        option
+          .setName('account')
+          .setDescription('2FA account name to link')
+          .setRequired(true)
+          .setAutocomplete(true)
+      )
+  )
+  .addSubcommand((subcommand) =>
+    subcommand
+      .setName('unlink-2fa')
+      .setDescription('Unlink 2FA account from this resource')
+      .addStringOption((option) =>
+        option
+          .setName('resource-id')
+          .setDescription('ID of the resource')
+          .setRequired(true)
+          .setAutocomplete(true)
+      )
+  )
+  .addSubcommand((subcommand) =>
+    subcommand
+      .setName('get-2fa')
+      .setDescription('Get the linked 2FA code for this resource')
+      .addStringOption((option) =>
+        option
+          .setName('resource-id')
+          .setDescription('ID of the resource')
+          .setRequired(true)
+          .setAutocomplete(true)
+      )
+  );
 
 /**
- * Handle /purrmission resource subcommands.
+ * Handle /resource subcommands.
  */
 export async function handleResourceCommand(
   interaction: ChatInputCommandInteraction,
@@ -347,7 +338,7 @@ async function handleRegisterResource(
         '',
         `You have been added as the **OWNER** (Guardian ID: \`${guardian.id}\`).`,
         '',
-        'Use `/purrmission guardian add` to add more guardians.',
+        'Use `/guardian add` to add more guardians.',
       ].join('\n'),
       ephemeral: true,
     });
@@ -564,7 +555,7 @@ async function handleFieldsList(
     '',
     ...fields.map((f) => `• \`${f.name}\``),
     '',
-    '_Use `/purrmission resource fields-get` to retrieve values._',
+    '_Use `/resource fields-get` to retrieve values._',
   ];
 
   await interaction.reply({
@@ -820,7 +811,7 @@ async function handleLink2FA(
         `**Resource:** ${resource.name}`,
         `**2FA Account:** ${account.accountName}`,
         '',
-        '_Use `/purrmission resource get-2fa` to retrieve codes._',
+        '_Use `/resource get-2fa` to retrieve codes._',
       ].join('\n'),
       ephemeral: true,
     });

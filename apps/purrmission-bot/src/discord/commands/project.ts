@@ -1,13 +1,85 @@
 /**
- * Project member management handlers.
+ * Handler for /project command.
  *
- * These handlers are used by the /purrmission project subcommand group.
+ * Manages project settings and members.
  */
 
-import type { ChatInputCommandInteraction } from 'discord.js';
+import { SlashCommandBuilder, type ChatInputCommandInteraction } from 'discord.js';
+
+import type { CommandContext } from './context.js';
 import { logger } from '../../logging/logger.js';
 import { ProjectMemberRole } from '../../domain/models.js';
 import type { Services } from '../../domain/services.js';
+
+export const projectCommand = new SlashCommandBuilder()
+  .setName('project')
+  .setDescription('Manage project settings and members')
+  .addSubcommand((subcommand) =>
+    subcommand
+      .setName('member-add')
+      .setDescription('Add a member to a project')
+      .addStringOption((option) =>
+        option.setName('project_id').setDescription('The ID of the project').setRequired(true)
+      )
+      .addUserOption((option) =>
+        option.setName('user').setDescription('The user to add').setRequired(true)
+      )
+      .addStringOption((option) =>
+        option
+          .setName('role')
+          .setDescription('Access role (default: READER)')
+          .addChoices(
+            { name: 'Reader (Read-Only)', value: 'READER' },
+            { name: 'Writer (Read/Write)', value: 'WRITER' }
+          )
+      )
+  )
+  .addSubcommand((subcommand) =>
+    subcommand
+      .setName('member-remove')
+      .setDescription('Remove a member from a project')
+      .addStringOption((option) =>
+        option.setName('project_id').setDescription('The ID of the project').setRequired(true)
+      )
+      .addUserOption((option) =>
+        option.setName('user').setDescription('The user to remove').setRequired(true)
+      )
+  )
+  .addSubcommand((subcommand) =>
+    subcommand
+      .setName('member-list')
+      .setDescription('List all members of a project')
+      .addStringOption((option) =>
+        option.setName('project_id').setDescription('The ID of the project').setRequired(true)
+      )
+  );
+
+/**
+ * Handle /project subcommands.
+ */
+export async function handleProjectCommand(
+  interaction: ChatInputCommandInteraction,
+  context: CommandContext
+): Promise<void> {
+  const subcommand = interaction.options.getSubcommand();
+
+  switch (subcommand) {
+    case 'member-add':
+      await handleAddMember(interaction, context.services);
+      return;
+    case 'member-remove':
+      await handleRemoveMember(interaction, context.services);
+      return;
+    case 'member-list':
+      await handleListMembers(interaction, context.services);
+      return;
+    default:
+      await interaction.reply({
+        content: `Unknown subcommand: ${subcommand}`,
+        ephemeral: true,
+      });
+  }
+}
 
 /**
  * Handle adding a member to a project.
@@ -25,21 +97,17 @@ export async function handleAddMember(
   const actorId = interaction.user.id;
 
   try {
-    // Verify Project exists
     const project = await services.project.getProject(projectId);
     if (!project) {
       await interaction.editReply(`❌ Project not found: \`${projectId}\``);
       return;
     }
 
-    // Authorization: Only Owner can add members (for now)
-    // TODO: Allow Guardians/Admins if needed
     if (project.ownerId !== actorId) {
       await interaction.editReply('❌ You must be the project owner to add members.');
       return;
     }
 
-    // Add Member
     await services.project.addMember(projectId, targetUser.id, role, actorId);
 
     await interaction.editReply(
@@ -106,7 +174,6 @@ export async function handleListMembers(
       return;
     }
 
-    // Auth check: Owner or Member can list
     const memberRole = await services.project.getMemberRole(projectId, actorId);
     if (project.ownerId !== actorId && !memberRole) {
       await interaction.editReply('❌ You do not have access to view members of this project.');
@@ -126,7 +193,7 @@ export async function handleListMembers(
 
     await interaction.editReply({
       content: `**Members of ${project.name}:**\n${memberList}`,
-      allowedMentions: { users: [] }, // Don't ping users
+      allowedMentions: { users: [] },
     });
   } catch (error) {
     logger.error('Failed to list project members', { error });
