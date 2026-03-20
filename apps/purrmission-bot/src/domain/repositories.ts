@@ -7,7 +7,7 @@
  *
  * TODO: Replace in-memory implementations with Postgres/Prisma for production.
  */
-import type { Prisma, PrismaClient } from '@prisma/client';
+import type { PrismaClient } from '@prisma/client';
 
 import { decryptValue, encryptValue } from '../infra/crypto.js';
 import { logger } from '../logging/logger.js';
@@ -49,7 +49,7 @@ export interface ResourceRepository {
 
   update(id: string, data: { totpAccountId?: string | null }): Promise<Resource>;
 
-  findManyByIds(ids: string[]): Promise<Resource[]>;
+  findManyByIds(ids: string[], query?: string): Promise<Resource[]>;
 }
 
 /**
@@ -220,10 +220,18 @@ export class PrismaResourceRepository implements ResourceRepository {
     return this.mapPrismaToDomain(updated);
   }
 
-  async findManyByIds(ids: string[]): Promise<Resource[]> {
+  async findManyByIds(ids: string[], query?: string): Promise<Resource[]> {
     const rows = await this.prisma.resource.findMany({
       where: {
         id: { in: ids },
+        ...(query
+          ? {
+              name: {
+                contains: query,
+                mode: 'insensitive',
+              },
+            }
+          : {}),
       },
     });
     return rows.map((row) => this.mapPrismaToDomain(row));

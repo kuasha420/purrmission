@@ -6,52 +6,34 @@
  */
 
 import {
-  SlashCommandBuilder,
   type ChatInputCommandInteraction,
   type AutocompleteInteraction,
   type RESTPostAPIChatInputApplicationCommandsJSONBody,
 } from 'discord.js';
 
-import { handleRegisterResource } from './registerResource.js';
-import {
-  handlePurrmissionCommand,
-  purrmissionCommand,
-  handlePurrmissionAutocomplete,
-} from './twoFa.js';
-import { data as approveData, execute as approveExecute } from './approve.js';
-import { data as denyData, execute as denyExecute } from './deny.js';
-import { data as projectData, execute as projectExecute } from './project.js';
+import { twoFaCommand, handle2FACommand, handle2FAAutocomplete } from './twoFa.js';
+import { resourceCommand, handleResourceCommand, handleResourceAutocomplete } from './resource.js';
+import { guardianCommand, handleGuardianCommand, handleGuardianAutocomplete } from './guardian.js';
+import { accessCommand, handleAccessCommand, handleAccessAutocomplete } from './access.js';
+import { authCommand, handleAuthCommand } from './auth.js';
+import { projectCommand, handleProjectCommand } from './project.js';
+import type { CommandContext } from './context.js';
 import { logger } from '../../logging/logger.js';
 
 /**
  * All slash command definitions for registration.
+ *
+ * Each domain has its own clean top-level command:
+ *   /2fa, /resource, /guardian, /access, /auth, /project
  */
 export const commands: RESTPostAPIChatInputApplicationCommandsJSONBody[] = [
-  new SlashCommandBuilder()
-    .setName('purrmission-register-resource')
-    .setDescription('Register a new protected resource')
-    .addStringOption((option) =>
-      option
-        .setName('name')
-        .setDescription('Name of the resource to protect')
-        .setRequired(true)
-        .setMaxLength(100)
-    )
-    .toJSON(),
-
-  purrmissionCommand.toJSON(),
-  approveData.toJSON(),
-  denyData.toJSON(),
-  projectData.toJSON(),
+  twoFaCommand.toJSON(),
+  resourceCommand.toJSON(),
+  guardianCommand.toJSON(),
+  accessCommand.toJSON(),
+  authCommand.toJSON(),
+  projectCommand.toJSON(),
 ];
-
-/**
- * Route slash commands to their handlers.
- *
- * @param interaction - The command interaction
- * @param services - Application services
- */
-import type { CommandContext } from './context.js';
 
 /**
  * Route slash commands to their handlers.
@@ -64,27 +46,25 @@ export async function handleSlashCommand(
   context: CommandContext
 ): Promise<void> {
   const { commandName } = interaction;
-  const { services } = context;
 
   switch (commandName) {
-    case 'purrmission-register-resource':
-      await handleRegisterResource(interaction, services);
+    case '2fa':
+      await handle2FACommand(interaction, context);
       break;
-
-    case 'purrmission':
-      await handlePurrmissionCommand(interaction, context);
+    case 'resource':
+      await handleResourceCommand(interaction, context);
       break;
-
-    case 'approve':
-      await approveExecute(interaction, services);
+    case 'guardian':
+      await handleGuardianCommand(interaction, context);
       break;
-
-    case 'deny':
-      await denyExecute(interaction, services);
+    case 'access':
+      await handleAccessCommand(interaction, context);
       break;
-
+    case 'auth':
+      await handleAuthCommand(interaction, context);
+      break;
     case 'project':
-      await projectExecute(interaction, services);
+      await handleProjectCommand(interaction, context);
       break;
 
     default:
@@ -108,10 +88,19 @@ export async function handleAutocomplete(
 ): Promise<void> {
   const { commandName } = interaction;
 
-  if (commandName === 'purrmission') {
-    await handlePurrmissionAutocomplete(interaction, context);
-    return;
+  switch (commandName) {
+    case '2fa':
+      await handle2FAAutocomplete(interaction, context);
+      break;
+    case 'resource':
+      await handleResourceAutocomplete(interaction, context);
+      break;
+    case 'guardian':
+      await handleGuardianAutocomplete(interaction, context);
+      break;
+    case 'access':
+      await handleAccessAutocomplete(interaction, context);
+      break;
+    // /auth and /project have no autocomplete
   }
-
-  // No autocomplete for other commands yet – just exit.
 }

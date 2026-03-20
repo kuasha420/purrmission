@@ -106,28 +106,69 @@ codex "Show which instruction files are active for this repo."
 
 ## Discord Commands
 
-### 2FA Management
+Purrmission now exposes six top-level Discord slash commands:
 
-| Action        | Command                                                                 |
-| ------------- | ----------------------------------------------------------------------- |
-| Add Account   | `/purrmission 2fa add account:"..." mode:uri` (then enter URI in modal) |
-| List Accounts | `/purrmission 2fa list [shared:True]`                                   |
-| Get Code      | `/purrmission 2fa get account:"..."`                                    |
-| Update Key    | `/purrmission 2fa update account:"..." backup_key:"..."`                |
+| Top-level Command | Purpose                                                  |
+| ----------------- | -------------------------------------------------------- |
+| `/2fa`            | Manage personal and shared TOTP accounts                 |
+| `/resource`       | Register resources, manage fields, and manage linked 2FA |
+| `/guardian`       | Add, remove, and list resource guardians                 |
+| `/access`         | Request access and approve or deny requests              |
+| `/auth`           | Approve CLI login requests                               |
+| `/project`        | Manage project members                                   |
 
-### Guardian Management
+### `/2fa`
 
-| Action          | Command                                                       |
-| --------------- | ------------------------------------------------------------- |
-| Add Guardian    | `/purrmission guardian add resource-id:<id> user:@someone`    |
-| Remove Guardian | `/purrmission guardian remove resource-id:<id> user:@someone` |
-| List Guardians  | `/purrmission guardian list resource-id:<id>`                 |
+| Action        | Command                                      |
+| ------------- | -------------------------------------------- |
+| Add Account   | `/2fa add account:"..." mode:uri`            |
+| List Accounts | `/2fa list [shared:true]`                    |
+| Get Code      | `/2fa get account:"..."`                     |
+| Update Key    | `/2fa update account:"..." backup_key:"..."` |
 
-### CLI Login
+### `/resource`
 
-| Action            | Command                                 |
-| ----------------- | --------------------------------------- |
-| Approve CLI Login | `/purrmission cli-login code:XXXX-XXXX` |
+| Action              | Command                                                        |
+| ------------------- | -------------------------------------------------------------- |
+| Register Resource   | `/resource register name:"..."`                                |
+| List Resources      | `/resource list`                                               |
+| Add Field           | `/resource fields add resource-id:<id> name:"..." value:"..."` |
+| List Fields         | `/resource fields list resource-id:<id>`                       |
+| Get Field           | `/resource fields get resource-id:<id> name:"..."`             |
+| Remove Field        | `/resource fields remove resource-id:<id> name:"..."`          |
+| Link Resource 2FA   | `/resource 2fa link resource-id:<id> account:"..."`            |
+| Unlink Resource 2FA | `/resource 2fa unlink resource-id:<id>`                        |
+| Get Resource 2FA    | `/resource 2fa get resource-id:<id>`                           |
+
+### `/guardian`
+
+| Action          | Command                                           |
+| --------------- | ------------------------------------------------- |
+| Add Guardian    | `/guardian add resource-id:<id> user:@someone`    |
+| Remove Guardian | `/guardian remove resource-id:<id> user:@someone` |
+| List Guardians  | `/guardian list resource-id:<id>`                 |
+
+### `/access`
+
+| Action          | Command                            |
+| --------------- | ---------------------------------- |
+| Request Access  | `/access request resource-id:<id>` |
+| Approve Request | `/access approve request-id:<id>`  |
+| Deny Request    | `/access deny request-id:<id>`     |
+
+### `/auth`
+
+| Action            | Command                      |
+| ----------------- | ---------------------------- |
+| Approve CLI Login | `/auth login code:XXXX-XXXX` |
+
+### `/project`
+
+| Action        | Command                                                                     |
+| ------------- | --------------------------------------------------------------------------- |
+| Add Member    | `/project member add project_id:<id> user:@someone [role:READER or WRITER]` |
+| Remove Member | `/project member remove project_id:<id> user:@someone`                      |
+| List Members  | `/project member list project_id:<id>`                                      |
 
 ---
 

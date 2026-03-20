@@ -1,3 +1,9 @@
+/**
+ * Handler for /2fa command.
+ *
+ * Manages TOTP 2FA accounts (add, list, get, update).
+ */
+
 import {
   SlashCommandBuilder,
   type ChatInputCommandInteraction,
@@ -12,285 +18,143 @@ import {
   generateTOTPCode,
 } from '../../domain/totp.js';
 import type { TOTPAccount } from '../../domain/models.js';
-import {
-  buildResourceSubcommandGroup,
-  handleResourceCommand,
-  handleResourceAutocomplete,
-} from './resource.js';
-import { handleAddGuardian } from './addGuardian.js';
-import { handleRemoveGuardian } from './removeGuardian.js';
-import { handleListGuardians } from './listGuardians.js';
-import { handleRequestAccess } from './requestAccess.js';
 import { rateLimiter } from '../../infra/rateLimit.js';
-import { handleAuthLogin } from './auth.js';
-export const purrmissionCommand = new SlashCommandBuilder()
-  .setName('purrmission')
-  .setDescription('Manage 2FA accounts and resources')
-  .addSubcommandGroup(buildResourceSubcommandGroup())
-  .addSubcommandGroup((group) =>
-    group
-      .setName('2fa')
-      .setDescription('Manage 2FA accounts')
-      .addSubcommand((subcommand) =>
-        subcommand
-          .setName('add')
-          .setDescription('Add a new 2FA account')
-          .addStringOption((option) =>
-            option
-              .setName('account')
-              .setDescription('Account name (e.g. Google, AWS)')
-              .setRequired(true)
-          )
-          .addStringOption((option) =>
-            option
-              .setName('mode')
-              .setDescription('Input mode')
-              .setRequired(true)
-              .addChoices(
-                { name: 'URI (otpauth://...)', value: 'uri' },
-                { name: 'Secret Key (Base32)', value: 'secret' },
-                { name: 'QR Code Image', value: 'qr' }
-              )
-          )
-          .addStringOption((option) =>
-            option
-              .setName('secret')
-              .setDescription('Base32 Secret (required if mode=secret)')
-              .setRequired(false)
-          )
-          .addStringOption((option) =>
-            option
-              .setName('issuer')
-              .setDescription('Issuer name (optional, overrides URI/default)')
-              .setRequired(false)
-          )
-          .addBooleanOption((option) =>
-            option
-              .setName('shared')
-              .setDescription('Whether this code is shared with the team')
-              .setRequired(false)
-          )
-          .addAttachmentOption((option) =>
-            option
-              .setName('qr')
-              .setDescription('QR Code image (required if mode=qr)')
-              .setRequired(false)
-          )
-      )
-      .addSubcommand((subcommand) =>
-        subcommand
-          .setName('list')
-          .setDescription('List your TOTP 2FA accounts')
-          .addBooleanOption((option) =>
-            option
-              .setName('shared')
-              .setDescription('Include shared accounts visible to you')
-              .setRequired(false)
-          )
-      )
-      .addSubcommand((subcommand) =>
-        subcommand
-          .setName('get')
-          .setDescription('Get a TOTP code for one of your accounts')
-          .addStringOption((option) =>
-            option
-              .setName('account')
-              .setDescription('Account name')
-              .setRequired(true)
-              .setAutocomplete(true)
-          )
-          .addBooleanOption((option) =>
-            option
-              .setName('backup')
-              .setDescription('Get the backup key instead of a TOTP code')
-              .setRequired(false)
-          )
-      )
-      .addSubcommand((subcommand) =>
-        subcommand
-          .setName('update')
-          .setDescription('Update a TOTP account (e.g. add backup key)')
-          .addStringOption((option) =>
-            option
-              .setName('account')
-              .setDescription('Account name')
-              .setRequired(true)
-              .setAutocomplete(true)
-          )
-          .addStringOption((option) =>
-            option
-              .setName('backup_key')
-              .setDescription('Backup key / recovery code to store')
-              .setRequired(true)
-          )
-      )
-  )
-  .addSubcommandGroup((group) =>
-    group
-      .setName('guardian')
-      .setDescription('Manage guardians for resources')
-      .addSubcommand((subcommand) =>
-        subcommand
-          .setName('add')
-          .setDescription('Add a guardian to a protected resource')
-          .addStringOption((option) =>
-            option
-              .setName('resource-id')
-              .setDescription('ID of the resource')
-              .setRequired(true)
-              .setAutocomplete(true)
-          )
-          .addUserOption((option) =>
-            option
-              .setName('user')
-              .setDescription('User to add as guardian')
-              .setRequired(true)
-          )
-      )
-      .addSubcommand((subcommand) =>
-        subcommand
-          .setName('remove')
-          .setDescription('Remove a guardian from a protected resource')
-          .addStringOption((option) =>
-            option
-              .setName('resource-id')
-              .setDescription('ID of the resource')
-              .setRequired(true)
-              .setAutocomplete(true)
-          )
-          .addUserOption((option) =>
-            option
-              .setName('user')
-              .setDescription('User to remove')
-              .setRequired(true)
-          )
-      )
-      .addSubcommand((subcommand) =>
-        subcommand
-          .setName('list')
-          .setDescription('List all guardians for a resource')
-          .addStringOption((option) =>
-            option
-              .setName('resource-id')
-              .setDescription('ID of the resource')
-              .setRequired(true)
-              .setAutocomplete(true)
-          )
-      )
-  )
 
+export const twoFaCommand = new SlashCommandBuilder()
+  .setName('2fa')
+  .setDescription('Manage 2FA accounts')
   .addSubcommand((subcommand) =>
     subcommand
-      .setName('cli-login')
-      .setDescription('Approve a Pawthy CLI login request')
+      .setName('add')
+      .setDescription('Add a new 2FA account')
       .addStringOption((option) =>
         option
-          .setName('code')
-          .setDescription('The 9-character code from the CLI (e.g., ABCD-1234)')
+          .setName('account')
+          .setDescription('Account name (e.g. Google, AWS)')
           .setRequired(true)
-          .setMaxLength(9)
+      )
+      .addStringOption((option) =>
+        option
+          .setName('mode')
+          .setDescription('Input mode')
+          .setRequired(true)
+          .addChoices(
+            { name: 'URI (otpauth://...)', value: 'uri' },
+            { name: 'Secret Key (Base32)', value: 'secret' },
+            { name: 'QR Code Image', value: 'qr' }
+          )
+      )
+      .addStringOption((option) =>
+        option
+          .setName('secret')
+          .setDescription('Base32 Secret (required if mode=secret)')
+          .setRequired(false)
+      )
+      .addStringOption((option) =>
+        option
+          .setName('issuer')
+          .setDescription('Issuer name (optional, overrides URI/default)')
+          .setRequired(false)
+      )
+      .addBooleanOption((option) =>
+        option
+          .setName('shared')
+          .setDescription('Whether this code is shared with the team')
+          .setRequired(false)
+      )
+      .addAttachmentOption((option) =>
+        option
+          .setName('qr')
+          .setDescription('QR Code image (required if mode=qr)')
+          .setRequired(false)
       )
   )
   .addSubcommand((subcommand) =>
     subcommand
-      .setName('request-access')
-      .setDescription('Request access to a protected resource')
+      .setName('list')
+      .setDescription('List your TOTP 2FA accounts')
+      .addBooleanOption((option) =>
+        option
+          .setName('shared')
+          .setDescription('Include shared accounts visible to you')
+          .setRequired(false)
+      )
+  )
+  .addSubcommand((subcommand) =>
+    subcommand
+      .setName('get')
+      .setDescription('Get a TOTP code for one of your accounts')
       .addStringOption((option) =>
         option
-          .setName('resource-id')
-          .setDescription('ID of the resource to request access to')
+          .setName('account')
+          .setDescription('Account name')
           .setRequired(true)
           .setAutocomplete(true)
       )
+      .addBooleanOption((option) =>
+        option
+          .setName('backup')
+          .setDescription('Get the backup key instead of a TOTP code')
+          .setRequired(false)
+      )
+  )
+  .addSubcommand((subcommand) =>
+    subcommand
+      .setName('update')
+      .setDescription('Update a TOTP account (e.g. add backup key)')
+      .addStringOption((option) =>
+        option
+          .setName('account')
+          .setDescription('Account name')
+          .setRequired(true)
+          .setAutocomplete(true)
+      )
+      .addStringOption((option) =>
+        option
+          .setName('backup_key')
+          .setDescription('Backup key / recovery code to store')
+          .setRequired(true)
+      )
   );
 
-export async function handlePurrmissionCommand(
+/**
+ * Handle /2fa subcommands.
+ */
+export async function handle2FACommand(
   interaction: ChatInputCommandInteraction,
   context: CommandContext
 ): Promise<void> {
-  const subcommandGroup = interaction.options.getSubcommandGroup(false);
-  const subcommand = interaction.options.getSubcommand(false);
+  const subcommand = interaction.options.getSubcommand();
 
-  if (subcommand === 'cli-login') {
-    await handleAuthLogin(interaction, context);
-    return;
-  }
-
-  if (subcommand === 'request-access') {
-    await handleRequestAccess(interaction, context);
-    return;
-  }
-
-  if (subcommandGroup === 'resource') {
-    await handleResourceCommand(interaction, context);
-    return;
-  }
-
-  if (subcommandGroup === 'guardian') {
-    switch (subcommand) {
-      case 'add':
-        await handleAddGuardian(interaction, context.services);
-        return;
-      case 'remove':
-        await handleRemoveGuardian(interaction, context.services);
-        return;
-      case 'list':
-        await handleListGuardians(interaction, context.services);
-        return;
-      default:
-        await interaction.reply({
-          content: 'Unsupported subcommand for /purrmission guardian.',
-          ephemeral: true,
-        });
-        return;
-    }
-  }
-
-  if (subcommandGroup !== '2fa') {
-    await interaction.reply({
-      content: 'Unsupported subcommand group for /purrmission.',
-      ephemeral: true,
-    });
-    return;
-  }
-
-  if (subcommand === 'add') {
-    await handleAdd2FA(interaction, context);
-  } else if (subcommand === 'list') {
-    await handleList2FA(interaction, context);
-  } else if (subcommand === 'get') {
-    await handleGet2FA(interaction, context);
-  } else if (subcommand === 'update') {
-    await handleUpdate2FA(interaction, context);
-  } else {
-    await interaction.reply({
-      content: 'Unsupported subcommand for /purrmission 2fa.',
-      ephemeral: true,
-    });
+  switch (subcommand) {
+    case 'add':
+      await handleAdd2FA(interaction, context);
+      return;
+    case 'list':
+      await handleList2FA(interaction, context);
+      return;
+    case 'get':
+      await handleGet2FA(interaction, context);
+      return;
+    case 'update':
+      await handleUpdate2FA(interaction, context);
+      return;
+    default:
+      await interaction.reply({
+        content: `Unknown subcommand: ${subcommand}`,
+        ephemeral: true,
+      });
   }
 }
 
-export async function handlePurrmissionAutocomplete(
+/**
+ * Handle autocomplete for /2fa commands (account names).
+ */
+export async function handle2FAAutocomplete(
   interaction: AutocompleteInteraction,
   context: CommandContext
 ): Promise<void> {
-  const subcommandGroup = interaction.options.getSubcommandGroup(false);
   const subcommand = interaction.options.getSubcommand(false);
-
-  if (subcommandGroup === 'resource') {
-    await handleResourceAutocomplete(interaction, context);
-    return;
-  }
-
-  // Handle request-access autocomplete (top-level subcommand) by reusing the resource autocomplete logic
-  if (subcommand === 'request-access') {
-    await handleResourceAutocomplete(interaction, context);
-    return;
-  }
-
-  if (subcommandGroup !== '2fa') {
-    return;
-  }
 
   if (subcommand !== 'get' && subcommand !== 'update') {
     return;
@@ -379,7 +243,7 @@ async function handleGet2FA(
   if (getBackup) {
     if (!account.backupKey) {
       await interaction.reply({
-        content: `❌ No backup key found for **${account.accountName}**. You can add one with \`/purrmission 2fa update\`.`,
+        content: `❌ No backup key found for **${account.accountName}**. You can add one with \`/2fa update\`.`,
         ephemeral: true,
       });
       return;
@@ -460,8 +324,8 @@ async function handleList2FA(
   if (personalAccounts.length === 0 && (!includeShared || sharedAccounts.length === 0)) {
     await interaction.reply({
       content: includeShared
-        ? '📭 You don’t have any 2FA accounts yet, and no shared accounts are visible to you.'
-        : '📭 You don’t have any 2FA accounts yet.',
+        ? "You don't have any 2FA accounts yet, and no shared accounts are visible to you."
+        : "You don't have any 2FA accounts yet.",
       ephemeral: true,
     });
     return;
@@ -499,8 +363,7 @@ async function handleList2FA(
   if (lines.length === 0) {
     // This case can happen if sharedAccounts only contained accounts owned by the user.
     await interaction.reply({
-      content:
-        '📭 You don’t have any additional shared 2FA accounts visible to you beyond your own.',
+      content: "You don't have any additional shared 2FA accounts visible to you beyond your own.",
       ephemeral: true,
     });
     return;
@@ -589,7 +452,7 @@ async function handleAdd2FA(
         createdAccountSummary,
         shared ? '🔓 This account is marked as **shared**.' : '🔒 This account is **personal**.',
         '',
-        '_Note: You can now retrieve codes using `/purrmission 2fa get`._',
+        '_Note: You can now retrieve codes using `/2fa get`._',
       ].join('\n'),
       ephemeral: true,
     });

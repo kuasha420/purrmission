@@ -1,20 +1,20 @@
-import { SlashCommandBuilder, ChatInputCommandInteraction } from 'discord.js';
+/**
+ * Deny command handler.
+ *
+ * Previously a standalone /deny command, now routed via /access deny.
+ * The execute function is kept for test compatibility.
+ */
+
+import type { ChatInputCommandInteraction } from 'discord.js';
 import type { Services } from '../../domain/services.js';
-import { Command } from '../types/command.js';
 import { handleDecisionCommand } from './decision.js';
 
-export const data = new SlashCommandBuilder()
-    .setName('deny')
-    .setDescription('Deny a pending request')
-    .addStringOption(option =>
-        option
-            .setName('request-id')
-            .setDescription('The ID of the request to deny')
-            .setRequired(true)
-    );
-
+/**
+ * Execute a denial decision.
+ *
+ * @param interaction - The command interaction
+ * @param services - Application services
+ */
 export async function execute(interaction: ChatInputCommandInteraction, services: Services) {
-    await handleDecisionCommand(interaction, services, 'DENY');
+  await handleDecisionCommand(interaction, services, 'DENY');
 }
-
-export default { data, execute } satisfies Command;
