@@ -2,17 +2,17 @@
 
 ## Local MCP server (SQLite – this repo)
 
-You can run a local Prisma MCP server for this project so MCP-aware AI tools (ChatGPT, Claude, Cursor, etc.) can manage the database via natural language.
+You can run a local Prisma MCP server for this project so MCP-aware AI tools (Codex, ChatGPT, Claude, Cursor, etc.) can manage the database via natural language.
 
 ### CLI
 
 From the repo root:
 
 ```bash
-pnpm dlx prisma mcp
+pnpm prisma mcp
 ```
 
-This starts a local MCP server using the Prisma CLI. It will use the `DATABASE_URL` from your `.env` file by default.
+This starts a local MCP server using the Prisma CLI version pinned in this repository. It will use the `DATABASE_URL` from your `.env` file by default.
 
 **Important**: Ensure your `DATABASE_URL` is consistent across the root `.env`, `apps/purrmission-bot/.env`, and this MCP config to ensuring all tools work on the same database file.
 
@@ -25,9 +25,9 @@ See [`docs/mcp/prisma-local.json`](./mcp/prisma-local.json) for an example `mcpS
   "mcpServers": {
     "prisma-local": {
       "command": "pnpm",
-      "args": ["dlx", "prisma", "mcp"],
+      "args": ["prisma", "mcp"],
       "env": {
-        "DATABASE_URL": "file:./prisma/purrmission.db"
+        "DATABASE_URL": "file:./data/dev.db"
       }
     }
   }
@@ -42,10 +42,21 @@ High-level flow:
 
 1. Set up a Prisma Postgres project in the Prisma Console.
 2. Configure the Prisma MCP server as described in the official docs.
-3. Add an MCP configuration to your AI tool that points to `npx prisma mcp` (or `pnpm dlx prisma mcp`) with the appropriate environment variables.
+3. Add an MCP configuration to your AI tool that points to a Prisma CLI version compatible with your project schema, for example `pnpm prisma mcp` inside this repo.
 
 This repository includes a template at:
 
 - [`docs/mcp/prisma-remote.json`](./mcp/prisma-remote.json)
 
 Use this as a starting point and adjust values (project URL, API keys, etc.) according to Prisma’s MCP server documentation.
+
+## Codex in this repo
+
+This repository can generate a project-scoped Codex MCP configuration into `.codex/config.toml` via `pnpm mcp:sync`.
+
+- It renders Prisma MCP directly into Codex's native `command` / `args` / `cwd` / `env` config format.
+- `pnpm mcp:sync` reads the shared root `mcp.json`, optional `mcp.local.json`, and the repo-root `.env` before generating the local Codex config.
+- It is additive to the existing MCP docs and templates in this repository; other clients can keep using the JSON-based configurations.
+- `.codex/config.toml` is treated as a local generated artifact and is gitignored.
+- `pnpm mcp:sync` also marks the repository as trusted in `~/.codex/config.toml` so Codex can load the generated project config automatically.
+- No extra `codex mcp add` step is required for this repository unless you want personal overrides in your global `~/.codex/config.toml`.

@@ -50,6 +50,7 @@ fi
 # 5. MCP Sync
 echo -e "${YELLOW}Syncing MCP config...${NC}"
 pnpm mcp:sync
+echo -e "${GREEN}Codex note:${NC} pnpm mcp:sync also generates the local .codex/config.toml and trusts this repo for Codex."
 
 echo -e "${GREEN}=== Setup Complete ===${NC}"
 echo -e "Run ${BLUE}pnpm dev${NC} to start the development server."
