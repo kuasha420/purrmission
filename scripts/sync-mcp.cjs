@@ -1,14 +1,14 @@
 #!/usr/bin/env node
 
 /**
- * sync-mcp.js
+ * sync-mcp.cjs
  *
  * Syncs the project's mcp.json (and optional mcp.local.json) to the user's
  * global MCP configuration for Claude Desktop and VS Code, plus
  * local project-scoped config for Codex.
  *
  * Usage:
- *   node scripts/sync-mcp.js [--replace]
+ *   node scripts/sync-mcp.cjs [--replace]
  *
  * Options:
  *   --replace    Completely wipe the global config before syncing this project's servers.
@@ -51,7 +51,7 @@ const ANTIGRAVITY_CONFIG_PATH = path.join(os.homedir(), ".gemini/antigravity/mcp
 const VSCODE_MCP_PATH = path.join(PROJECT_ROOT, ".vscode", "mcp.json"); // Per-project VS Code config
 const CODEX_CONFIG_PATH = path.join(PROJECT_ROOT, ".codex", "config.toml");
 const USER_CODEX_CONFIG_PATH = path.join(os.homedir(), ".codex", "config.toml");
-const CODEX_SERVER_NAMES = ["context7", "prisma", "github"];
+const CODEX_EXCLUDED_SERVER_NAMES = new Set(["filesystem"]);
 
 // --- Helpers ---
 
@@ -95,7 +95,12 @@ function escapeRegExp(value) {
 }
 
 function ensureCodexProjectTrusted() {
-    const sectionHeader = `[projects."${PROJECT_ROOT}"]`;
+    const escapedProjectRoot = escapeTomlString(PROJECT_ROOT);
+    const sectionHeader = `[projects."${escapedProjectRoot}"]`;
+    const sectionKeyPatterns = [PROJECT_ROOT, escapedProjectRoot]
+        .filter((value, index, values) => values.indexOf(value) === index)
+        .map((value) => escapeRegExp(value))
+        .join("|");
 
     ensureDirectoryExists(USER_CODEX_CONFIG_PATH);
 
@@ -105,7 +110,7 @@ function ensureCodexProjectTrusted() {
     }
 
     const sectionPattern = new RegExp(
-        `(^|\\n)\\[projects\\."${escapeRegExp(PROJECT_ROOT)}"\\]\\n([\\s\\S]*?)(?=\\n\\[[^\\]]+\\]|$)`,
+        `(^|\\n)\\[projects\\."(?:${sectionKeyPatterns})"\\]\\n([\\s\\S]*?)(?=\\n\\[[^\\]]+\\]|$)`,
         "m",
     );
 
@@ -132,12 +137,11 @@ function renderCodexConfig(processedProjectServers) {
         "",
     ];
 
-    for (const serverName of CODEX_SERVER_NAMES) {
-        if (!Object.prototype.hasOwnProperty.call(processedProjectServers, serverName)) {
+    for (const [serverName, serverConfig] of Object.entries(processedProjectServers)) {
+        if (CODEX_EXCLUDED_SERVER_NAMES.has(serverName)) {
             continue;
         }
 
-        const serverConfig = processedProjectServers[serverName];
         const envEntries = Object.entries(serverConfig.env || {}).filter(([, value]) => {
             return typeof value === "string" && value.trim() !== "";
         });

@@ -3,6 +3,7 @@
     "prisma-local": {
       "command": "pnpm",
       "args": ["prisma", "mcp"],
+      "cwd": "/absolute/path/to/purrmission",
       "env": {
         "DATABASE_URL": "file:./data/dev.db"
       }

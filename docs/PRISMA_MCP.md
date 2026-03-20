@@ -14,7 +14,7 @@ pnpm prisma mcp
 
 This starts a local MCP server using the Prisma CLI version pinned in this repository. It will use the `DATABASE_URL` from your `.env` file by default.
 
-**Important**: Ensure your `DATABASE_URL` is consistent across the root `.env`, `apps/purrmission-bot/.env`, and this MCP config to ensuring all tools work on the same database file.
+**Important**: Ensure your `DATABASE_URL` is consistent across the root `.env`, `apps/purrmission-bot/.env`, and this MCP config to ensure all tools work on the same database file.
 
 ### Example MCP config (local)
 
@@ -26,6 +26,7 @@ See [`docs/mcp/prisma-local.json`](./mcp/prisma-local.json) for an example `mcpS
     "prisma-local": {
       "command": "pnpm",
       "args": ["prisma", "mcp"],
+      "cwd": "/absolute/path/to/purrmission",
       "env": {
         "DATABASE_URL": "file:./data/dev.db"
       }

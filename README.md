@@ -66,7 +66,7 @@ To verify the setup:
 
 ```bash
 pnpm mcp:sync
-codex --ask-for-approval never "Show which instruction files are active for this repo."
+codex "Show which instruction files are active for this repo."
 ```
 
 ---
