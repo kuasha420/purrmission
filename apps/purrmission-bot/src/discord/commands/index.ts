@@ -6,52 +6,28 @@
  */
 
 import {
-  SlashCommandBuilder,
   type ChatInputCommandInteraction,
   type AutocompleteInteraction,
   type RESTPostAPIChatInputApplicationCommandsJSONBody,
 } from 'discord.js';
 
-import { handleRegisterResource } from './registerResource.js';
 import {
   handlePurrmissionCommand,
   purrmissionCommand,
   handlePurrmissionAutocomplete,
 } from './twoFa.js';
-import { data as approveData, execute as approveExecute } from './approve.js';
-import { data as denyData, execute as denyExecute } from './deny.js';
-import { data as projectData, execute as projectExecute } from './project.js';
+import type { CommandContext } from './context.js';
 import { logger } from '../../logging/logger.js';
 
 /**
  * All slash command definitions for registration.
+ *
+ * Only the /purrmission command remains — all subcommands
+ * (resource, 2fa, guardian, access, auth, project) live under it.
  */
 export const commands: RESTPostAPIChatInputApplicationCommandsJSONBody[] = [
-  new SlashCommandBuilder()
-    .setName('purrmission-register-resource')
-    .setDescription('Register a new protected resource')
-    .addStringOption((option) =>
-      option
-        .setName('name')
-        .setDescription('Name of the resource to protect')
-        .setRequired(true)
-        .setMaxLength(100)
-    )
-    .toJSON(),
-
   purrmissionCommand.toJSON(),
-  approveData.toJSON(),
-  denyData.toJSON(),
-  projectData.toJSON(),
 ];
-
-/**
- * Route slash commands to their handlers.
- *
- * @param interaction - The command interaction
- * @param services - Application services
- */
-import type { CommandContext } from './context.js';
 
 /**
  * Route slash commands to their handlers.
@@ -64,27 +40,10 @@ export async function handleSlashCommand(
   context: CommandContext
 ): Promise<void> {
   const { commandName } = interaction;
-  const { services } = context;
 
   switch (commandName) {
-    case 'purrmission-register-resource':
-      await handleRegisterResource(interaction, services);
-      break;
-
     case 'purrmission':
       await handlePurrmissionCommand(interaction, context);
-      break;
-
-    case 'approve':
-      await approveExecute(interaction, services);
-      break;
-
-    case 'deny':
-      await denyExecute(interaction, services);
-      break;
-
-    case 'project':
-      await projectExecute(interaction, services);
       break;
 
     default:

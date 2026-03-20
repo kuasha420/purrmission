@@ -21,8 +21,10 @@ import { handleAddGuardian } from './addGuardian.js';
 import { handleRemoveGuardian } from './removeGuardian.js';
 import { handleListGuardians } from './listGuardians.js';
 import { handleRequestAccess } from './requestAccess.js';
+import { handleDecisionCommand } from './decision.js';
 import { rateLimiter } from '../../infra/rateLimit.js';
 import { handleAuthLogin } from './auth.js';
+import { handleAddMember, handleRemoveMember, handleListMembers } from './project.js';
 export const purrmissionCommand = new SlashCommandBuilder()
   .setName('purrmission')
   .setDescription('Manage 2FA accounts and resources')
@@ -141,10 +143,7 @@ export const purrmissionCommand = new SlashCommandBuilder()
               .setAutocomplete(true)
           )
           .addUserOption((option) =>
-            option
-              .setName('user')
-              .setDescription('User to add as guardian')
-              .setRequired(true)
+            option.setName('user').setDescription('User to add as guardian').setRequired(true)
           )
       )
       .addSubcommand((subcommand) =>
@@ -159,10 +158,7 @@ export const purrmissionCommand = new SlashCommandBuilder()
               .setAutocomplete(true)
           )
           .addUserOption((option) =>
-            option
-              .setName('user')
-              .setDescription('User to remove')
-              .setRequired(true)
+            option.setName('user').setDescription('User to remove').setRequired(true)
           )
       )
       .addSubcommand((subcommand) =>
@@ -178,29 +174,104 @@ export const purrmissionCommand = new SlashCommandBuilder()
           )
       )
   )
-
-  .addSubcommand((subcommand) =>
-    subcommand
-      .setName('cli-login')
-      .setDescription('Approve a Pawthy CLI login request')
-      .addStringOption((option) =>
-        option
-          .setName('code')
-          .setDescription('The 9-character code from the CLI (e.g., ABCD-1234)')
-          .setRequired(true)
-          .setMaxLength(9)
+  .addSubcommandGroup((group) =>
+    group
+      .setName('access')
+      .setDescription('Request and manage access to protected resources')
+      .addSubcommand((subcommand) =>
+        subcommand
+          .setName('request')
+          .setDescription('Request access to a protected resource')
+          .addStringOption((option) =>
+            option
+              .setName('resource-id')
+              .setDescription('ID of the resource to request access to')
+              .setRequired(true)
+              .setAutocomplete(true)
+          )
+      )
+      .addSubcommand((subcommand) =>
+        subcommand
+          .setName('approve')
+          .setDescription('Approve a pending access request')
+          .addStringOption((option) =>
+            option
+              .setName('request-id')
+              .setDescription('The ID of the request to approve')
+              .setRequired(true)
+          )
+      )
+      .addSubcommand((subcommand) =>
+        subcommand
+          .setName('deny')
+          .setDescription('Deny a pending access request')
+          .addStringOption((option) =>
+            option
+              .setName('request-id')
+              .setDescription('The ID of the request to deny')
+              .setRequired(true)
+          )
       )
   )
-  .addSubcommand((subcommand) =>
-    subcommand
-      .setName('request-access')
-      .setDescription('Request access to a protected resource')
-      .addStringOption((option) =>
-        option
-          .setName('resource-id')
-          .setDescription('ID of the resource to request access to')
-          .setRequired(true)
-          .setAutocomplete(true)
+  .addSubcommandGroup((group) =>
+    group
+      .setName('auth')
+      .setDescription('Authentication commands')
+      .addSubcommand((subcommand) =>
+        subcommand
+          .setName('login')
+          .setDescription('Approve a Pawthy CLI login request')
+          .addStringOption((option) =>
+            option
+              .setName('code')
+              .setDescription('The 9-character code from the CLI (e.g., ABCD-1234)')
+              .setRequired(true)
+              .setMaxLength(9)
+          )
+      )
+  )
+  .addSubcommandGroup((group) =>
+    group
+      .setName('project')
+      .setDescription('Manage project settings and members')
+      .addSubcommand((subcommand) =>
+        subcommand
+          .setName('member-add')
+          .setDescription('Add a member to a project')
+          .addStringOption((option) =>
+            option.setName('project_id').setDescription('The ID of the project').setRequired(true)
+          )
+          .addUserOption((option) =>
+            option.setName('user').setDescription('The user to add').setRequired(true)
+          )
+          .addStringOption((option) =>
+            option
+              .setName('role')
+              .setDescription('Access role (default: READER)')
+              .addChoices(
+                { name: 'Reader (Read-Only)', value: 'READER' },
+                { name: 'Writer (Read/Write)', value: 'WRITER' }
+              )
+          )
+      )
+      .addSubcommand((subcommand) =>
+        subcommand
+          .setName('member-remove')
+          .setDescription('Remove a member from a project')
+          .addStringOption((option) =>
+            option.setName('project_id').setDescription('The ID of the project').setRequired(true)
+          )
+          .addUserOption((option) =>
+            option.setName('user').setDescription('The user to remove').setRequired(true)
+          )
+      )
+      .addSubcommand((subcommand) =>
+        subcommand
+          .setName('member-list')
+          .setDescription('List all members of a project')
+          .addStringOption((option) =>
+            option.setName('project_id').setDescription('The ID of the project').setRequired(true)
+          )
       )
   );
 
@@ -210,16 +281,6 @@ export async function handlePurrmissionCommand(
 ): Promise<void> {
   const subcommandGroup = interaction.options.getSubcommandGroup(false);
   const subcommand = interaction.options.getSubcommand(false);
-
-  if (subcommand === 'cli-login') {
-    await handleAuthLogin(interaction, context);
-    return;
-  }
-
-  if (subcommand === 'request-access') {
-    await handleRequestAccess(interaction, context);
-    return;
-  }
 
   if (subcommandGroup === 'resource') {
     await handleResourceCommand(interaction, context);
@@ -240,6 +301,58 @@ export async function handlePurrmissionCommand(
       default:
         await interaction.reply({
           content: 'Unsupported subcommand for /purrmission guardian.',
+          ephemeral: true,
+        });
+        return;
+    }
+  }
+
+  if (subcommandGroup === 'access') {
+    switch (subcommand) {
+      case 'request':
+        await handleRequestAccess(interaction, context);
+        return;
+      case 'approve':
+        await handleDecisionCommand(interaction, context.services, 'APPROVE');
+        return;
+      case 'deny':
+        await handleDecisionCommand(interaction, context.services, 'DENY');
+        return;
+      default:
+        await interaction.reply({
+          content: 'Unsupported subcommand for /purrmission access.',
+          ephemeral: true,
+        });
+        return;
+    }
+  }
+
+  if (subcommandGroup === 'auth') {
+    if (subcommand === 'login') {
+      await handleAuthLogin(interaction, context);
+      return;
+    }
+    await interaction.reply({
+      content: 'Unsupported subcommand for /purrmission auth.',
+      ephemeral: true,
+    });
+    return;
+  }
+
+  if (subcommandGroup === 'project') {
+    switch (subcommand) {
+      case 'member-add':
+        await handleAddMember(interaction, context.services);
+        return;
+      case 'member-remove':
+        await handleRemoveMember(interaction, context.services);
+        return;
+      case 'member-list':
+        await handleListMembers(interaction, context.services);
+        return;
+      default:
+        await interaction.reply({
+          content: 'Unsupported subcommand for /purrmission project.',
           ephemeral: true,
         });
         return;
