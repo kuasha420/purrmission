@@ -7,6 +7,7 @@ This is particularly useful for **shared accounts** (e.g., `opensource@purrfecth
 ## Domain Concepts
 
 ### TOTPAccount
+
 A `TOTPAccount` represents a stored 2FA credential.
 
 - **Owner**: The Discord user who created the account.
@@ -18,24 +19,29 @@ A `TOTPAccount` represents a stored 2FA credential.
 ## Usage Examples
 
 ### 1. Add a Personal Account (URI Mode)
+
 Most services provide an `otpauth://` URI when setting up 2FA. You can copy this URI and use it directly.
 
 ```
-/purrmission 2fa add account:"GitHub" mode:uri uri:otpauth://totp/GitHub:user?secret=JBSWY3DPEHPK3PXP
+/2fa add account:"GitHub" mode:uri
 ```
 
+When `mode:uri` is selected, submit the `otpauth://...` value through the Discord modal prompt.
+
 ### 2. Add a Shared Account (Secret Mode)
+
 If you only have the Base32 secret (e.g., `JBSWY3DPEHPK3PXP`), you can use secret mode. Use `shared:True` to make it accessible to the team.
 
 ```
-/purrmission 2fa add account:"Team AWS" mode:secret secret:JBSWY3DPEHPK3PXP shared:True
+/2fa add account:"Team AWS" mode:secret secret:JBSWY3DPEHPK3PXP shared:true
 ```
 
 ### 3. Retrieve a Code
+
 To get a code, use the `get` command. You can use autocomplete to find the account name.
 
 ```
-/purrmission 2fa get account:"Team AWS"
+/2fa get account:"Team AWS"
 ```
 
 **Result:** The bot will DM you the current 6-digit code.
@@ -43,20 +49,30 @@ To get a code, use the `get` command. You can use autocomplete to find the accou
 > **Note:** There is a 10-second rate limit per account per user to prevent abuse.
 
 ### 4. Update Backup Key
+
 As an owner, you can attach a backup key (recovery code) to an account.
 
 ```
-/purrmission 2fa update account:"GitHub" backup_key:"1234-5678-9012"
+/2fa update account:"GitHub" backup_key:"1234-5678-9012"
 ```
 
 ### 5. List Accounts
+
 See all accounts you have access to.
 
 ```
-/purrmission 2fa list
+/2fa list
 # Optional: include shared accounts
-/purrmission 2fa list shared:True
+/2fa list shared:true
 ```
+
+## Related Resource Commands
+
+Resources can also reference stored 2FA accounts:
+
+- `/resource 2fa link resource-id:<id> account:"..."`
+- `/resource 2fa unlink resource-id:<id>`
+- `/resource 2fa get resource-id:<id>`
 
 ## Security Notes (MVP)
 

@@ -59,7 +59,7 @@ export class StatusService {
           },
           {
             name: '🛡️ Need Help?',
-            value: 'Use `/purrmission help` or contact the infrastructure team.',
+            value: 'Use the slash commands above or contact the infrastructure team.',
           }
         )
         .setFooter({

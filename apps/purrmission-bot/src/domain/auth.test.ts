@@ -40,7 +40,7 @@ describe('AuthService', () => {
       assert.ok(result.deviceCode);
       assert.ok(result.userCode);
       assert.match(result.userCode, /^[A-Z0-9]{4}-[A-Z0-9]{4}$/);
-      assert.strictEqual(result.verificationUri, '/purrmission cli-login');
+      assert.strictEqual(result.verificationUri, '/auth login');
       assert.strictEqual(result.expiresIn, 1800);
 
       assert.strictEqual((mockRepo.createSession as any).mock.callCount(), 1);
