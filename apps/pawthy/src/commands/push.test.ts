@@ -4,10 +4,10 @@ import axios from 'axios';
 import fs from 'fs/promises';
 import path from 'path';
 import os from 'os';
-import { pullCommand } from './pull.js';
+import { pushCommand } from './push.js';
 import { config } from '../config.js';
 
-describe('Pull Command', () => {
+describe('Push Command', () => {
     let exitCode: number | null = null;
     let tempDir: string;
 
@@ -15,12 +15,13 @@ describe('Pull Command', () => {
         exitCode = null;
 
         // Reset commander options to prevent test pollution
-        pullCommand.setOptionValue('file', '.env');
-        pullCommand.setOptionValue('projectId', undefined);
-        pullCommand.setOptionValue('envId', undefined);
+        pushCommand.setOptionValue('file', '.env');
+        pushCommand.setOptionValue('force', undefined);
+        pushCommand.setOptionValue('projectId', undefined);
+        pushCommand.setOptionValue('envId', undefined);
 
         // Create a unique temp directory outside the repository
-        tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'pawthy-test-'));
+        tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'pawthy-test-push-'));
 
         // Mock process.cwd to return our temp directory
         mock.method(process, 'cwd', () => tempDir);
@@ -36,6 +37,9 @@ describe('Pull Command', () => {
             path.join(tempDir, '.pawthyrc'),
             JSON.stringify({ projectId: 'test-project', envId: 'test-env' })
         );
+
+        // Write a dummy .env file
+        await fs.writeFile(path.join(tempDir, '.env'), 'MY_VAR=value');
     });
 
     afterEach(async () => {
@@ -46,39 +50,6 @@ describe('Pull Command', () => {
         } catch {
             // Ignore
         }
-    });
-
-    it('should exit with code 1 when pull status is 202 (Pending Approval)', async () => {
-        // Mock config.get for token
-        mock.method(config, 'get', (key: string) => {
-            if (key === 'token') return 'test-token';
-            if (key === 'apiUrl') return 'http://localhost:3000';
-            return undefined;
-        });
-
-        // Mock axios.get to return 202 status
-        mock.method(axios, 'get', async () => {
-            return {
-                status: 202,
-                data: {
-                    status: 'pending',
-                    message: 'Secret access is pending approval in Discord',
-                },
-            };
-        });
-
-        // Suppress console.log / console.error for clean test output
-        mock.method(console, 'log', () => {});
-        mock.method(console, 'error', () => {});
-
-        try {
-            pullCommand.exitOverride();
-            await pullCommand.parseAsync(['node', 'pawthy', 'pull']);
-        } catch {
-            // Expected to throw because process.exit throws or commander exitOverride throws
-        }
-
-        assert.strictEqual(exitCode, 1);
     });
 
     it('should prioritize CLI flags over env vars and .pawthyrc', async () => {
@@ -93,22 +64,23 @@ describe('Pull Command', () => {
         process.env.PAWTHY_PROJECT_ID = 'env-project';
         process.env.PAWTHY_ENV_ID = 'env-env';
 
-        mock.method(axios, 'get', async (url: string) => {
+        mock.method(axios, 'put', async (url: string) => {
             requestedUrl = url;
             return {
                 status: 200,
-                data: { secrets: { FOO: 'bar' } },
+                data: { success: true },
             };
         });
 
         mock.method(console, 'log', () => {});
         mock.method(console, 'error', () => {});
 
-        pullCommand.exitOverride();
-        await pullCommand.parseAsync([
+        pushCommand.exitOverride();
+        await pushCommand.parseAsync([
             'node',
             'pawthy',
-            'pull',
+            'push',
+            '--force',
             '-p',
             'flag-project',
             '-e',
@@ -135,19 +107,19 @@ describe('Pull Command', () => {
         process.env.PAWTHY_PROJECT_ID = 'env-project';
         process.env.PAWTHY_ENV_ID = 'env-env';
 
-        mock.method(axios, 'get', async (url: string) => {
+        mock.method(axios, 'put', async (url: string) => {
             requestedUrl = url;
             return {
                 status: 200,
-                data: { secrets: { FOO: 'bar' } },
+                data: { success: true },
             };
         });
 
         mock.method(console, 'log', () => {});
         mock.method(console, 'error', () => {});
 
-        pullCommand.exitOverride();
-        await pullCommand.parseAsync(['node', 'pawthy', 'pull']);
+        pushCommand.exitOverride();
+        await pushCommand.parseAsync(['node', 'pawthy', 'push', '--force']);
 
         // Verify the URL contained the env var values
         assert.ok(requestedUrl.includes('/projects/env-project/environments/env-env/secrets'));
@@ -171,8 +143,8 @@ describe('Pull Command', () => {
         mock.method(console, 'error', () => {});
 
         try {
-            pullCommand.exitOverride();
-            await pullCommand.parseAsync(['node', 'pawthy', 'pull']);
+            pushCommand.exitOverride();
+            await pushCommand.parseAsync(['node', 'pawthy', 'push', '--force']);
         } catch {
             // Expected to throw because process.exit throws or commander exitOverride throws
         }
