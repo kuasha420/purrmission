@@ -11,6 +11,7 @@ export const pullCommand = new Command('pull')
     .option('-p, --project-id <id>', 'Project ID')
     .option('-e, --env-id <id>', 'Environment ID')
     .option('-m, --merge', 'Merge with existing .env file instead of overwriting')
+    .option('-k, --keys <list>', 'Comma-separated list of keys to pull')
     .action(async (options) => {
         const token = getToken();
         const apiUrl = getApiUrl();
@@ -22,9 +23,10 @@ export const pullCommand = new Command('pull')
 
         let projectId = options.projectId;
         let envId = options.envId;
+        let config: { projectId?: string; envId?: string; keys?: string[]; syncKeys?: string[] } | null = null;
 
-        if (!projectId || !envId) {
-            const config = await getProjectConfig();
+        if (!projectId || !envId || !options.keys) {
+            config = await getProjectConfig();
             projectId = projectId || config?.projectId || process.env.PAWTHY_PROJECT_ID;
             envId = envId || config?.envId || process.env.PAWTHY_ENV_ID;
         }
@@ -61,17 +63,39 @@ export const pullCommand = new Command('pull')
                 return;
             }
 
-            const secrets = res.data.secrets;
+            let secrets = res.data.secrets || {};
 
-            if (!secrets || Object.keys(secrets).length === 0) {
-                console.log(chalk.yellow('No secrets found for this environment.'));
+            // Whitelisting / selective keys sync (Issue #80)
+            const keysWhitelist = getKeysWhitelist(options.keys, config);
+
+            if (keysWhitelist) {
+                const ignoredKeys: string[] = [];
+                const filteredSecrets: Record<string, string> = {};
+                for (const [key, value] of Object.entries(secrets)) {
+                    if (keysWhitelist.has(key)) {
+                        filteredSecrets[key] = value;
+                    } else {
+                        ignoredKeys.push(key);
+                    }
+                }
+                secrets = filteredSecrets;
+                if (ignoredKeys.length > 0) {
+                    console.log(chalk.yellow(`\n⚠️  Ignored remote keys not in whitelist: ${ignoredKeys.join(', ')}`));
+                }
+            }
+
+            if (Object.keys(secrets).length === 0) {
+                console.log(chalk.yellow('No matching secrets found for this environment.'));
                 return;
             }
 
             let content = '';
             let isMerged = false;
 
-            if (options.merge) {
+            // Whitelisting forces merge behavior to avoid deleting non-whitelisted local variables (Issue #80)
+            const shouldMerge = options.merge || keysWhitelist !== null;
+
+            if (shouldMerge) {
                 try {
                     const existingContent = await fs.readFile(envPath, 'utf-8');
                     content = mergeEnvSecrets(existingContent, secrets);
@@ -350,4 +374,25 @@ function mergeEnvSecrets(existingContent: string, secrets: Record<string, string
     }
 
     return resultLines.join(eol);
+}
+
+function getKeysWhitelist(optionsKeys?: string, config?: { keys?: string[]; syncKeys?: string[] } | null): Set<string> | null {
+    if (optionsKeys) {
+        const keys = optionsKeys.split(',')
+            .map(k => k.trim())
+            .filter(k => k.length > 0);
+        return keys.length > 0 ? new Set(keys) : null;
+    }
+    
+    if (config) {
+        const keys = config.keys || config.syncKeys;
+        if (Array.isArray(keys)) {
+            const normalized = keys
+                .map(k => typeof k === 'string' ? k.trim() : '')
+                .filter(k => k.length > 0);
+            return normalized.length > 0 ? new Set(normalized) : null;
+        }
+    }
+    
+    return null;
 }

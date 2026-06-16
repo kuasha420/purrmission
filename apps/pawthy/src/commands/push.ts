@@ -12,6 +12,7 @@ export const pushCommand = new Command('push')
     .option('--force', 'Push secrets without confirmation')
     .option('-p, --project-id <id>', 'Project ID')
     .option('-e, --env-id <id>', 'Environment ID')
+    .option('-k, --keys <list>', 'Comma-separated list of keys to push')
     .action(async (options) => {
         const token = getToken();
         const apiUrl = getApiUrl();
@@ -23,9 +24,10 @@ export const pushCommand = new Command('push')
 
         let projectId = options.projectId;
         let envId = options.envId;
+        let config: { projectId?: string; envId?: string; keys?: string[]; syncKeys?: string[] } | null = null;
 
-        if (!projectId || !envId) {
-            const config = await getProjectConfig();
+        if (!projectId || !envId || !options.keys) {
+            config = await getProjectConfig();
             projectId = projectId || config?.projectId || process.env.PAWTHY_PROJECT_ID;
             envId = envId || config?.envId || process.env.PAWTHY_ENV_ID;
         }
@@ -45,10 +47,29 @@ export const pushCommand = new Command('push')
         try {
             // 1. Read and Parse .env
             const envContent = await fs.readFile(envPath, 'utf-8');
-            const secrets = dotenv.parse(envContent);
+            let secrets = dotenv.parse(envContent);
+
+            // Whitelisting / selective keys sync (Issue #80)
+            const keysWhitelist = getKeysWhitelist(options.keys, config);
+
+            if (keysWhitelist) {
+                const skippedKeys: string[] = [];
+                const filteredSecrets: Record<string, string> = {};
+                for (const [key, value] of Object.entries(secrets)) {
+                    if (keysWhitelist.has(key)) {
+                        filteredSecrets[key] = value;
+                    } else {
+                        skippedKeys.push(key);
+                    }
+                }
+                secrets = filteredSecrets;
+                if (skippedKeys.length > 0) {
+                    console.log(chalk.yellow(`\n⚠️  Skipped pushing keys not in whitelist: ${skippedKeys.join(', ')}`));
+                }
+            }
 
             if (Object.keys(secrets).length === 0) {
-                console.log(chalk.yellow('No secrets found in the specified file.'));
+                console.log(chalk.yellow('No matching secrets found in the specified file.'));
                 return;
             }
 
@@ -98,3 +119,24 @@ export const pushCommand = new Command('push')
             process.exit(1);
         }
     });
+
+function getKeysWhitelist(optionsKeys?: string, config?: { keys?: string[]; syncKeys?: string[] } | null): Set<string> | null {
+    if (optionsKeys) {
+        const keys = optionsKeys.split(',')
+            .map(k => k.trim())
+            .filter(k => k.length > 0);
+        return keys.length > 0 ? new Set(keys) : null;
+    }
+    
+    if (config) {
+        const keys = config.keys || config.syncKeys;
+        if (Array.isArray(keys)) {
+            const normalized = keys
+                .map(k => typeof k === 'string' ? k.trim() : '')
+                .filter(k => k.length > 0);
+            return normalized.length > 0 ? new Set(normalized) : null;
+        }
+    }
+    
+    return null;
+}

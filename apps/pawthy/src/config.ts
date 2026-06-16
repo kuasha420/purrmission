@@ -228,23 +228,52 @@ export function clearConfig(): void {
   config.clear();
 }
 
-export async function getProjectConfig(): Promise<{ projectId: string; envId: string } | null> {
-  const configPath = path.join(findProjectRoot(), '.pawthyrc');
+export async function getProjectConfig(): Promise<{ projectId?: string; envId?: string; keys?: string[]; syncKeys?: string[] } | null> {
+  const root = findProjectRoot();
+  const configPath = path.join(root, '.pawthyrc');
+  const localConfigPath = path.join(root, '.pawthyrc.local');
+  
+  let configData: { projectId?: string; envId?: string; keys?: string[]; syncKeys?: string[] } = {};
+  
+  // Try reading .pawthyrc
   try {
     const content = await fs.promises.readFile(configPath, 'utf-8');
-    return JSON.parse(content);
+    configData = { ...configData, ...JSON.parse(content) };
   } catch (e: unknown) {
     const err = e as NodeJS.ErrnoException;
-    if (err.code === 'ENOENT') {
-      return null;
+    if (err.code !== 'ENOENT') {
+      if (e instanceof SyntaxError) {
+        console.error(
+          `Error: Could not parse project configuration file at ${configPath}. It appears to be malformed.`
+        );
+      } else {
+        console.error(`Error: Failed to read project configuration from ${configPath}:`, err.message);
+      }
+      process.exit(1);
     }
-    if (e instanceof SyntaxError) {
-      console.error(
-        `Error: Could not parse project configuration file at ${configPath}. It appears to be malformed.`
-      );
-    } else {
-      console.error(`Error: Failed to read project configuration from ${configPath}:`, err.message);
-    }
-    process.exit(1);
   }
+  
+  // Try reading .pawthyrc.local
+  try {
+    const content = await fs.promises.readFile(localConfigPath, 'utf-8');
+    configData = { ...configData, ...JSON.parse(content) };
+  } catch (e: unknown) {
+    const err = e as NodeJS.ErrnoException;
+    if (err.code !== 'ENOENT') {
+      if (e instanceof SyntaxError) {
+        console.error(
+          `Error: Could not parse local project configuration file at ${localConfigPath}. It appears to be malformed.`
+        );
+      } else {
+        console.error(`Error: Failed to read local project configuration from ${localConfigPath}:`, err.message);
+      }
+      process.exit(1);
+    }
+  }
+  
+  if (Object.keys(configData).length === 0) {
+    return null;
+  }
+  
+  return configData;
 }
