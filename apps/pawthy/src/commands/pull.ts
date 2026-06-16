@@ -10,6 +10,7 @@ export const pullCommand = new Command('pull')
     .option('-f, --file <path>', 'Path to .env file', '.env')
     .option('-p, --project-id <id>', 'Project ID')
     .option('-e, --env-id <id>', 'Environment ID')
+    .option('-m, --merge', 'Merge with existing .env file instead of overwriting')
     .action(async (options) => {
         const token = getToken();
         const apiUrl = getApiUrl();
@@ -67,29 +68,36 @@ export const pullCommand = new Command('pull')
                 return;
             }
 
-            // 2. Format as .env
-            const content = Object.entries(secrets)
-                .map(([key, value]) => {
-                    // Wrap values with spaces or special chars in quotes
-                    if (value.includes(' ') || value.includes('#') || value.includes('=')) {
-                        return `${key}="${value.replace(/"/g, '\\"')}"`;
-                    }
-                    return `${key}=${value}`;
-                })
-                .join('\n');
+            let content = '';
+            let isMerged = false;
 
-            // 3. Write to file with safety check
-            try {
-                await fs.access(envPath);
-                // File exists
-                console.warn(chalk.yellow(`\n⚠️  File ${options.file} already exists.`));
-                // For CLI non-interactive mode or simple safety, we might want to fail or require --force.
-                // Given the review comment asked for a warning/prompt, and we don't have interactive prompt lib handy (inquirer isn't in package.json yet),
-                // we will just warn and overwrite for now but formatted nicely, or maybe throw error if no force flag?
-                // Step 460 implies adding a check. Let's just log a warning for this iteration as prompt lib might be out of scope.
-                console.warn(chalk.yellow('Overwriting existing file...'));
-            } catch {
-                // File doesn't exist, proceed safe.
+            if (options.merge) {
+                try {
+                    const existingContent = await fs.readFile(envPath, 'utf-8');
+                    content = mergeEnvSecrets(existingContent, secrets);
+                    isMerged = true;
+                } catch (e: unknown) {
+                    if ((e as NodeJS.ErrnoException).code !== 'ENOENT') {
+                        throw e;
+                    }
+                    // File doesn't exist, fallback to regular pull behavior
+                }
+            }
+
+            if (!isMerged) {
+                // 2. Format as .env
+                content = Object.entries(secrets)
+                    .map(([key, value]) => `${key}=${formatEnvValue(value)}`)
+                    .join('\n') + '\n';
+
+                // 3. Write to file with safety check
+                try {
+                    await fs.access(envPath);
+                    console.warn(chalk.yellow(`\n⚠️  File ${options.file} already exists.`));
+                    console.warn(chalk.yellow('Overwriting existing file...'));
+                } catch {
+                    // File doesn't exist, proceed safe.
+                }
             }
 
             // 3. Write to file
@@ -114,3 +122,232 @@ export const pullCommand = new Command('pull')
             process.exit(1);
         }
     });
+
+interface EnvBlock {
+    type: 'comment' | 'empty' | 'key-value';
+    raw: string;
+    key?: string;
+    value?: string;
+    leadingWhitespace?: string;
+    middleWhitespace?: string;
+    quote?: '"' | "'" | null;
+    comment?: string;
+}
+
+function parseEnv(content: string, eol: string = '\n'): EnvBlock[] {
+    const lines = content.split(/\r?\n/);
+    const blocks: EnvBlock[] = [];
+    let i = 0;
+    while (i < lines.length) {
+        const line = lines[i];
+        
+        if (/^\s*#/.test(line) || /^\s*$/.test(line)) {
+            blocks.push({
+                type: /^\s*#/.test(line) ? 'comment' : 'empty',
+                raw: line,
+            });
+            i++;
+            continue;
+        }
+
+        const declMatch = line.match(/^(\s*)([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)$/);
+        if (!declMatch) {
+            blocks.push({
+                type: 'comment',
+                raw: line,
+            });
+            i++;
+            continue;
+        }
+
+        const leadingWhitespace = declMatch[1];
+        const key = declMatch[2];
+        const rest = declMatch[3];
+
+        const prefixLength = leadingWhitespace.length + key.length;
+        const middleWhitespaceMatch = line.slice(prefixLength).match(/^\s*=\s*/);
+        const middleWhitespace = middleWhitespaceMatch ? middleWhitespaceMatch[0] : '=';
+
+        let value = '';
+        let quote: '"' | "'" | null = null;
+        let trailingComment = '';
+        const rawBlockLines = [line];
+
+        if (rest.startsWith('"')) {
+            quote = '"';
+            const restValue = rest.slice(1);
+            let currentLineIndex = i;
+            let foundEnd = false;
+            let valAcc = '';
+            
+            while (currentLineIndex < lines.length) {
+                const curLine = currentLineIndex === i ? restValue : lines[currentLineIndex];
+                let escaped = false;
+                let quoteIndex = -1;
+                for (let charIdx = 0; charIdx < curLine.length; charIdx++) {
+                    const char = curLine[charIdx];
+                    if (char === '\\') {
+                        escaped = !escaped;
+                    } else if (char === '"' && !escaped) {
+                        quoteIndex = charIdx;
+                        break;
+                    } else {
+                        escaped = false;
+                    }
+                }
+
+                if (quoteIndex !== -1) {
+                    valAcc += curLine.slice(0, quoteIndex);
+                    trailingComment = curLine.slice(quoteIndex + 1);
+                    foundEnd = true;
+                    break;
+                } else {
+                    valAcc += curLine + '\n';
+                    if (currentLineIndex > i) {
+                        rawBlockLines.push(lines[currentLineIndex]);
+                    }
+                    currentLineIndex++;
+                }
+            }
+
+            if (foundEnd) {
+                value = valAcc;
+                i = currentLineIndex + 1;
+            } else {
+                quote = null;
+                value = rest;
+                i++;
+            }
+        } else if (rest.startsWith("'")) {
+            quote = "'";
+            const restValue = rest.slice(1);
+            let currentLineIndex = i;
+            let foundEnd = false;
+            let valAcc = '';
+
+            while (currentLineIndex < lines.length) {
+                const curLine = currentLineIndex === i ? restValue : lines[currentLineIndex];
+                let escaped = false;
+                let quoteIndex = -1;
+                for (let charIdx = 0; charIdx < curLine.length; charIdx++) {
+                    const char = curLine[charIdx];
+                    if (char === '\\') {
+                        escaped = !escaped;
+                    } else if (char === "'" && !escaped) {
+                        quoteIndex = charIdx;
+                        break;
+                    } else {
+                        escaped = false;
+                    }
+                }
+
+                if (quoteIndex !== -1) {
+                    valAcc += curLine.slice(0, quoteIndex);
+                    trailingComment = curLine.slice(quoteIndex + 1);
+                    foundEnd = true;
+                    break;
+                } else {
+                    valAcc += curLine + '\n';
+                    if (currentLineIndex > i) {
+                        rawBlockLines.push(lines[currentLineIndex]);
+                    }
+                    currentLineIndex++;
+                }
+            }
+
+            if (foundEnd) {
+                value = valAcc;
+                i = currentLineIndex + 1;
+            } else {
+                quote = null;
+                value = rest;
+                i++;
+            }
+        } else {
+            const commentMatch = rest.match(/(\s+#.*)$/);
+            if (commentMatch) {
+                value = rest.slice(0, rest.length - commentMatch[1].length).trim();
+                trailingComment = commentMatch[1];
+            } else {
+                value = rest.trim();
+                trailingComment = '';
+            }
+            quote = null;
+            i++;
+        }
+
+        blocks.push({
+            type: 'key-value',
+            raw: rawBlockLines.join(eol),
+            key,
+            value,
+            leadingWhitespace,
+            middleWhitespace,
+            quote,
+            comment: trailingComment,
+        });
+    }
+    return blocks;
+}
+
+function formatEnvValue(value: string, originalQuote?: '"' | "'" | null): string {
+    if (value.includes('\n') || value.includes('\r')) {
+        return `"${value.replace(/"/g, '\\"')}"`;
+    }
+    
+    if (/[#=\s'"]/.test(value)) {
+        const quote = (originalQuote === '"' || originalQuote === "'") ? originalQuote : '"';
+        if (quote === '"') {
+            return `"${value.replace(/"/g, '\\"')}"`;
+        } else {
+            return `'${value.replace(/'/g, "\\'")}'`;
+        }
+    }
+    
+    if (originalQuote === '"') {
+        return `"${value.replace(/"/g, '\\"')}"`;
+    } else if (originalQuote === "'") {
+        return `'${value.replace(/'/g, "\\'")}'`;
+    }
+    
+    return value;
+}
+
+function mergeEnvSecrets(existingContent: string, secrets: Record<string, string>): string {
+    const eol = existingContent.includes('\r\n') ? '\r\n' : '\n';
+    const blocks = parseEnv(existingContent, eol);
+    const updatedKeys = new Set<string>();
+    const resultLines: string[] = [];
+
+    for (const block of blocks) {
+        if (block.type === 'key-value' && block.key) {
+            const key = block.key;
+            if (Object.prototype.hasOwnProperty.call(secrets, key)) {
+                const value = secrets[key];
+                resultLines.push(
+                    block.leadingWhitespace +
+                    key +
+                    block.middleWhitespace +
+                    formatEnvValue(value, block.quote) +
+                    block.comment
+                );
+                updatedKeys.add(key);
+                continue;
+            }
+        }
+        resultLines.push(block.raw);
+    }
+
+    const newKeys = Object.keys(secrets).filter((k) => !updatedKeys.has(k));
+    if (newKeys.length > 0) {
+        if (resultLines.length > 0 && resultLines[resultLines.length - 1].trim() !== '') {
+            resultLines.push('');
+        }
+        for (const key of newKeys) {
+            const value = secrets[key];
+            resultLines.push(key + '=' + formatEnvValue(value));
+        }
+    }
+
+    return resultLines.join(eol);
+}
