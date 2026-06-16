@@ -83,9 +83,21 @@ describe('Config', () => {
             assert.strictEqual(root, tempDir);
         });
 
-        it('should fallback to process.cwd() if no project root indicators are found', () => {
+        it('should fallback to the resolved startDir if no project root indicators are found', () => {
             const root = findProjectRoot(tempDir);
-            assert.strictEqual(root, process.cwd());
+            assert.strictEqual(root, path.resolve(tempDir));
+        });
+
+        it('should return starting directory if .pawthy directory exists', async () => {
+            await fs.promises.mkdir(path.join(tempDir, '.pawthy'), { recursive: true });
+            const root = findProjectRoot(tempDir);
+            assert.strictEqual(root, tempDir);
+        });
+
+        it('should not match .pawthy if it is a file, not a directory', async () => {
+            await fs.promises.writeFile(path.join(tempDir, '.pawthy'), 'fake file');
+            const root = findProjectRoot(tempDir);
+            assert.strictEqual(root, path.resolve(tempDir));
         });
     });
 });
