@@ -1,7 +1,10 @@
 
-import { describe, it, mock, afterEach } from 'node:test';
+import { describe, it, mock, afterEach, beforeEach } from 'node:test';
 import assert from 'node:assert';
-import { getApiUrl, config } from './config.js';
+import os from 'os';
+import fs from 'fs';
+import path from 'path';
+import { getApiUrl, config, findProjectRoot } from './config.js';
 
 describe('Config', () => {
     const originalEnv = process.env;
@@ -41,5 +44,48 @@ describe('Config', () => {
 
 
         assert.strictEqual(getApiUrl(), 'https://purrmission.infra.purrfecthq.com');
+    });
+
+    describe('findProjectRoot', () => {
+        let tempDir: string;
+
+        beforeEach(async () => {
+            tempDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'pawthy-find-root-'));
+        });
+
+        afterEach(async () => {
+            try {
+                await fs.promises.rm(tempDir, { recursive: true, force: true });
+            } catch {
+                // Ignore
+            }
+        });
+
+        it('should return starting directory if .pawthyrc exists', async () => {
+            await fs.promises.writeFile(path.join(tempDir, '.pawthyrc'), '{}');
+            const root = findProjectRoot(tempDir);
+            assert.strictEqual(root, tempDir);
+        });
+
+        it('should walk up to find .pawthyrc in parent directory', async () => {
+            await fs.promises.writeFile(path.join(tempDir, '.pawthyrc'), '{}');
+            const subDir = path.join(tempDir, 'sub1', 'sub2');
+            await fs.promises.mkdir(subDir, { recursive: true });
+            const root = findProjectRoot(subDir);
+            assert.strictEqual(root, tempDir);
+        });
+
+        it('should walk up to find .git in parent directory', async () => {
+            await fs.promises.mkdir(path.join(tempDir, '.git'), { recursive: true });
+            const subDir = path.join(tempDir, 'sub1', 'sub2');
+            await fs.promises.mkdir(subDir, { recursive: true });
+            const root = findProjectRoot(subDir);
+            assert.strictEqual(root, tempDir);
+        });
+
+        it('should fallback to process.cwd() if no project root indicators are found', () => {
+            const root = findProjectRoot(tempDir);
+            assert.strictEqual(root, process.cwd());
+        });
     });
 });
