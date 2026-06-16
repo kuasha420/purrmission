@@ -8,19 +8,34 @@ import { getToken, getApiUrl, getProjectConfig } from '../config.js';
 export const pullCommand = new Command('pull')
     .description('Pull secrets from Purrmission to local .env')
     .option('-f, --file <path>', 'Path to .env file', '.env')
+    .option('-p, --project-id <id>', 'Project ID')
+    .option('-e, --env-id <id>', 'Environment ID')
     .action(async (options) => {
         const token = getToken();
         const apiUrl = getApiUrl();
-        const config = await getProjectConfig();
-
         if (!token) {
             console.error(chalk.red('You must be logged in. Run `pawthy login` first.'));
             process.exit(1);
+            return;
         }
 
-        if (!config || !config.projectId || !config.envId) {
-            console.error(chalk.red('Project not initialized. Run `pawthy init` first.'));
+        let projectId = options.projectId;
+        let envId = options.envId;
+
+        if (!projectId || !envId) {
+            const config = await getProjectConfig();
+            projectId = projectId || config?.projectId || process.env.PAWTHY_PROJECT_ID;
+            envId = envId || config?.envId || process.env.PAWTHY_ENV_ID;
+        }
+
+        if (!projectId || !envId) {
+            console.error(
+                chalk.red(
+                    'Project ID and Environment ID must be specified (via CLI flags -p/-e, env vars PAWTHY_PROJECT_ID/PAWTHY_ENV_ID, or .pawthyrc config).'
+                )
+            );
             process.exit(1);
+            return;
         }
 
         const envPath = path.resolve(process.cwd(), options.file);
@@ -30,7 +45,7 @@ export const pullCommand = new Command('pull')
 
             // 1. Fetch Secrets
             const res = await axios.get<{ secrets?: Record<string, string>; status?: string; message?: string }>(
-                `${apiUrl}/api/projects/${config.projectId}/environments/${config.envId}/secrets`,
+                `${apiUrl}/api/projects/${projectId}/environments/${envId}/secrets`,
                 {
                     headers: { Authorization: `Bearer ${token}` },
                     validateStatus: (status) => status >= 200 && status < 300,

@@ -10,19 +10,34 @@ export const pushCommand = new Command('push')
     .description('Push local .env secrets to Purrmission, updating existing values. This does not remove secrets.')
     .option('-f, --file <path>', 'Path to .env file', '.env')
     .option('--force', 'Push secrets without confirmation')
+    .option('-p, --project-id <id>', 'Project ID')
+    .option('-e, --env-id <id>', 'Environment ID')
     .action(async (options) => {
         const token = getToken();
         const apiUrl = getApiUrl();
-        const config = await getProjectConfig();
-
         if (!token) {
             console.error(chalk.red('You must be logged in. Run `pawthy login` first.'));
             process.exit(1);
+            return;
         }
 
-        if (!config || !config.projectId || !config.envId) {
-            console.error(chalk.red('Project not initialized. Run `pawthy init` first.'));
+        let projectId = options.projectId;
+        let envId = options.envId;
+
+        if (!projectId || !envId) {
+            const config = await getProjectConfig();
+            projectId = projectId || config?.projectId || process.env.PAWTHY_PROJECT_ID;
+            envId = envId || config?.envId || process.env.PAWTHY_ENV_ID;
+        }
+
+        if (!projectId || !envId) {
+            console.error(
+                chalk.red(
+                    'Project ID and Environment ID must be specified (via CLI flags -p/-e, env vars PAWTHY_PROJECT_ID/PAWTHY_ENV_ID, or .pawthyrc config).'
+                )
+            );
             process.exit(1);
+            return;
         }
 
         const envPath = path.resolve(process.cwd(), options.file);
@@ -56,7 +71,7 @@ export const pushCommand = new Command('push')
             console.log(chalk.dim(`Pushing ${Object.keys(secrets).length} secrets to Purrmission...`));
 
             // 3. Push to API
-            await axios.put(`${apiUrl}/api/projects/${config.projectId}/environments/${config.envId}/secrets`, {
+            await axios.put(`${apiUrl}/api/projects/${projectId}/environments/${envId}/secrets`, {
                 secrets
             }, {
                 headers: { Authorization: `Bearer ${token}` },
@@ -75,7 +90,7 @@ export const pushCommand = new Command('push')
                 } else {
                     console.error(chalk.red(`Failed to push secrets: ${error.message}`));
                 }
-            } else if (error instanceof Error && 'code' in error && (error as any).code === 'ENOENT') {
+            } else if (error instanceof Error && 'code' in error && (error as NodeJS.ErrnoException).code === 'ENOENT') {
                 console.error(chalk.red(`File not found: ${envPath}`));
             } else {
                 console.error(chalk.red(`An error occurred: ${error instanceof Error ? error.message : String(error)}`));
