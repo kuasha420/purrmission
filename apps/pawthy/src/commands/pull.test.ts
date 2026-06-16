@@ -26,8 +26,8 @@ describe('Pull Command', () => {
         mock.method(process, 'cwd', () => tempDir);
 
         // Mock process.exit
-        mock.method(process, 'exit', (code: number) => {
-            exitCode = code;
+        mock.method(process, 'exit', (code?: number) => {
+            exitCode = code ?? null;
             throw new Error(`process.exit called with ${code}`);
         });
 
@@ -57,7 +57,8 @@ describe('Pull Command', () => {
         });
 
         // Mock axios.get to return 202 status
-        mock.method(axios, 'get', async () => {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        mock.method(axios, 'get', async (): Promise<any> => {
             return {
                 status: 202,
                 data: {
@@ -72,10 +73,9 @@ describe('Pull Command', () => {
         mock.method(console, 'error', () => {});
 
         try {
-            pullCommand.exitOverride();
             await pullCommand.parseAsync(['node', 'pawthy', 'pull']);
         } catch {
-            // Expected to throw because process.exit throws or commander exitOverride throws
+            // Expected to throw because process.exit throws
         }
 
         assert.strictEqual(exitCode, 1);
