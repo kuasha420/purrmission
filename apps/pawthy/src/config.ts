@@ -27,10 +27,41 @@ const LOCAL_CONFIG_DIR = '.pawthy';
 const LOCAL_CONFIG_FILE = 'config.json';
 
 /**
+ * Find the nearest project root walking up from the start directory.
+ * Looks for .pawthyrc, .pawthy/ directory, or a .git/ directory.
+ */
+export function findProjectRoot(startDir: string = process.cwd()): string {
+  const resolvedStart = path.resolve(startDir);
+  let current = resolvedStart;
+  while (true) {
+    if (fs.existsSync(path.join(current, '.pawthyrc'))) {
+      return current;
+    }
+    const pawthyDir = path.join(current, LOCAL_CONFIG_DIR);
+    try {
+      if (fs.statSync(pawthyDir).isDirectory()) {
+        return current;
+      }
+    } catch {
+      // Ignore
+    }
+    if (fs.existsSync(path.join(current, '.git'))) {
+      return current;
+    }
+    const parent = path.dirname(current);
+    if (parent === current) {
+      break;
+    }
+    current = parent;
+  }
+  return resolvedStart;
+}
+
+/**
  * Get the path to the local config directory (.pawthy/)
  */
 function getLocalConfigDir(): string {
-  return path.join(process.cwd(), LOCAL_CONFIG_DIR);
+  return path.join(findProjectRoot(), LOCAL_CONFIG_DIR);
 }
 
 /**
@@ -42,7 +73,7 @@ function getLocalConfigPath(): string {
 
 /**
  * Read local config from .pawthy/config.json if it exists
- * Note: Uses process.cwd() - local config is relative to where the command is run.
+ * Note: Resolved relative to the project root.
  */
 function readLocalConfig(): LocalConfig | null {
   const configPath = getLocalConfigPath();
@@ -132,7 +163,7 @@ function setLocalToken(token: string): void {
  * Ensure .pawthy/ is in .gitignore (or warn if no gitignore exists)
  */
 export function ensureGitignore(): void {
-  const gitignorePath = path.join(process.cwd(), '.gitignore');
+  const gitignorePath = path.join(findProjectRoot(), '.gitignore');
   const pawthyEntry = LOCAL_CONFIG_DIR + '/';
 
   try {
@@ -198,7 +229,7 @@ export function clearConfig(): void {
 }
 
 export async function getProjectConfig(): Promise<{ projectId: string; envId: string } | null> {
-  const configPath = path.join(process.cwd(), '.pawthyrc');
+  const configPath = path.join(findProjectRoot(), '.pawthyrc');
   try {
     const content = await fs.promises.readFile(configPath, 'utf-8');
     return JSON.parse(content);
