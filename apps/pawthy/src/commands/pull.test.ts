@@ -179,4 +179,59 @@ describe('Pull Command', () => {
 
         assert.strictEqual(exitCode, 1);
     });
+
+    it('should natively merge secrets with existing .env file preserving comments and local variables', async () => {
+        mock.method(config, 'get', (key: string) => {
+            if (key === 'token') return 'test-token';
+            if (key === 'apiUrl') return 'http://localhost:3000';
+            return undefined;
+        });
+
+        // Write initial .env file with comments and local variables
+        const initialEnv = [
+            '# DB config',
+            'DATABASE_URL=postgres://localhost/db',
+            '',
+            '# Local variables',
+            'LOCAL_ONLY=123',
+            'EXISTING_OVERWRITE=old-value',
+        ].join('\n');
+        await fs.writeFile(path.join(tempDir, '.env'), initialEnv);
+
+        // Mock axios.get to return updated and new secrets
+        mock.method(axios, 'get', async () => {
+            return {
+                status: 200,
+                data: {
+                    secrets: {
+                        DATABASE_URL: 'postgres://prod-host/db',
+                        EXISTING_OVERWRITE: 'new-value',
+                        NEW_SECRET: 'new-secret-val',
+                    },
+                },
+            };
+        });
+
+        mock.method(console, 'log', () => {});
+        mock.method(console, 'error', () => {});
+
+        pullCommand.exitOverride();
+        await pullCommand.parseAsync(['node', 'pawthy', 'pull', '--merge']);
+
+        // Read the resulting .env file
+        const mergedContent = await fs.readFile(path.join(tempDir, '.env'), 'utf-8');
+        const lines = mergedContent.split('\n');
+
+        // Check that DATABASE_URL and EXISTING_OVERWRITE were updated
+        assert.ok(lines.includes('DATABASE_URL=postgres://prod-host/db'));
+        assert.ok(lines.includes('EXISTING_OVERWRITE=new-value'));
+
+        // Check that LOCAL_ONLY and comments were preserved
+        assert.ok(lines.includes('# DB config'));
+        assert.ok(lines.includes('LOCAL_ONLY=123'));
+        assert.ok(lines.includes('# Local variables'));
+
+        // Check that NEW_SECRET was appended
+        assert.ok(lines.includes('NEW_SECRET=new-secret-val'));
+    });
 });
