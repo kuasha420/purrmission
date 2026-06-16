@@ -8,10 +8,13 @@
 import {
   Client,
   GatewayIntentBits,
+  Partials,
+  ChannelType,
   Events,
   type Interaction,
   type ChatInputCommandInteraction,
   type ButtonInteraction,
+  type Message,
 } from 'discord.js';
 import { logger } from '../logging/logger.js';
 import type { Services } from '../domain/services.js';
@@ -44,6 +47,7 @@ export function createDiscordClient(deps: DiscordClientDeps): Client {
       // for production bots. Uncomment if needed and approved.
       // GatewayIntentBits.MessageContent,
     ],
+    partials: [Partials.Channel, Partials.Message],
   });
 
   // Ready event
@@ -112,6 +116,113 @@ export function createDiscordClient(deps: DiscordClientDeps): Client {
     logger.warn('Discord client warning', { message });
   });
 
+  // Message event listener for DMs
+  client.on(Events.MessageCreate, async (message: Message) => {
+    try {
+      // Filter out bot messages
+      if (message.author.bot) return;
+
+      // Check if the message is in a DM channel
+      if (message.channel.type !== ChannelType.DM) return;
+
+      const content = message.content.trim().toLowerCase();
+
+      // Route help command
+      if (content === 'help' || content === '/help') {
+        logger.info('Handling DM help request', { userId: message.author.id });
+        await message.reply({
+          content: [
+            '🐾 **Purrmission Bot DM Help Guide**',
+            '',
+            'I am a security and approval gate bot. Here are the commands you can use:',
+            '',
+            '**Commands**:',
+            '- `/check-dm-connectivity` (Slash Command): Test DM delivery settings.',
+            '- `help` or `/help` (Text): Show this help message.',
+            '- `status` or `/status` (Text): View your status, guarded resources, and pending requests waiting for your approval.',
+            '',
+            '**Approvals**:',
+            'When an access request is created for a resource you guard, I will DM you the details along with buttons to **Approve** or **Deny**.',
+          ].join('\n'),
+        });
+        return;
+      }
+
+      // Route status command
+      if (content === 'status' || content === '/status') {
+        logger.info('Handling DM status request', { userId: message.author.id });
+
+        const userId = message.author.id;
+
+        // Fetch resources guarded by this user
+        const guardianships = await deps.repositories.guardians.findByUserId(userId);
+        const resourceIds = guardianships.map((g) => g.resourceId);
+
+        let guardedList = '_None. You are not registered as a guardian for any resources._';
+        let pendingList = '_No pending approval requests waiting for you._';
+
+        if (resourceIds.length > 0) {
+          // Fetch resources details
+          const resources = await Promise.all(
+            resourceIds.map(async (id) => {
+              const res = await deps.repositories.resources.findById(id);
+              return res;
+            })
+          );
+          const validResources = resources.filter(Boolean);
+
+          if (validResources.length > 0) {
+            guardedList = validResources.map((r) => `- **${r!.name}** (\`${r!.id}\`)`).join('\n');
+          }
+
+          // Fetch pending approval requests for these resources
+          const pendingRequests = [];
+          for (const resourceId of resourceIds) {
+            const reqs =
+              await deps.repositories.approvalRequests.findPendingByResourceId(resourceId);
+            pendingRequests.push(...reqs);
+          }
+
+          if (pendingRequests.length > 0) {
+            pendingList = pendingRequests
+              .map(
+                (req) =>
+                  `- Request \`${req.id}\` for resource ID \`${req.resourceId}\` (Status: \`${req.status}\`, Expires: <t:${Math.floor(req.expiresAt.getTime() / 1000)}:R>)`
+              )
+              .join('\n');
+          }
+        }
+
+        await message.reply({
+          content: [
+            '🐾 **Purrmission Bot Status Report**',
+            '',
+            '**Your Guarded Resources**:',
+            guardedList,
+            '',
+            '**Pending Approvals Waiting For You**:',
+            pendingList,
+            '',
+            '_To approve or deny, use `/access approve <request-id>` or `/access deny <request-id>`._',
+          ].join('\n'),
+        });
+        return;
+      }
+    } catch (error) {
+      logger.error('Error handling DM message', {
+        authorId: message.author.id,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      try {
+        await message.reply({
+          content: '❌ An error occurred while processing your message.',
+        });
+      } catch {
+        // Ignore
+      }
+    }
+  });
+
   return client;
 }
 
@@ -148,12 +259,7 @@ async function handleButtonInteraction(
       userId: interaction.user.id,
     });
 
-    await handleApprovalButton(
-      interaction,
-      deps.services,
-      deps.repositories,
-      interaction.client
-    );
+    await handleApprovalButton(interaction, deps.services, deps.repositories, interaction.client);
     return;
   }
 
@@ -162,4 +268,3 @@ async function handleButtonInteraction(
     customId: interaction.customId,
   });
 }
-
