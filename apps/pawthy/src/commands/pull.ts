@@ -14,15 +14,20 @@ export const pullCommand = new Command('pull')
     .action(async (options) => {
         const token = getToken();
         const apiUrl = getApiUrl();
-        const config = await getProjectConfig();
-
         if (!token) {
             console.error(chalk.red('You must be logged in. Run `pawthy login` first.'));
             process.exit(1);
+            return;
         }
 
-        const projectId = options.projectId || process.env.PAWTHY_PROJECT_ID || config?.projectId;
-        const envId = options.envId || process.env.PAWTHY_ENV_ID || config?.envId;
+        let projectId = options.projectId;
+        let envId = options.envId;
+
+        if (!projectId || !envId) {
+            const config = await getProjectConfig();
+            projectId = projectId || config?.projectId || process.env.PAWTHY_PROJECT_ID;
+            envId = envId || config?.envId || process.env.PAWTHY_ENV_ID;
+        }
 
         if (!projectId || !envId) {
             console.error(
@@ -31,6 +36,7 @@ export const pullCommand = new Command('pull')
                 )
             );
             process.exit(1);
+            return;
         }
 
         const envPath = path.resolve(process.cwd(), options.file);
@@ -52,6 +58,7 @@ export const pullCommand = new Command('pull')
                 console.log(chalk.white(res.data.message));
                 console.log(chalk.dim('\nPlease run this command again once your request has been approved in Discord.'));
                 process.exit(1);
+                return;
             }
 
             const secrets = res.data.secrets;

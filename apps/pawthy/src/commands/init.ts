@@ -4,7 +4,7 @@ import axios from 'axios';
 import chalk from 'chalk';
 import fs from 'fs/promises';
 import path from 'path';
-import { getToken, getApiUrl } from '../config.js';
+import { getToken, getApiUrl, findProjectRoot } from '../config.js';
 
 interface Project {
     id: string;
@@ -227,8 +227,9 @@ export const initCommand = new Command('init')
                 envId
             };
 
-            await fs.writeFile(path.join(process.cwd(), '.pawthyrc'), JSON.stringify(config, null, 2));
-            console.log(chalk.green('\n✅ Project initialized! Configuration saved to .pawthyrc'));
+            const targetDir = findProjectRoot();
+            await fs.writeFile(path.join(targetDir, '.pawthyrc'), JSON.stringify(config, null, 2));
+            console.log(chalk.green(`\n✅ Project initialized! Configuration saved to ${path.join(targetDir, '.pawthyrc')}`));
 
         } catch (error) {
             if (axios.isAxiosError(error)) {

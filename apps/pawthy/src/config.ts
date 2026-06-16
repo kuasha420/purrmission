@@ -31,10 +31,19 @@ const LOCAL_CONFIG_FILE = 'config.json';
  * Looks for .pawthyrc, .pawthy/ directory, or a .git/ directory.
  */
 export function findProjectRoot(startDir: string = process.cwd()): string {
-  let current = path.resolve(startDir);
+  const resolvedStart = path.resolve(startDir);
+  let current = resolvedStart;
   while (true) {
-    if (fs.existsSync(path.join(current, '.pawthyrc')) || fs.existsSync(path.join(current, LOCAL_CONFIG_DIR))) {
+    if (fs.existsSync(path.join(current, '.pawthyrc'))) {
       return current;
+    }
+    const pawthyDir = path.join(current, LOCAL_CONFIG_DIR);
+    try {
+      if (fs.statSync(pawthyDir).isDirectory()) {
+        return current;
+      }
+    } catch {
+      // Ignore
     }
     if (fs.existsSync(path.join(current, '.git'))) {
       return current;
@@ -45,7 +54,7 @@ export function findProjectRoot(startDir: string = process.cwd()): string {
     }
     current = parent;
   }
-  return process.cwd();
+  return resolvedStart;
 }
 
 /**
@@ -64,7 +73,7 @@ function getLocalConfigPath(): string {
 
 /**
  * Read local config from .pawthy/config.json if it exists
- * Note: Uses process.cwd() - local config is relative to where the command is run.
+ * Note: Resolved relative to the project root.
  */
 function readLocalConfig(): LocalConfig | null {
   const configPath = getLocalConfigPath();
