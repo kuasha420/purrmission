@@ -19,6 +19,7 @@ describe('Pull Command', () => {
         pullCommand.setOptionValue('projectId', undefined);
         pullCommand.setOptionValue('envId', undefined);
         pullCommand.setOptionValue('keys', undefined);
+        pullCommand.setOptionValue('merge', undefined);
 
         // Create a unique temp directory outside the repository
         tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'pawthy-test-'));
@@ -27,8 +28,8 @@ describe('Pull Command', () => {
         mock.method(process, 'cwd', () => tempDir);
 
         // Mock process.exit
-        mock.method(process, 'exit', (code: number) => {
-            exitCode = code;
+        mock.method(process, 'exit', (code?: number) => {
+            exitCode = code ?? null;
             throw new Error(`process.exit called with ${code}`);
         });
 
@@ -41,6 +42,10 @@ describe('Pull Command', () => {
 
     afterEach(async () => {
         mock.restoreAll();
+        // Clean up environment variables to prevent test pollution
+        delete process.env.PAWTHY_PROJECT_ID;
+        delete process.env.PAWTHY_ENV_ID;
+
         // Clean up the temp directory
         try {
             await fs.rm(tempDir, { recursive: true, force: true });
@@ -58,7 +63,8 @@ describe('Pull Command', () => {
         });
 
         // Mock axios.get to return 202 status
-        mock.method(axios, 'get', async () => {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        mock.method(axios, 'get', async (): Promise<any> => {
             return {
                 status: 202,
                 data: {
@@ -73,10 +79,9 @@ describe('Pull Command', () => {
         mock.method(console, 'error', () => {});
 
         try {
-            pullCommand.exitOverride();
             await pullCommand.parseAsync(['node', 'pawthy', 'pull']);
         } catch {
-            // Expected to throw because process.exit throws or commander exitOverride throws
+            // Expected to throw because process.exit throws
         }
 
         assert.strictEqual(exitCode, 1);
@@ -94,7 +99,8 @@ describe('Pull Command', () => {
         process.env.PAWTHY_PROJECT_ID = 'env-project';
         process.env.PAWTHY_ENV_ID = 'env-env';
 
-        mock.method(axios, 'get', async (url: string) => {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        mock.method(axios, 'get', async (url: string): Promise<any> => {
             requestedUrl = url;
             return {
                 status: 200,
@@ -105,7 +111,6 @@ describe('Pull Command', () => {
         mock.method(console, 'log', () => {});
         mock.method(console, 'error', () => {});
 
-        pullCommand.exitOverride();
         await pullCommand.parseAsync([
             'node',
             'pawthy',
@@ -118,13 +123,9 @@ describe('Pull Command', () => {
 
         // Verify the URL contained the flag values
         assert.ok(requestedUrl.includes('/projects/flag-project/environments/flag-env/secrets'));
-
-        // Clean up env vars
-        delete process.env.PAWTHY_PROJECT_ID;
-        delete process.env.PAWTHY_ENV_ID;
     });
 
-    it('should prioritize env vars over .pawthyrc', async () => {
+    it('should prioritize .pawthyrc over env vars', async () => {
         let requestedUrl = '';
         mock.method(config, 'get', (key: string) => {
             if (key === 'token') return 'test-token';
@@ -136,7 +137,8 @@ describe('Pull Command', () => {
         process.env.PAWTHY_PROJECT_ID = 'env-project';
         process.env.PAWTHY_ENV_ID = 'env-env';
 
-        mock.method(axios, 'get', async (url: string) => {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        mock.method(axios, 'get', async (url: string): Promise<any> => {
             requestedUrl = url;
             return {
                 status: 200,
@@ -147,15 +149,43 @@ describe('Pull Command', () => {
         mock.method(console, 'log', () => {});
         mock.method(console, 'error', () => {});
 
-        pullCommand.exitOverride();
+        await pullCommand.parseAsync(['node', 'pawthy', 'pull']);
+
+        // Verify the URL contained the .pawthyrc values, not the env var values
+        assert.ok(requestedUrl.includes('/projects/test-project/environments/test-env/secrets'));
+    });
+
+    it('should use env vars if .pawthyrc is missing', async () => {
+        let requestedUrl = '';
+        mock.method(config, 'get', (key: string) => {
+            if (key === 'token') return 'test-token';
+            if (key === 'apiUrl') return 'http://localhost:3000';
+            return undefined;
+        });
+
+        // Delete the .pawthyrc file
+        await fs.unlink(path.join(tempDir, '.pawthyrc'));
+
+        // Set env vars
+        process.env.PAWTHY_PROJECT_ID = 'env-project';
+        process.env.PAWTHY_ENV_ID = 'env-env';
+
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        mock.method(axios, 'get', async (url: string): Promise<any> => {
+            requestedUrl = url;
+            return {
+                status: 200,
+                data: { secrets: { FOO: 'bar' } },
+            };
+        });
+
+        mock.method(console, 'log', () => {});
+        mock.method(console, 'error', () => {});
+
         await pullCommand.parseAsync(['node', 'pawthy', 'pull']);
 
         // Verify the URL contained the env var values
         assert.ok(requestedUrl.includes('/projects/env-project/environments/env-env/secrets'));
-
-        // Clean up env vars
-        delete process.env.PAWTHY_PROJECT_ID;
-        delete process.env.PAWTHY_ENV_ID;
     });
 
     it('should exit with code 1 if project ID or environment ID is missing and no .pawthyrc', async () => {
@@ -172,10 +202,9 @@ describe('Pull Command', () => {
         mock.method(console, 'error', () => {});
 
         try {
-            pullCommand.exitOverride();
             await pullCommand.parseAsync(['node', 'pawthy', 'pull']);
         } catch {
-            // Expected to throw because process.exit throws or commander exitOverride throws
+            // Expected to throw because process.exit throws
         }
 
         assert.strictEqual(exitCode, 1);
@@ -193,6 +222,13 @@ describe('Pull Command', () => {
             '# DB config',
             'DATABASE_URL=postgres://localhost/db',
             '',
+            '# Spacing and quotes tests',
+            '  SPACED_KEY  =  "old-value"  ',
+            'SINGLE_QUOTED = \'old-single\'',
+            'WITH_COMMENT = old-val # preserve this comment',
+            'MULTILINE = "line 1',
+            'line 2"',
+            '',
             '# Local variables',
             'LOCAL_ONLY=123',
             'EXISTING_OVERWRITE=old-value',
@@ -200,12 +236,17 @@ describe('Pull Command', () => {
         await fs.writeFile(path.join(tempDir, '.env'), initialEnv);
 
         // Mock axios.get to return updated and new secrets
-        mock.method(axios, 'get', async () => {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        mock.method(axios, 'get', async (): Promise<any> => {
             return {
                 status: 200,
                 data: {
                     secrets: {
                         DATABASE_URL: 'postgres://prod-host/db',
+                        SPACED_KEY: 'new-value',
+                        SINGLE_QUOTED: 'new-single',
+                        WITH_COMMENT: 'new-val',
+                        MULTILINE: 'new line 1\nnew line 2',
                         EXISTING_OVERWRITE: 'new-value',
                         NEW_SECRET: 'new-secret-val',
                     },
@@ -216,7 +257,6 @@ describe('Pull Command', () => {
         mock.method(console, 'log', () => {});
         mock.method(console, 'error', () => {});
 
-        pullCommand.exitOverride();
         await pullCommand.parseAsync(['node', 'pawthy', 'pull', '--merge']);
 
         // Read the resulting .env file
@@ -226,6 +266,18 @@ describe('Pull Command', () => {
         // Check that DATABASE_URL and EXISTING_OVERWRITE were updated
         assert.ok(lines.includes('DATABASE_URL=postgres://prod-host/db'));
         assert.ok(lines.includes('EXISTING_OVERWRITE=new-value'));
+
+        // Check spacing, quotes, and comments preservation
+        assert.ok(lines.includes('  SPACED_KEY  =  "new-value"  '));
+        assert.ok(lines.includes('SINGLE_QUOTED = \'new-single\''));
+        assert.ok(lines.includes('WITH_COMMENT = new-val # preserve this comment'));
+
+        // Check multiline preservation/updating
+        // The multiline value contains a newline, so it should be double-quoted
+        const multilineStartIndex = lines.findIndex(l => l.startsWith('MULTILINE ='));
+        assert.notStrictEqual(multilineStartIndex, -1);
+        assert.strictEqual(lines[multilineStartIndex], 'MULTILINE = "new line 1');
+        assert.strictEqual(lines[multilineStartIndex + 1], 'new line 2"');
 
         // Check that LOCAL_ONLY and comments were preserved
         assert.ok(lines.includes('# DB config'));
