@@ -15,15 +15,20 @@ export const pushCommand = new Command('push')
     .action(async (options) => {
         const token = getToken();
         const apiUrl = getApiUrl();
-        const config = await getProjectConfig();
-
         if (!token) {
             console.error(chalk.red('You must be logged in. Run `pawthy login` first.'));
             process.exit(1);
+            return;
         }
 
-        const projectId = options.projectId || process.env.PAWTHY_PROJECT_ID || config?.projectId;
-        const envId = options.envId || process.env.PAWTHY_ENV_ID || config?.envId;
+        let projectId = options.projectId;
+        let envId = options.envId;
+
+        if (!projectId || !envId) {
+            const config = await getProjectConfig();
+            projectId = projectId || config?.projectId || process.env.PAWTHY_PROJECT_ID;
+            envId = envId || config?.envId || process.env.PAWTHY_ENV_ID;
+        }
 
         if (!projectId || !envId) {
             console.error(
@@ -32,6 +37,7 @@ export const pushCommand = new Command('push')
                 )
             );
             process.exit(1);
+            return;
         }
 
         const envPath = path.resolve(process.cwd(), options.file);
@@ -84,7 +90,7 @@ export const pushCommand = new Command('push')
                 } else {
                     console.error(chalk.red(`Failed to push secrets: ${error.message}`));
                 }
-            } else if (error instanceof Error && 'code' in error && (error as any).code === 'ENOENT') {
+            } else if (error instanceof Error && 'code' in error && (error as NodeJS.ErrnoException).code === 'ENOENT') {
                 console.error(chalk.red(`File not found: ${envPath}`));
             } else {
                 console.error(chalk.red(`An error occurred: ${error instanceof Error ? error.message : String(error)}`));
