@@ -4,7 +4,7 @@ import assert from 'node:assert';
 import os from 'os';
 import fs from 'fs';
 import path from 'path';
-import { getApiUrl, config, findProjectRoot } from './config.js';
+import { getApiUrl, config, findProjectRoot, getProjectConfig } from './config.js';
 
 describe('Config', () => {
     const originalEnv = process.env;
@@ -98,6 +98,57 @@ describe('Config', () => {
             await fs.promises.writeFile(path.join(tempDir, '.pawthy'), 'fake file');
             const root = findProjectRoot(tempDir);
             assert.strictEqual(root, path.resolve(tempDir));
+        });
+    });
+
+    describe('getProjectConfig', () => {
+        let tempDir: string;
+
+        beforeEach(async () => {
+            tempDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'pawthy-get-config-'));
+            mock.method(process, 'cwd', () => tempDir);
+        });
+
+        afterEach(async () => {
+            try {
+                await fs.promises.rm(tempDir, { recursive: true, force: true });
+            } catch {
+                // Ignore
+            }
+        });
+
+        it('should return null if neither config file exists', async () => {
+            const result = await getProjectConfig();
+            assert.strictEqual(result, null);
+        });
+
+        it('should load .pawthyrc if it exists', async () => {
+            await fs.promises.writeFile(
+                path.join(tempDir, '.pawthyrc'),
+                JSON.stringify({ projectId: 'project-1', envId: 'env-1', keys: ['KEY_1'] })
+            );
+
+            const result = await getProjectConfig();
+            assert.deepStrictEqual(result, { projectId: 'project-1', envId: 'env-1', keys: ['KEY_1'] });
+        });
+
+        it('should load and merge both .pawthyrc and .pawthyrc.local', async () => {
+            await fs.promises.writeFile(
+                path.join(tempDir, '.pawthyrc'),
+                JSON.stringify({ projectId: 'project-1', envId: 'env-1', keys: ['KEY_1'] })
+            );
+            await fs.promises.writeFile(
+                path.join(tempDir, '.pawthyrc.local'),
+                JSON.stringify({ envId: 'env-override', keys: ['KEY_OVERRIDE'], syncKeys: ['SK_1'] })
+            );
+
+            const result = await getProjectConfig();
+            assert.deepStrictEqual(result, {
+                projectId: 'project-1',
+                envId: 'env-override',
+                keys: ['KEY_OVERRIDE'],
+                syncKeys: ['SK_1']
+            });
         });
     });
 });

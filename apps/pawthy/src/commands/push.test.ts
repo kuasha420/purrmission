@@ -195,7 +195,8 @@ describe('Push Command', () => {
             ['DATABASE_URL=postgres://localhost/db', 'API_KEY=secret-key', 'LOCAL_VAR=123'].join('\n')
         );
 
-        mock.method(axios, 'put', async (url: string, data: { secrets: Record<string, string> }) => {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        mock.method(axios, 'put', async (url: string, data: any): Promise<any> => {
             pushedSecrets = data.secrets;
             return {
                 status: 200,
@@ -206,7 +207,6 @@ describe('Push Command', () => {
         mock.method(console, 'log', () => {});
         mock.method(console, 'error', () => {});
 
-        pushCommand.exitOverride();
         // Request only DATABASE_URL and API_KEY
         await pushCommand.parseAsync([
             'node',
@@ -247,7 +247,8 @@ describe('Push Command', () => {
             ['DATABASE_URL=postgres://localhost/db', 'API_KEY=secret-key'].join('\n')
         );
 
-        mock.method(axios, 'put', async (url: string, data: { secrets: Record<string, string> }) => {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        mock.method(axios, 'put', async (url: string, data: any): Promise<any> => {
             pushedSecrets = data.secrets;
             return {
                 status: 200,
@@ -258,7 +259,97 @@ describe('Push Command', () => {
         mock.method(console, 'log', () => {});
         mock.method(console, 'error', () => {});
 
-        pushCommand.exitOverride();
+        await pushCommand.parseAsync(['node', 'pawthy', 'push', '--force']);
+
+        assert.deepStrictEqual(pushedSecrets, {
+            DATABASE_URL: 'postgres://localhost/db',
+        });
+    });
+
+    it('should support whitelisting via keys array in .pawthyrc.local in push command', async () => {
+        let pushedSecrets: Record<string, string> = {};
+        mock.method(config, 'get', (key: string) => {
+            if (key === 'token') return 'test-token';
+            if (key === 'apiUrl') return 'http://localhost:3000';
+            return undefined;
+        });
+
+        // Write .pawthyrc and .pawthyrc.local
+        await fs.writeFile(
+            path.join(tempDir, '.pawthyrc'),
+            JSON.stringify({
+                projectId: 'test-project',
+                envId: 'test-env',
+            })
+        );
+        await fs.writeFile(
+            path.join(tempDir, '.pawthyrc.local'),
+            JSON.stringify({
+                keys: ['API_KEY'],
+            })
+        );
+
+        // Write a .env with multiple variables
+        await fs.writeFile(
+            path.join(tempDir, '.env'),
+            ['DATABASE_URL=postgres://localhost/db', 'API_KEY=secret-key'].join('\n')
+        );
+
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        mock.method(axios, 'put', async (url: string, data: any): Promise<any> => {
+            pushedSecrets = data.secrets;
+            return {
+                status: 200,
+                data: { success: true },
+            };
+        });
+
+        mock.method(console, 'log', () => {});
+        mock.method(console, 'error', () => {});
+
+        await pushCommand.parseAsync(['node', 'pawthy', 'push', '--force']);
+
+        assert.deepStrictEqual(pushedSecrets, {
+            API_KEY: 'secret-key',
+        });
+    });
+
+    it('should support whitelisting via syncKeys array in .pawthyrc in push command', async () => {
+        let pushedSecrets: Record<string, string> = {};
+        mock.method(config, 'get', (key: string) => {
+            if (key === 'token') return 'test-token';
+            if (key === 'apiUrl') return 'http://localhost:3000';
+            return undefined;
+        });
+
+        // Write a .pawthyrc containing syncKeys alias
+        await fs.writeFile(
+            path.join(tempDir, '.pawthyrc'),
+            JSON.stringify({
+                projectId: 'test-project',
+                envId: 'test-env',
+                syncKeys: ['DATABASE_URL'],
+            })
+        );
+
+        // Write a .env with multiple variables
+        await fs.writeFile(
+            path.join(tempDir, '.env'),
+            ['DATABASE_URL=postgres://localhost/db', 'API_KEY=secret-key'].join('\n')
+        );
+
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        mock.method(axios, 'put', async (url: string, data: any): Promise<any> => {
+            pushedSecrets = data.secrets;
+            return {
+                status: 200,
+                data: { success: true },
+            };
+        });
+
+        mock.method(console, 'log', () => {});
+        mock.method(console, 'error', () => {});
+
         await pushCommand.parseAsync(['node', 'pawthy', 'push', '--force']);
 
         assert.deepStrictEqual(pushedSecrets, {

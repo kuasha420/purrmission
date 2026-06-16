@@ -24,9 +24,10 @@ export const pushCommand = new Command('push')
 
         let projectId = options.projectId;
         let envId = options.envId;
+        let config: { projectId?: string; envId?: string; keys?: string[]; syncKeys?: string[] } | null = null;
 
-        if (!projectId || !envId) {
-            const config = await getProjectConfig();
+        if (!projectId || !envId || !options.keys) {
+            config = await getProjectConfig();
             projectId = projectId || config?.projectId || process.env.PAWTHY_PROJECT_ID;
             envId = envId || config?.envId || process.env.PAWTHY_ENV_ID;
         }
@@ -49,21 +50,22 @@ export const pushCommand = new Command('push')
             let secrets = dotenv.parse(envContent);
 
             // Whitelisting / selective keys sync (Issue #80)
-            let keysWhitelist: string[] | null = null;
-            if (options.keys) {
-                keysWhitelist = options.keys.split(',').map((k: string) => k.trim()).filter((k: string) => k.length > 0);
-            } else if (config && 'keys' in config && Array.isArray(config.keys)) {
-                keysWhitelist = config.keys as string[];
-            }
+            const keysWhitelist = getKeysWhitelist(options.keys, config);
 
             if (keysWhitelist) {
+                const skippedKeys: string[] = [];
                 const filteredSecrets: Record<string, string> = {};
-                for (const key of Object.keys(secrets)) {
-                    if (keysWhitelist.includes(key)) {
-                        filteredSecrets[key] = secrets[key];
+                for (const [key, value] of Object.entries(secrets)) {
+                    if (keysWhitelist.has(key)) {
+                        filteredSecrets[key] = value;
+                    } else {
+                        skippedKeys.push(key);
                     }
                 }
                 secrets = filteredSecrets;
+                if (skippedKeys.length > 0) {
+                    console.log(chalk.yellow(`\n⚠️  Skipped pushing keys not in whitelist: ${skippedKeys.join(', ')}`));
+                }
             }
 
             if (Object.keys(secrets).length === 0) {
@@ -117,3 +119,24 @@ export const pushCommand = new Command('push')
             process.exit(1);
         }
     });
+
+function getKeysWhitelist(optionsKeys?: string, config?: { keys?: string[]; syncKeys?: string[] } | null): Set<string> | null {
+    if (optionsKeys) {
+        const keys = optionsKeys.split(',')
+            .map(k => k.trim())
+            .filter(k => k.length > 0);
+        return keys.length > 0 ? new Set(keys) : null;
+    }
+    
+    if (config) {
+        const keys = config.keys || config.syncKeys;
+        if (Array.isArray(keys)) {
+            const normalized = keys
+                .map(k => typeof k === 'string' ? k.trim() : '')
+                .filter(k => k.length > 0);
+            return normalized.length > 0 ? new Set(normalized) : null;
+        }
+    }
+    
+    return null;
+}
