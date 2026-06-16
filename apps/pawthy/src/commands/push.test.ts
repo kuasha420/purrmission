@@ -19,6 +19,7 @@ describe('Push Command', () => {
         pushCommand.setOptionValue('force', undefined);
         pushCommand.setOptionValue('projectId', undefined);
         pushCommand.setOptionValue('envId', undefined);
+        pushCommand.setOptionValue('keys', undefined);
 
         // Create a unique temp directory outside the repository
         tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'pawthy-test-push-'));
@@ -150,5 +151,90 @@ describe('Push Command', () => {
         }
 
         assert.strictEqual(exitCode, 1);
+    });
+
+    it('should support whitelisting via CLI keys flag in push command', async () => {
+        let pushedSecrets: Record<string, string> = {};
+        mock.method(config, 'get', (key: string) => {
+            if (key === 'token') return 'test-token';
+            if (key === 'apiUrl') return 'http://localhost:3000';
+            return undefined;
+        });
+
+        // Write a .env with multiple variables
+        await fs.writeFile(
+            path.join(tempDir, '.env'),
+            ['DATABASE_URL=postgres://localhost/db', 'API_KEY=secret-key', 'LOCAL_VAR=123'].join('\n')
+        );
+
+        mock.method(axios, 'put', async (url: string, data: { secrets: Record<string, string> }) => {
+            pushedSecrets = data.secrets;
+            return {
+                status: 200,
+                data: { success: true },
+            };
+        });
+
+        mock.method(console, 'log', () => {});
+        mock.method(console, 'error', () => {});
+
+        pushCommand.exitOverride();
+        // Request only DATABASE_URL and API_KEY
+        await pushCommand.parseAsync([
+            'node',
+            'pawthy',
+            'push',
+            '--force',
+            '-k',
+            'DATABASE_URL, API_KEY',
+        ]);
+
+        assert.deepStrictEqual(pushedSecrets, {
+            DATABASE_URL: 'postgres://localhost/db',
+            API_KEY: 'secret-key',
+        });
+    });
+
+    it('should support whitelisting via keys array in .pawthyrc in push command', async () => {
+        let pushedSecrets: Record<string, string> = {};
+        mock.method(config, 'get', (key: string) => {
+            if (key === 'token') return 'test-token';
+            if (key === 'apiUrl') return 'http://localhost:3000';
+            return undefined;
+        });
+
+        // Write a .pawthyrc containing a keys whitelist
+        await fs.writeFile(
+            path.join(tempDir, '.pawthyrc'),
+            JSON.stringify({
+                projectId: 'test-project',
+                envId: 'test-env',
+                keys: ['DATABASE_URL'],
+            })
+        );
+
+        // Write a .env with multiple variables
+        await fs.writeFile(
+            path.join(tempDir, '.env'),
+            ['DATABASE_URL=postgres://localhost/db', 'API_KEY=secret-key'].join('\n')
+        );
+
+        mock.method(axios, 'put', async (url: string, data: { secrets: Record<string, string> }) => {
+            pushedSecrets = data.secrets;
+            return {
+                status: 200,
+                data: { success: true },
+            };
+        });
+
+        mock.method(console, 'log', () => {});
+        mock.method(console, 'error', () => {});
+
+        pushCommand.exitOverride();
+        await pushCommand.parseAsync(['node', 'pawthy', 'push', '--force']);
+
+        assert.deepStrictEqual(pushedSecrets, {
+            DATABASE_URL: 'postgres://localhost/db',
+        });
     });
 });

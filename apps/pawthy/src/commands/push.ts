@@ -12,6 +12,7 @@ export const pushCommand = new Command('push')
     .option('--force', 'Push secrets without confirmation')
     .option('-p, --project-id <id>', 'Project ID')
     .option('-e, --env-id <id>', 'Environment ID')
+    .option('-k, --keys <list>', 'Comma-separated list of keys to push')
     .action(async (options) => {
         const token = getToken();
         const apiUrl = getApiUrl();
@@ -39,10 +40,28 @@ export const pushCommand = new Command('push')
         try {
             // 1. Read and Parse .env
             const envContent = await fs.readFile(envPath, 'utf-8');
-            const secrets = dotenv.parse(envContent);
+            let secrets = dotenv.parse(envContent);
+
+            // Whitelisting / selective keys sync (Issue #80)
+            let keysWhitelist: string[] | null = null;
+            if (options.keys) {
+                keysWhitelist = options.keys.split(',').map((k: string) => k.trim()).filter((k: string) => k.length > 0);
+            } else if (config && 'keys' in config && Array.isArray(config.keys)) {
+                keysWhitelist = config.keys as string[];
+            }
+
+            if (keysWhitelist) {
+                const filteredSecrets: Record<string, string> = {};
+                for (const key of Object.keys(secrets)) {
+                    if (keysWhitelist.includes(key)) {
+                        filteredSecrets[key] = secrets[key];
+                    }
+                }
+                secrets = filteredSecrets;
+            }
 
             if (Object.keys(secrets).length === 0) {
-                console.log(chalk.yellow('No secrets found in the specified file.'));
+                console.log(chalk.yellow('No matching secrets found in the specified file.'));
                 return;
             }
 

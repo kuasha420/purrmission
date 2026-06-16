@@ -18,6 +18,7 @@ describe('Pull Command', () => {
         pullCommand.setOptionValue('file', '.env');
         pullCommand.setOptionValue('projectId', undefined);
         pullCommand.setOptionValue('envId', undefined);
+        pullCommand.setOptionValue('keys', undefined);
 
         // Create a unique temp directory outside the repository
         tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'pawthy-test-'));
@@ -233,5 +234,82 @@ describe('Pull Command', () => {
 
         // Check that NEW_SECRET was appended
         assert.ok(lines.includes('NEW_SECRET=new-secret-val'));
+    });
+
+    it('should support whitelisting via CLI keys flag in pull command', async () => {
+        mock.method(config, 'get', (key: string) => {
+            if (key === 'token') return 'test-token';
+            if (key === 'apiUrl') return 'http://localhost:3000';
+            return undefined;
+        });
+
+        mock.method(axios, 'get', async () => {
+            return {
+                status: 200,
+                data: {
+                    secrets: {
+                        DATABASE_URL: 'postgres://prod-host/db',
+                        API_KEY: 'secret-key',
+                        ANOTHER_VAR: 'val',
+                    },
+                },
+            };
+        });
+
+        mock.method(console, 'log', () => {});
+        mock.method(console, 'error', () => {});
+
+        pullCommand.exitOverride();
+        // Request only DATABASE_URL and API_KEY
+        await pullCommand.parseAsync(['node', 'pawthy', 'pull', '-k', 'DATABASE_URL, API_KEY']);
+
+        const content = await fs.readFile(path.join(tempDir, '.env'), 'utf-8');
+        const lines = content.split('\n');
+
+        assert.ok(lines.includes('DATABASE_URL=postgres://prod-host/db'));
+        assert.ok(lines.includes('API_KEY=secret-key'));
+        assert.ok(!lines.includes('ANOTHER_VAR=val'));
+    });
+
+    it('should support whitelisting via keys array in .pawthyrc in pull command', async () => {
+        mock.method(config, 'get', (key: string) => {
+            if (key === 'token') return 'test-token';
+            if (key === 'apiUrl') return 'http://localhost:3000';
+            return undefined;
+        });
+
+        // Write a .pawthyrc containing a keys whitelist
+        await fs.writeFile(
+            path.join(tempDir, '.pawthyrc'),
+            JSON.stringify({
+                projectId: 'test-project',
+                envId: 'test-env',
+                keys: ['DATABASE_URL'],
+            })
+        );
+
+        mock.method(axios, 'get', async () => {
+            return {
+                status: 200,
+                data: {
+                    secrets: {
+                        DATABASE_URL: 'postgres://prod-host/db',
+                        API_KEY: 'secret-key',
+                    },
+                },
+            };
+        });
+
+        mock.method(console, 'log', () => {});
+        mock.method(console, 'error', () => {});
+
+        pullCommand.exitOverride();
+        await pullCommand.parseAsync(['node', 'pawthy', 'pull']);
+
+        const content = await fs.readFile(path.join(tempDir, '.env'), 'utf-8');
+        const lines = content.split('\n');
+
+        assert.ok(lines.includes('DATABASE_URL=postgres://prod-host/db'));
+        assert.ok(!lines.includes('API_KEY=secret-key'));
     });
 });
