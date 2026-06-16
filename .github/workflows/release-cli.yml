@@ -7,19 +7,50 @@ on:
   workflow_dispatch:
 
 jobs:
-  publish:
+  publish-gpr:
+    name: Publish to GitHub Packages
     runs-on: ubuntu-latest
-    environment: production
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v3
+        with:
+          version: 9
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20.x'
+          registry-url: 'https://npm.pkg.github.com'
+          scope: '@kuasha420'
+
+      - name: Install Dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build
+        run: pnpm --filter pawthy build
+
+      - name: Publish to GPR
+        run: npm publish
+        working-directory: apps/pawthy
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  publish-npm:
+    name: Publish to NPM
+    runs-on: ubuntu-latest
     permissions:
       id-token: write
       contents: read
     steps:
       - uses: actions/checkout@v4
-      
+
       - uses: pnpm/action-setup@v3
         with:
           version: 9
-      
+
       - uses: actions/setup-node@v4
         with:
           node-version: '20.x'
@@ -36,3 +67,4 @@ jobs:
         working-directory: apps/pawthy
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        continue-on-error: true
