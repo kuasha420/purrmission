@@ -1,6 +1,7 @@
 import { describe, it, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert';
 import type { Client } from 'discord.js';
+import type { FastifyInstance } from 'fastify';
 import type { Services } from '../domain/services.js';
 import { createHttpServer } from '../http/server.js';
 
@@ -17,7 +18,7 @@ const mockDiscordClient = {
 } as unknown as Client;
 
 describe('System API E2E Tests', () => {
-  let server: any;
+  let server: FastifyInstance | undefined;
 
   // Shared mock implementations that tests can override
   const mockVerifyApiKey = { fn: async (_apiKey: string): Promise<any> => null };
@@ -91,7 +92,9 @@ describe('System API E2E Tests', () => {
   });
 
   afterEach(async () => {
-    await server.close();
+    if (server) {
+      await server.close();
+    }
   });
 
   describe('POST /api/requests', () => {
