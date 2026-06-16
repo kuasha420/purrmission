@@ -33,7 +33,7 @@ jobs:
         run: pnpm --filter pawthy build
 
       - name: Publish to GPR
-        run: npm publish
+        run: npm publish --no-provenance
         working-directory: apps/pawthy
         env:
           NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
