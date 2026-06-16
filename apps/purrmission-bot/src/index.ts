@@ -87,7 +87,7 @@ async function main(): Promise<void> {
 
   // Start periodic cleanup tasks (every 15 minutes)
   const CLEANUP_INTERVAL_MS = 15 * 60 * 1000;
-  const cleanupInterval = setInterval(async () => {
+  const runCleanup = async () => {
     try {
       const expiredRequestsCount = await services.approval.cleanupExpiredRequests();
       const expiredSessionsCount = await services.auth.cleanupExpiredSessions();
@@ -102,7 +102,16 @@ async function main(): Promise<void> {
         error: error instanceof Error ? error.message : String(error),
       });
     }
-  }, CLEANUP_INTERVAL_MS);
+  };
+
+  // Run immediately on startup
+  runCleanup().catch((error) => {
+    logger.error('Failed to run initial cleanup', {
+      error: error instanceof Error ? error.message : String(error),
+    });
+  });
+
+  const cleanupInterval = setInterval(runCleanup, CLEANUP_INTERVAL_MS);
   cleanupInterval.unref();
 
   // Log startup summary

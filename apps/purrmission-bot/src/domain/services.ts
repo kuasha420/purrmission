@@ -92,6 +92,13 @@ export class ApprovalService {
       };
     }
 
+    if (input.expiresInMs !== undefined && input.expiresInMs <= 0) {
+      return {
+        success: false,
+        error: 'expiresInMs must be a positive number',
+      };
+    }
+
     // Calculate expiration time (default to 24 hours if not provided)
     const defaultExpiresInMs = 24 * 60 * 60 * 1000; // 24 hours
     const expiresAt = new Date(Date.now() + (input.expiresInMs ?? defaultExpiresInMs));

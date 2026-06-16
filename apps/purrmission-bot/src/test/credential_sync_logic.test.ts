@@ -426,5 +426,13 @@ describe('Credential Sync Logic Smoke Test', () => {
     const expiredCount = await services.approval.cleanupExpiredRequests();
     assert.strictEqual(expiredCount, 1);
     assert.strictEqual(rawReq.status, 'EXPIRED');
+
+    // Verify that creation fails with non-positive expiresInMs
+    const invalidResult = await services.approval.createApprovalRequest({
+      resourceId,
+      expiresInMs: 0,
+    });
+    assert.strictEqual(invalidResult.success, false);
+    assert.strictEqual(invalidResult.error, 'expiresInMs must be a positive number');
   });
 });
