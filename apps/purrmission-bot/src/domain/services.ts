@@ -92,8 +92,9 @@ export class ApprovalService {
       };
     }
 
-    // Calculate expiration time
-    const expiresAt = input.expiresInMs ? new Date(Date.now() + input.expiresInMs) : null;
+    // Calculate expiration time (default to 24 hours if not provided)
+    const defaultExpiresInMs = 24 * 60 * 60 * 1000; // 24 hours
+    const expiresAt = new Date(Date.now() + (input.expiresInMs ?? defaultExpiresInMs));
 
     // Create the request
     const request = await repositories.approvalRequests.create({
@@ -249,6 +250,18 @@ export class ApprovalService {
     requesterId: string
   ): Promise<ApprovalRequest | null> {
     return this.deps.repositories.approvalRequests.findActiveByRequester(resourceId, requesterId);
+  }
+
+  /**
+   * Automatically expire pending approval requests that have passed their expiration time.
+   * @returns The number of expired requests
+   */
+  async cleanupExpiredRequests(): Promise<number> {
+    const count = await this.deps.repositories.approvalRequests.expireRequests();
+    if (count > 0) {
+      logger.info(`Cleaned up expired approval requests`, { count });
+    }
+    return count;
   }
 }
 
