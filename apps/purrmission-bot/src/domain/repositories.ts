@@ -115,6 +115,12 @@ export interface ApprovalRequestRepository {
    * Find an active approval request by resource and requester.
    */
   findActiveByRequester(resourceId: string, requesterId: string): Promise<ApprovalRequest | null>;
+
+  /**
+   * Mark all pending requests that have passed their expiresAt time as EXPIRED.
+   * @returns The number of requests updated.
+   */
+  expireRequests(): Promise<number>;
 }
 
 /**
@@ -751,10 +757,12 @@ export class PrismaApprovalRequestRepository implements ApprovalRequestRepositor
     resourceId: string,
     requesterId: string
   ): Promise<ApprovalRequest | null> {
+    const now = new Date();
     const rows = await this.prisma.approvalRequest.findMany({
       where: {
         resourceId,
         status: { in: ['PENDING', 'APPROVED'] },
+        OR: [{ expiresAt: null }, { expiresAt: { gt: now } }],
       },
       orderBy: {
         createdAt: 'desc',
@@ -773,6 +781,20 @@ export class PrismaApprovalRequestRepository implements ApprovalRequestRepositor
     });
 
     return match ? this.mapPrismaToDomain(match) : null;
+  }
+
+  async expireRequests(): Promise<number> {
+    const now = new Date();
+    const result = await this.prisma.approvalRequest.updateMany({
+      where: {
+        status: 'PENDING',
+        expiresAt: { lt: now },
+      },
+      data: {
+        status: 'EXPIRED',
+      },
+    });
+    return result.count;
   }
 
   private mapPrismaToDomain(row: {

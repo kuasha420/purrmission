@@ -224,6 +224,7 @@ class MemApprovalRepo implements ApprovalRequestRepository {
     resourceId: string,
     requesterId: string
   ): Promise<ApprovalRequest | null> {
+    const now = new Date();
     // Simple logic: find PENDING or APPROVED req where context.requesterId == requesterId
     // Assuming context is simple object
     return (
@@ -231,6 +232,7 @@ class MemApprovalRepo implements ApprovalRequestRepository {
         (r) =>
           r.resourceId === resourceId &&
           ['PENDING', 'APPROVED'].includes(r.status) &&
+          (!r.expiresAt || r.expiresAt > now) &&
           r.context['requesterId'] === requesterId
       ) || null
     );
@@ -240,6 +242,17 @@ class MemApprovalRepo implements ApprovalRequestRepository {
   }
   async findPendingByResourceId(resourceId: string): Promise<ApprovalRequest[]> {
     return this.requests.filter((r) => r.resourceId === resourceId && r.status === 'PENDING');
+  }
+  async expireRequests(): Promise<number> {
+    const now = new Date();
+    let count = 0;
+    for (const r of this.requests) {
+      if (r.status === 'PENDING' && r.expiresAt && r.expiresAt < now) {
+        r.status = 'EXPIRED';
+        count++;
+      }
+    }
+    return count;
   }
 }
 
@@ -360,5 +373,66 @@ describe('Credential Sync Logic Smoke Test', () => {
     await services.resource.removeGuardian(resource.id, ownerId, guardianId);
     const isGuardianAfter = await services.resource.isGuardian(resource.id, guardianId);
     assert.strictEqual(isGuardianAfter, false);
+  });
+
+  it('should support auto-expiration of pending approval requests', async () => {
+    const ownerId = 'owner-123';
+    const requesterId = 'user-555';
+
+    // Create a project and environment first
+    const project = await services.project.createProject({
+      name: 'expiry-test-proj',
+      ownerId,
+    });
+    const env = await services.project.createEnvironment({
+      name: 'Development',
+      slug: 'dev',
+      projectId: project.id,
+    });
+    const resourceId = env.resourceId;
+
+    // Create approval request with default expiration (24h)
+    const result = await services.approval.createApprovalRequest({
+      resourceId,
+      context: { requesterId },
+    });
+    assert.strictEqual(result.success, true);
+    assert.ok(result.request);
+    assert.ok(result.request.expiresAt);
+
+    // Verify default expiration is roughly 24 hours in the future
+    const diffMs = result.request.expiresAt.getTime() - Date.now();
+    const expectedDiffMs = 24 * 60 * 60 * 1000;
+    assert.ok(
+      Math.abs(diffMs - expectedDiffMs) < 5000,
+      'Expiration should be roughly 24 hours in the future'
+    );
+
+    // Verify active approval request is returned
+    let active = await services.approval.findActiveApproval(resourceId, requesterId);
+    assert.ok(active);
+    assert.strictEqual(active.id, result.request.id);
+
+    // Now, let's manually modify the request in the repo to be expired (expiresAt in the past)
+    const rawReq = approvalRepo.requests.find((r) => r.id === result.request!.id);
+    assert.ok(rawReq);
+    rawReq.expiresAt = new Date(Date.now() - 60000); // 1 minute ago
+
+    // Verify that findActiveApproval now ignores this request because it is expired
+    active = await services.approval.findActiveApproval(resourceId, requesterId);
+    assert.strictEqual(active, null, 'Expired request should be ignored');
+
+    // Run cleanupExpiredRequests and verify status changes to EXPIRED
+    const expiredCount = await services.approval.cleanupExpiredRequests();
+    assert.strictEqual(expiredCount, 1);
+    assert.strictEqual(rawReq.status, 'EXPIRED');
+
+    // Verify that creation fails with non-positive expiresInMs
+    const invalidResult = await services.approval.createApprovalRequest({
+      resourceId,
+      expiresInMs: 0,
+    });
+    assert.strictEqual(invalidResult.success, false);
+    assert.strictEqual(invalidResult.error, 'expiresInMs must be a positive number');
   });
 });

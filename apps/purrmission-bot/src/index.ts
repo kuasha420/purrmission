@@ -5,7 +5,6 @@
 import { env } from './config/env.js';
 import { logger } from './logging/logger.js';
 import {
-
   PrismaTOTPRepository,
   PrismaResourceRepository,
   PrismaAuditRepository,
@@ -79,12 +78,41 @@ async function main(): Promise<void> {
   // Announce online status
   const statusService = new StatusService();
   // Don't await this to avoid blocking startup if Discord API is slow
-  statusService.sendOnlineAnnouncement(discordClient).catch(err => {
+  statusService.sendOnlineAnnouncement(discordClient).catch((err) => {
     logger.error('Failed to send ready announcement', {
       error: err instanceof Error ? err.message : String(err),
       stack: err instanceof Error ? err.stack : undefined,
     });
   });
+
+  // Start periodic cleanup tasks (every 15 minutes)
+  const CLEANUP_INTERVAL_MS = 15 * 60 * 1000;
+  const runCleanup = async () => {
+    try {
+      const expiredRequestsCount = await services.approval.cleanupExpiredRequests();
+      const expiredSessionsCount = await services.auth.cleanupExpiredSessions();
+      if (expiredRequestsCount > 0 || expiredSessionsCount > 0) {
+        logger.info('Periodic cleanup executed', {
+          expiredRequests: expiredRequestsCount,
+          expiredSessions: expiredSessionsCount,
+        });
+      }
+    } catch (error) {
+      logger.error('Failed to run periodic cleanup', {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  };
+
+  // Run immediately on startup
+  runCleanup().catch((error) => {
+    logger.error('Failed to run initial cleanup', {
+      error: error instanceof Error ? error.message : String(error),
+    });
+  });
+
+  const cleanupInterval = setInterval(runCleanup, CLEANUP_INTERVAL_MS);
+  cleanupInterval.unref();
 
   // Log startup summary
   logger.info('========================================');

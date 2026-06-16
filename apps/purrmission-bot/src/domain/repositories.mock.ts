@@ -188,14 +188,28 @@ export class InMemoryApprovalRequestRepository implements ApprovalRequestReposit
     resourceId: string,
     requesterId: string
   ): Promise<ApprovalRequest | null> {
+    const now = new Date();
     return (
       Array.from(this.requests.values()).find(
         (request) =>
           request.resourceId === resourceId &&
           ['PENDING', 'APPROVED'].includes(request.status) &&
+          (!request.expiresAt || request.expiresAt > now) &&
           (request.context as Record<string, unknown>)['requesterId'] === requesterId
       ) || null
     );
+  }
+
+  async expireRequests(): Promise<number> {
+    const now = new Date();
+    let count = 0;
+    for (const request of this.requests.values()) {
+      if (request.status === 'PENDING' && request.expiresAt && request.expiresAt < now) {
+        request.status = 'EXPIRED';
+        count++;
+      }
+    }
+    return count;
   }
 }
 
