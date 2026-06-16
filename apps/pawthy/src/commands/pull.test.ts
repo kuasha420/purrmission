@@ -18,6 +18,7 @@ describe('Pull Command', () => {
         pullCommand.setOptionValue('file', '.env');
         pullCommand.setOptionValue('projectId', undefined);
         pullCommand.setOptionValue('envId', undefined);
+        pullCommand.setOptionValue('merge', undefined);
 
         // Create a unique temp directory outside the repository
         tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'pawthy-test-'));
@@ -220,6 +221,13 @@ describe('Pull Command', () => {
             '# DB config',
             'DATABASE_URL=postgres://localhost/db',
             '',
+            '# Spacing and quotes tests',
+            '  SPACED_KEY  =  "old-value"  ',
+            'SINGLE_QUOTED = \'old-single\'',
+            'WITH_COMMENT = old-val # preserve this comment',
+            'MULTILINE = "line 1',
+            'line 2"',
+            '',
             '# Local variables',
             'LOCAL_ONLY=123',
             'EXISTING_OVERWRITE=old-value',
@@ -227,12 +235,17 @@ describe('Pull Command', () => {
         await fs.writeFile(path.join(tempDir, '.env'), initialEnv);
 
         // Mock axios.get to return updated and new secrets
-        mock.method(axios, 'get', async () => {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        mock.method(axios, 'get', async (): Promise<any> => {
             return {
                 status: 200,
                 data: {
                     secrets: {
                         DATABASE_URL: 'postgres://prod-host/db',
+                        SPACED_KEY: 'new-value',
+                        SINGLE_QUOTED: 'new-single',
+                        WITH_COMMENT: 'new-val',
+                        MULTILINE: 'new line 1\nnew line 2',
                         EXISTING_OVERWRITE: 'new-value',
                         NEW_SECRET: 'new-secret-val',
                     },
@@ -243,7 +256,6 @@ describe('Pull Command', () => {
         mock.method(console, 'log', () => {});
         mock.method(console, 'error', () => {});
 
-        pullCommand.exitOverride();
         await pullCommand.parseAsync(['node', 'pawthy', 'pull', '--merge']);
 
         // Read the resulting .env file
@@ -253,6 +265,18 @@ describe('Pull Command', () => {
         // Check that DATABASE_URL and EXISTING_OVERWRITE were updated
         assert.ok(lines.includes('DATABASE_URL=postgres://prod-host/db'));
         assert.ok(lines.includes('EXISTING_OVERWRITE=new-value'));
+
+        // Check spacing, quotes, and comments preservation
+        assert.ok(lines.includes('  SPACED_KEY  =  "new-value"  '));
+        assert.ok(lines.includes('SINGLE_QUOTED = \'new-single\''));
+        assert.ok(lines.includes('WITH_COMMENT = new-val # preserve this comment'));
+
+        // Check multiline preservation/updating
+        // The multiline value contains a newline, so it should be double-quoted
+        const multilineStartIndex = lines.findIndex(l => l.startsWith('MULTILINE ='));
+        assert.notStrictEqual(multilineStartIndex, -1);
+        assert.strictEqual(lines[multilineStartIndex], 'MULTILINE = "new line 1');
+        assert.strictEqual(lines[multilineStartIndex + 1], 'new line 2"');
 
         // Check that LOCAL_ONLY and comments were preserved
         assert.ok(lines.includes('# DB config'));

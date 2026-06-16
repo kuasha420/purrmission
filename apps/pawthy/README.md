@@ -112,11 +112,16 @@ pawthy pull
 | Flag | Description |
 |------|-------------|
 | `-f, --file <path>` | Output file path (default: `.env`) |
+| `-m, --merge` | Merge fetched secrets into existing `.env` file instead of overwriting |
 
-**Example:**
+**Examples:**
 
 ```bash
+# Pull and overwrite local .env (default)
 pawthy pull -f .env.local
+
+# Pull and natively merge into existing .env preserving formatting/comments/local variables
+pawthy pull --merge
 ```
 
 ---
