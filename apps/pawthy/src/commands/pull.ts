@@ -8,6 +8,8 @@ import { getToken, getApiUrl, getProjectConfig } from '../config.js';
 export const pullCommand = new Command('pull')
     .description('Pull secrets from Purrmission to local .env')
     .option('-f, --file <path>', 'Path to .env file', '.env')
+    .option('-p, --project-id <id>', 'Project ID')
+    .option('-e, --env-id <id>', 'Environment ID')
     .action(async (options) => {
         const token = getToken();
         const apiUrl = getApiUrl();
@@ -18,8 +20,15 @@ export const pullCommand = new Command('pull')
             process.exit(1);
         }
 
-        if (!config || !config.projectId || !config.envId) {
-            console.error(chalk.red('Project not initialized. Run `pawthy init` first.'));
+        const projectId = options.projectId || process.env.PAWTHY_PROJECT_ID || config?.projectId;
+        const envId = options.envId || process.env.PAWTHY_ENV_ID || config?.envId;
+
+        if (!projectId || !envId) {
+            console.error(
+                chalk.red(
+                    'Project ID and Environment ID must be specified (via CLI flags -p/-e, env vars PAWTHY_PROJECT_ID/PAWTHY_ENV_ID, or .pawthyrc config).'
+                )
+            );
             process.exit(1);
         }
 
@@ -30,7 +39,7 @@ export const pullCommand = new Command('pull')
 
             // 1. Fetch Secrets
             const res = await axios.get<{ secrets?: Record<string, string>; status?: string; message?: string }>(
-                `${apiUrl}/api/projects/${config.projectId}/environments/${config.envId}/secrets`,
+                `${apiUrl}/api/projects/${projectId}/environments/${envId}/secrets`,
                 {
                     headers: { Authorization: `Bearer ${token}` },
                     validateStatus: (status) => status >= 200 && status < 300,
@@ -41,7 +50,7 @@ export const pullCommand = new Command('pull')
                 console.log(`\n${chalk.yellow('⏳ Access Pending Approval')}`);
                 console.log(chalk.white(res.data.message));
                 console.log(chalk.dim('\nPlease run this command again once your request has been approved in Discord.'));
-                return;
+                process.exit(1);
             }
 
             const secrets = res.data.secrets;

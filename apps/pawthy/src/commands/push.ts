@@ -10,6 +10,8 @@ export const pushCommand = new Command('push')
     .description('Push local .env secrets to Purrmission, updating existing values. This does not remove secrets.')
     .option('-f, --file <path>', 'Path to .env file', '.env')
     .option('--force', 'Push secrets without confirmation')
+    .option('-p, --project-id <id>', 'Project ID')
+    .option('-e, --env-id <id>', 'Environment ID')
     .action(async (options) => {
         const token = getToken();
         const apiUrl = getApiUrl();
@@ -20,8 +22,15 @@ export const pushCommand = new Command('push')
             process.exit(1);
         }
 
-        if (!config || !config.projectId || !config.envId) {
-            console.error(chalk.red('Project not initialized. Run `pawthy init` first.'));
+        const projectId = options.projectId || process.env.PAWTHY_PROJECT_ID || config?.projectId;
+        const envId = options.envId || process.env.PAWTHY_ENV_ID || config?.envId;
+
+        if (!projectId || !envId) {
+            console.error(
+                chalk.red(
+                    'Project ID and Environment ID must be specified (via CLI flags -p/-e, env vars PAWTHY_PROJECT_ID/PAWTHY_ENV_ID, or .pawthyrc config).'
+                )
+            );
             process.exit(1);
         }
 
@@ -56,7 +65,7 @@ export const pushCommand = new Command('push')
             console.log(chalk.dim(`Pushing ${Object.keys(secrets).length} secrets to Purrmission...`));
 
             // 3. Push to API
-            await axios.put(`${apiUrl}/api/projects/${config.projectId}/environments/${config.envId}/secrets`, {
+            await axios.put(`${apiUrl}/api/projects/${projectId}/environments/${envId}/secrets`, {
                 secrets
             }, {
                 headers: { Authorization: `Bearer ${token}` },
