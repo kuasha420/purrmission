@@ -41,7 +41,7 @@ export const pullCommand = new Command('pull')
                 console.log(`\n${chalk.yellow('⏳ Access Pending Approval')}`);
                 console.log(chalk.white(res.data.message));
                 console.log(chalk.dim('\nPlease run this command again once your request has been approved in Discord.'));
-                return;
+                process.exit(1);
             }
 
             const secrets = res.data.secrets;
