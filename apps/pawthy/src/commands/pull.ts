@@ -42,6 +42,7 @@ export const pullCommand = new Command('pull')
                 console.log(chalk.white(res.data.message));
                 console.log(chalk.dim('\nPlease run this command again once your request has been approved in Discord.'));
                 process.exit(1);
+                return;
             }
 
             const secrets = res.data.secrets;
