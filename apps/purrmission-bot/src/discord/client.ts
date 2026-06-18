@@ -9,7 +9,6 @@ import {
   Client,
   GatewayIntentBits,
   Partials,
-  ChannelType,
   Events,
   type Interaction,
   type ChatInputCommandInteraction,
@@ -119,11 +118,26 @@ export function createDiscordClient(deps: DiscordClientDeps): Client {
   // Message event listener for DMs
   client.on(Events.MessageCreate, async (message: Message) => {
     try {
-      // Filter out bot messages
-      if (message.author.bot) return;
+      // Resolve partial message if necessary
+      if (message.partial) {
+        try {
+          await message.fetch();
+        } catch (err) {
+          logger.warn('Failed to fetch partial DM message', {
+            error: err instanceof Error ? err.message : String(err),
+          });
+          return;
+        }
+      }
 
-      // Check if the message is in a DM channel
-      if (message.channel.type !== ChannelType.DM) return;
+      // Guard against missing author
+      if (!message.author || message.author.bot) return;
+
+      // Check if the message is in a DM channel (i.e. not in a guild)
+      if (message.guildId !== null) return;
+
+      // Guard against missing content
+      if (!message.content) return;
 
       const content = message.content.trim().toLowerCase();
 
@@ -156,7 +170,9 @@ export function createDiscordClient(deps: DiscordClientDeps): Client {
 
         // Fetch resources guarded by this user
         const guardianships = await deps.repositories.guardians.findByUserId(userId);
-        const resourceIds = guardianships.map((g) => g.resourceId);
+
+        // Deduplicate resource IDs
+        const resourceIds = Array.from(new Set(guardianships.map((g) => g.resourceId)));
 
         let guardedList = '_None. You are not registered as a guardian for any resources._';
         let pendingList = '_No pending approval requests waiting for you._';
@@ -169,10 +185,17 @@ export function createDiscordClient(deps: DiscordClientDeps): Client {
               return res;
             })
           );
-          const validResources = resources.filter(Boolean);
 
+          // Use type guard to safely filter and narrow type
+          const validResources = resources.filter((r): r is NonNullable<typeof r> => !!r);
+
+          const maxDisplay = 15;
           if (validResources.length > 0) {
-            guardedList = validResources.map((r) => `- **${r!.name}** (\`${r!.id}\`)`).join('\n');
+            const displayedResources = validResources.slice(0, maxDisplay);
+            guardedList = displayedResources.map((r) => `- **${r.name}** (\`${r.id}\`)`).join('\n');
+            if (validResources.length > maxDisplay) {
+              guardedList += `\n_...and ${validResources.length - maxDisplay} more resources_`;
+            }
           }
 
           // Fetch pending approval requests for these resources
@@ -181,10 +204,16 @@ export function createDiscordClient(deps: DiscordClientDeps): Client {
               deps.repositories.approvalRequests.findPendingByResourceId(resourceId)
             )
           );
-          const pendingRequests = pendingRequestsNested.flat();
+
+          // Filter out requests that have already expired in real-time
+          const now = new Date();
+          const pendingRequests = pendingRequestsNested
+            .flat()
+            .filter((req) => !req.expiresAt || req.expiresAt > now);
 
           if (pendingRequests.length > 0) {
-            pendingList = pendingRequests
+            const displayedPending = pendingRequests.slice(0, maxDisplay);
+            pendingList = displayedPending
               .map((req) => {
                 const expiryText = req.expiresAt
                   ? `, Expires: <t:${Math.floor(req.expiresAt.getTime() / 1000)}:R>`
@@ -192,6 +221,9 @@ export function createDiscordClient(deps: DiscordClientDeps): Client {
                 return `- Request \`${req.id}\` for resource ID \`${req.resourceId}\` (Status: \`${req.status}\`${expiryText})`;
               })
               .join('\n');
+            if (pendingRequests.length > maxDisplay) {
+              pendingList += `\n_...and ${pendingRequests.length - maxDisplay} more pending requests_`;
+            }
           }
         }
 
@@ -212,7 +244,7 @@ export function createDiscordClient(deps: DiscordClientDeps): Client {
       }
     } catch (error) {
       logger.error('Error handling DM message', {
-        authorId: message.author.id,
+        authorId: message.author?.id ?? 'unknown',
         error: error instanceof Error ? error.message : String(error),
       });
       try {
