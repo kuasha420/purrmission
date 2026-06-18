@@ -176,19 +176,21 @@ export function createDiscordClient(deps: DiscordClientDeps): Client {
           }
 
           // Fetch pending approval requests for these resources
-          const pendingRequests = [];
-          for (const resourceId of resourceIds) {
-            const reqs =
-              await deps.repositories.approvalRequests.findPendingByResourceId(resourceId);
-            pendingRequests.push(...reqs);
-          }
+          const pendingRequestsNested = await Promise.all(
+            resourceIds.map((resourceId) =>
+              deps.repositories.approvalRequests.findPendingByResourceId(resourceId)
+            )
+          );
+          const pendingRequests = pendingRequestsNested.flat();
 
           if (pendingRequests.length > 0) {
             pendingList = pendingRequests
-              .map(
-                (req) =>
-                  `- Request \`${req.id}\` for resource ID \`${req.resourceId}\` (Status: \`${req.status}\`, Expires: <t:${Math.floor(req.expiresAt.getTime() / 1000)}:R>)`
-              )
+              .map((req) => {
+                const expiryText = req.expiresAt
+                  ? `, Expires: <t:${Math.floor(req.expiresAt.getTime() / 1000)}:R>`
+                  : '';
+                return `- Request \`${req.id}\` for resource ID \`${req.resourceId}\` (Status: \`${req.status}\`${expiryText})`;
+              })
               .join('\n');
           }
         }
