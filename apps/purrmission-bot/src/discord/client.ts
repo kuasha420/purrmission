@@ -8,10 +8,12 @@
 import {
   Client,
   GatewayIntentBits,
+  Partials,
   Events,
   type Interaction,
   type ChatInputCommandInteraction,
   type ButtonInteraction,
+  type Message,
 } from 'discord.js';
 import { logger } from '../logging/logger.js';
 import type { Services } from '../domain/services.js';
@@ -44,6 +46,7 @@ export function createDiscordClient(deps: DiscordClientDeps): Client {
       // for production bots. Uncomment if needed and approved.
       // GatewayIntentBits.MessageContent,
     ],
+    partials: [Partials.Channel, Partials.Message],
   });
 
   // Ready event
@@ -112,6 +115,148 @@ export function createDiscordClient(deps: DiscordClientDeps): Client {
     logger.warn('Discord client warning', { message });
   });
 
+  // Message event listener for DMs
+  client.on(Events.MessageCreate, async (message: Message) => {
+    try {
+      // Resolve partial message if necessary
+      if (message.partial) {
+        try {
+          await message.fetch();
+        } catch (err) {
+          logger.warn('Failed to fetch partial DM message', {
+            error: err instanceof Error ? err.message : String(err),
+          });
+          return;
+        }
+      }
+
+      // Guard against missing author
+      if (!message.author || message.author.bot) return;
+
+      // Check if the message is in a DM channel (i.e. not in a guild)
+      if (message.guildId !== null) return;
+
+      // Guard against missing content
+      if (!message.content) return;
+
+      const content = message.content.trim().toLowerCase();
+
+      // Route help command
+      if (content === 'help' || content === '/help') {
+        logger.info('Handling DM help request', { userId: message.author.id });
+        await message.reply({
+          content: [
+            '🐾 **Purrmission Bot DM Help Guide**',
+            '',
+            'I am a security and approval gate bot. Here are the commands you can use:',
+            '',
+            '**Commands**:',
+            '- `/check-dm-connectivity` (Slash Command): Test DM delivery settings.',
+            '- `help` or `/help` (Text): Show this help message.',
+            '- `status` or `/status` (Text): View your status, guarded resources, and pending requests waiting for your approval.',
+            '',
+            '**Approvals**:',
+            'When an access request is created for a resource you guard, I will DM you the details along with buttons to **Approve** or **Deny**.',
+          ].join('\n'),
+        });
+        return;
+      }
+
+      // Route status command
+      if (content === 'status' || content === '/status') {
+        logger.info('Handling DM status request', { userId: message.author.id });
+
+        const userId = message.author.id;
+
+        // Fetch resources guarded by this user
+        const guardianships = await deps.repositories.guardians.findByUserId(userId);
+
+        // Deduplicate resource IDs
+        const resourceIds = Array.from(new Set(guardianships.map((g) => g.resourceId)));
+
+        let guardedList = '_None. You are not registered as a guardian for any resources._';
+        let pendingList = '_No pending approval requests waiting for you._';
+
+        if (resourceIds.length > 0) {
+          // Fetch resources details
+          const resources = await Promise.all(
+            resourceIds.map(async (id) => {
+              const res = await deps.repositories.resources.findById(id);
+              return res;
+            })
+          );
+
+          // Use type guard to safely filter and narrow type
+          const validResources = resources.filter((r): r is NonNullable<typeof r> => !!r);
+
+          const maxDisplay = 15;
+          if (validResources.length > 0) {
+            const displayedResources = validResources.slice(0, maxDisplay);
+            guardedList = displayedResources.map((r) => `- **${r.name}** (\`${r.id}\`)`).join('\n');
+            if (validResources.length > maxDisplay) {
+              guardedList += `\n_...and ${validResources.length - maxDisplay} more resources_`;
+            }
+          }
+
+          // Fetch pending approval requests for these resources
+          const pendingRequestsNested = await Promise.all(
+            resourceIds.map((resourceId) =>
+              deps.repositories.approvalRequests.findPendingByResourceId(resourceId)
+            )
+          );
+
+          // Filter out requests that have already expired in real-time
+          const now = new Date();
+          const pendingRequests = pendingRequestsNested
+            .flat()
+            .filter((req) => !req.expiresAt || req.expiresAt > now);
+
+          if (pendingRequests.length > 0) {
+            const displayedPending = pendingRequests.slice(0, maxDisplay);
+            pendingList = displayedPending
+              .map((req) => {
+                const expiryText = req.expiresAt
+                  ? `, Expires: <t:${Math.floor(req.expiresAt.getTime() / 1000)}:R>`
+                  : '';
+                return `- Request \`${req.id}\` for resource ID \`${req.resourceId}\` (Status: \`${req.status}\`${expiryText})`;
+              })
+              .join('\n');
+            if (pendingRequests.length > maxDisplay) {
+              pendingList += `\n_...and ${pendingRequests.length - maxDisplay} more pending requests_`;
+            }
+          }
+        }
+
+        await message.reply({
+          content: [
+            '🐾 **Purrmission Bot Status Report**',
+            '',
+            '**Your Guarded Resources**:',
+            guardedList,
+            '',
+            '**Pending Approvals Waiting For You**:',
+            pendingList,
+            '',
+            '_To approve or deny, use `/access approve <request-id>` or `/access deny <request-id>`._',
+          ].join('\n'),
+        });
+        return;
+      }
+    } catch (error) {
+      logger.error('Error handling DM message', {
+        authorId: message.author?.id ?? 'unknown',
+        error: error instanceof Error ? error.message : String(error),
+      });
+      try {
+        await message.reply({
+          content: '❌ An error occurred while processing your message.',
+        });
+      } catch {
+        // Ignore
+      }
+    }
+  });
+
   return client;
 }
 
@@ -148,12 +293,7 @@ async function handleButtonInteraction(
       userId: interaction.user.id,
     });
 
-    await handleApprovalButton(
-      interaction,
-      deps.services,
-      deps.repositories,
-      interaction.client
-    );
+    await handleApprovalButton(interaction, deps.services, deps.repositories, interaction.client);
     return;
   }
 
@@ -162,4 +302,3 @@ async function handleButtonInteraction(
     customId: interaction.customId,
   });
 }
-

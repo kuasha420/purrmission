@@ -37,13 +37,14 @@ pawthy login
 ```
 
 Follow the on-screen instructions:
-1. Run the displayed Discord command (`/purrmission cli-login code:XXXX`)
+
+1. Run the displayed Discord command (`/auth login code:XXXX`)
 2. The CLI will automatically detect approval and save your session
 
 **Options:**
 
-| Flag | Description |
-|------|-------------|
+| Flag          | Description                                                                   |
+| ------------- | ----------------------------------------------------------------------------- |
 | `-l, --local` | Store session in `.pawthy/config.json` (per-project) instead of global config |
 
 **Example (per-project auth):**
@@ -65,6 +66,7 @@ pawthy init
 ```
 
 This interactive command will:
+
 1. Fetch available projects from your account
 2. Let you:
    - Link the current directory to a Purrmission project.
@@ -84,10 +86,10 @@ pawthy push
 
 **Options:**
 
-| Flag | Description |
-|------|-------------|
+| Flag                | Description                               |
+| ------------------- | ----------------------------------------- |
 | `-f, --file <path>` | Source `.env` file path (default: `.env`) |
-| `--force` | Skip confirmation prompt |
+| `--force`           | Skip confirmation prompt                  |
 
 **Example:**
 
@@ -109,10 +111,10 @@ pawthy pull
 
 **Options:**
 
-| Flag | Description |
-|------|-------------|
-| `-f, --file <path>` | Output file path (default: `.env`) |
-| `-m, --merge` | Merge fetched secrets into existing `.env` file instead of overwriting |
+| Flag                | Description                                                            |
+| ------------------- | ---------------------------------------------------------------------- |
+| `-f, --file <path>` | Output file path (default: `.env`)                                     |
+| `-m, --merge`       | Merge fetched secrets into existing `.env` file instead of overwriting |
 
 **Examples:**
 
@@ -132,18 +134,18 @@ Purrmission uses a **Guardian-based approval system** for secure secret access.
 
 ### Understanding Roles
 
-| Role | Description |
-|------|-------------|
-| **Owner** | Project creator. Full access to secrets. Can add/remove guardians. |
-| **Guardian** | Trusted team member. Can approve/deny access requests. Has immediate access to secrets. |
-| **Requester** | Any authenticated user. Must request approval to access secrets. |
+| Role          | Description                                                                             |
+| ------------- | --------------------------------------------------------------------------------------- |
+| **Owner**     | Project creator. Full access to secrets. Can add/remove guardians.                      |
+| **Guardian**  | Trusted team member. Can approve/deny access requests. Has immediate access to secrets. |
+| **Requester** | Any authenticated user. Must request approval to access secrets.                        |
 
 ### Workflow: Adding Team Members
 
 1. **Project Owner** creates the project and pushes initial secrets
 2. **Owner** adds team members as Guardians via Discord:
    ```
-   /purrmission guardian add resource-id:<resource-id> user:@teammate
+   /guardian add resource-id:<resource-id> user:@teammate
    ```
 3. **Guardians** can now:
    - Pull secrets directly (no approval needed)
@@ -177,6 +179,7 @@ $ pawthy pull
 ### Workflow: Approving Requests (Guardian)
 
 Guardians receive a Discord DM with:
+
 - **Requester**: Who is requesting access
 - **Reason**: Context (e.g., "CLI pull request for myproject:Production")
 - **Approve/Deny buttons**: One-click decision
@@ -197,6 +200,7 @@ Located in your project root, stores project-environment binding:
 ```
 
 **Version Control:** `.pawthyrc` **should be committed** to your repository:
+
 - Ensures all team members connect to the same project/environment
 - Eliminates need for each developer to run `pawthy init`
 - UUIDs are not secrets—access is controlled by Guardian approval
@@ -217,44 +221,42 @@ When using `--local` login, credentials are stored per-project:
 ### Global Configuration
 
 Default session storage location:
+
 - **Linux/macOS:** `~/.config/configstore/pawthy.json`
 - **Windows:** `%APPDATA%/configstore/pawthy.json`
 
 ---
 
-
 ## User Roles & Permissions
 
 Pawthy respects project member roles assigned via the Discord bot. These roles determine your access level and approval requirements.
 
-| Role | Description | Capabilities |
-|------|-------------|--------------|
-| **Member** (Default) | Standard access | • Request secrets (requires approval)<br>• Cannot push secrets |
-| **Reader** | Pre-approved read access | • Pull secrets **without approval**<br>• Cannot push secrets |
-| **Writer** | Pre-approved read/write access | • Pull secrets **without approval**<br>• Push secrets **without approval** |
+| Role                 | Description                    | Capabilities                                                               |
+| -------------------- | ------------------------------ | -------------------------------------------------------------------------- |
+| **Member** (Default) | Standard access                | • Request secrets (requires approval)<br>• Cannot push secrets             |
+| **Reader**           | Pre-approved read access       | • Pull secrets **without approval**<br>• Cannot push secrets               |
+| **Writer**           | Pre-approved read/write access | • Pull secrets **without approval**<br>• Push secrets **without approval** |
 
 To manage roles, use the `/project member` command in Discord.
 
 ## Environment Variables
 
-
-
-| Variable | Description |
-|----------|-------------|
+| Variable         | Description                                                                                                       |
+| ---------------- | ----------------------------------------------------------------------------------------------------------------- |
 | `PAWTHY_API_URL` | Override the Purrmission server URL (default: `https://purrmission.infra.purrfecthq.com`). Supports `.env` files. |
 
 ---
 
 ## Command Reference
 
-| Command | Description |
-|---------|-------------|
-| `pawthy login` | Authenticate with Discord Device Flow |
-| `pawthy init` | Link current directory to a project/environment |
-| `pawthy push` | Upload local `.env` to Purrmission |
-| `pawthy pull` | Download secrets to local `.env` |
-| `pawthy --version` | Display CLI version |
-| `pawthy --help` | Show help |
+| Command            | Description                                     |
+| ------------------ | ----------------------------------------------- |
+| `pawthy login`     | Authenticate with Discord Device Flow           |
+| `pawthy init`      | Link current directory to a project/environment |
+| `pawthy push`      | Upload local `.env` to Purrmission              |
+| `pawthy pull`      | Download secrets to local `.env`                |
+| `pawthy --version` | Display CLI version                             |
+| `pawthy --help`    | Show help                                       |
 
 ---
 
@@ -263,6 +265,7 @@ To manage roles, use the `/project member` command in Discord.
 ### Permission Denied / Access Pending
 
 If you're not a Guardian or Owner:
+
 1. Your `pull` request triggers an approval workflow
 2. Wait for a Guardian to approve via Discord
 3. Re-run `pawthy pull` after approval
@@ -288,6 +291,7 @@ pawthy init
 If switching between local dev and production, you may need to clear the global configuration file.
 
 Refer to the "Global Configuration" section above for the file path on your OS:
+
 - **Linux/macOS:** `~/.config/configstore/pawthy.json`
 - **Windows:** `%APPDATA%\configstore\pawthy.json`
 

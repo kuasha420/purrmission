@@ -17,6 +17,10 @@ import { guardianCommand, handleGuardianCommand, handleGuardianAutocomplete } fr
 import { accessCommand, handleAccessCommand, handleAccessAutocomplete } from './access.js';
 import { authCommand, handleAuthCommand } from './auth.js';
 import { projectCommand, handleProjectCommand } from './project.js';
+import {
+  checkDmConnectivityCommand,
+  handleCheckDmConnectivityCommand,
+} from './checkDmConnectivity.js';
 import type { CommandContext } from './context.js';
 import { logger } from '../../logging/logger.js';
 
@@ -33,6 +37,7 @@ export const commands: RESTPostAPIChatInputApplicationCommandsJSONBody[] = [
   accessCommand.toJSON(),
   authCommand.toJSON(),
   projectCommand.toJSON(),
+  checkDmConnectivityCommand.toJSON(),
 ];
 
 /**
@@ -65,6 +70,9 @@ export async function handleSlashCommand(
       break;
     case 'project':
       await handleProjectCommand(interaction, context);
+      break;
+    case 'check-dm-connectivity':
+      await handleCheckDmConnectivityCommand(interaction);
       break;
 
     default:
