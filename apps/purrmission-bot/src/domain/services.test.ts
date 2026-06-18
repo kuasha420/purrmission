@@ -1,6 +1,7 @@
 import { describe, it, beforeEach, mock } from 'node:test';
 import assert from 'node:assert';
 import { ResourceService, ApprovalService, type ServiceDependencies } from './services.js';
+import { AuditService } from './audit.js';
 import {
   type GuardianRepository,
   type ResourceRepository,
@@ -153,7 +154,7 @@ describe('ResourceService', () => {
   });
 
   describe('linkTOTPAccount', () => {
-    it('should succeed even if audit logging throws an error', async () => {
+    it('should succeed even if audit logging repository throws an error', async () => {
       const mockResource = { id: resourceId, totpAccountId: null };
       const mockTotpAccount = { id: 'totp-1' };
       const mockTotpRepo = {
@@ -162,18 +163,23 @@ describe('ResourceService', () => {
       mockResourceRepo.findById = mock.fn(async () => mockResource) as any;
       mockResourceRepo.update = mock.fn(async () => mockResource) as any;
 
-      const failingAuditService = {
-        log: mock.fn(async () => {
-          throw new Error('Audit service unavailable');
+      const failingAuditRepo = {
+        create: mock.fn(async () => {
+          throw new Error('Audit repository failed');
         }),
       };
+      const realAuditService = new AuditService({
+        repositories: {
+          audit: failingAuditRepo as any,
+        },
+      } as any);
 
       const deps: ServiceDependencies = {
         repositories: {
           ...mockRepositories,
           totp: mockTotpRepo as any,
         },
-        audit: failingAuditService as any,
+        audit: realAuditService,
       };
       const svc = new ResourceService(deps);
 
@@ -181,7 +187,7 @@ describe('ResourceService', () => {
       await svc.linkTOTPAccount(resourceId, 'totp-1', ownerId);
 
       assert.strictEqual((mockResourceRepo.update as any).mock.calls.length, 1);
-      assert.strictEqual(failingAuditService.log.mock.calls.length, 1);
+      assert.strictEqual(failingAuditRepo.create.mock.calls.length, 1);
     });
   });
 });
@@ -239,7 +245,7 @@ describe('ApprovalService', () => {
   });
 
   describe('recordDecision', () => {
-    it('should succeed even if audit logging throws an error', async () => {
+    it('should succeed even if audit logging repository throws an error', async () => {
       const mockRequest = {
         id: 'req-1',
         status: 'PENDING',
@@ -253,15 +259,20 @@ describe('ApprovalService', () => {
         role: 'OWNER',
       })) as any;
 
-      const failingAuditService = {
-        log: mock.fn(async () => {
-          throw new Error('Audit service unavailable');
+      const failingAuditRepo = {
+        create: mock.fn(async () => {
+          throw new Error('Audit repository failed');
         }),
       };
+      const realAuditService = new AuditService({
+        repositories: {
+          audit: failingAuditRepo as any,
+        },
+      } as any);
 
       const deps: ServiceDependencies = {
         repositories: mockRepositories,
-        audit: failingAuditService as any,
+        audit: realAuditService,
       };
       const svc = new ApprovalService(deps);
 
@@ -269,7 +280,7 @@ describe('ApprovalService', () => {
 
       assert.strictEqual(result.success, true);
       assert.strictEqual((mockApprovalRepo.updateStatus as any).mock.calls.length, 1);
-      assert.strictEqual(failingAuditService.log.mock.calls.length, 1);
+      assert.strictEqual(failingAuditRepo.create.mock.calls.length, 1);
     });
   });
 });

@@ -216,21 +216,14 @@ export class ApprovalService {
     }
 
     // Audit log
-    try {
-      await this.deps.audit?.log({
-        action: 'APPROVAL_DECISION',
-        resourceId: request.resourceId,
-        actorId: requesterId,
-        resolverId: byGuardianDiscordId,
-        status: newStatus,
-        context: JSON.stringify({ requestId, decision, originalContext: request.context }),
-      });
-    } catch (error) {
-      logger.warn('Failed to record audit log for approval decision', {
-        requestId,
-        error: error instanceof Error ? error.message : String(error),
-      });
-    }
+    await this.deps.audit?.log({
+      action: 'APPROVAL_DECISION',
+      resourceId: request.resourceId,
+      actorId: requesterId,
+      resolverId: byGuardianDiscordId,
+      status: newStatus,
+      context: JSON.stringify({ requestId, decision, originalContext: request.context }),
+    });
 
     // Prepare callback action if URL is configured
     const result: DecisionResult = {
@@ -500,21 +493,13 @@ export class ResourceService {
       totpAccountId,
     });
 
-    try {
-      await this.deps.audit?.log({
-        action: 'TOTP_LINKED',
-        resourceId,
-        actorId,
-        status: 'SUCCESS',
-        context: JSON.stringify({ totpAccountId }),
-      });
-    } catch (error) {
-      logger.warn('Failed to record audit log for linking TOTP account', {
-        resourceId,
-        totpAccountId,
-        error: error instanceof Error ? error.message : String(error),
-      });
-    }
+    await this.deps.audit?.log({
+      action: 'TOTP_LINKED',
+      resourceId,
+      actorId,
+      status: 'SUCCESS',
+      context: JSON.stringify({ totpAccountId }),
+    });
   }
 
   /**
