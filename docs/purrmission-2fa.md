@@ -4,6 +4,11 @@ Purrmission is a Discord-based approval gate system. The **2FA / TOTP** module a
 
 This is particularly useful for **shared accounts** (e.g., `opensource@purrfecthq.com`), where multiple team members need access to the same 2FA codes without sharing a single physical device or passing QR codes around insecurely.
 
+WebAuthn/passkey support is not a TOTP variant and is not implemented in this
+module yet. The current design track for that work lives in
+[Passkey-Aware Access](design/passkey-aware-access.md) with the draft epic in
+[docs/epics/passkey-aware-access.md](epics/passkey-aware-access.md).
+
 ## Domain Concepts
 
 ### TOTPAccount
@@ -12,7 +17,7 @@ A `TOTPAccount` represents a stored 2FA credential.
 
 - **Owner**: The Discord user who created the account.
 - **Account Name**: A user-defined label (e.g., "GitHub", "AWS-Root").
-- **Secret**: The Base32 secret key used to generate codes. (Stored via specific mode).
+- **Secret**: The Base32 secret key used to generate codes. Stored encrypted at rest.
 - **Shared**: A boolean flag. If `true`, this account is visible to other users (current MVP: visible to everyone; future: ACLs).
 - **Backup Key**: An optional recovery code stored with the account (added via `update` command).
 
@@ -74,14 +79,31 @@ Resources can also reference stored 2FA accounts:
 - `/resource 2fa unlink resource-id:<id>`
 - `/resource 2fa get resource-id:<id>`
 
-## Security Notes (MVP)
+## WebAuthn and Passkey Roadmap
+
+TOTP secrets behave like shared symmetric secrets: once Purrmission stores the
+secret, it can generate a current code on demand. WebAuthn credentials behave
+differently. A browser or OS asks an authenticator to sign a relying-party
+challenge with a private key that should stay at the edge and require local user
+verification.
+
+For that reason, future passkey support should be implemented through a
+companion browser extension, native app, or mobile app that performs WebAuthn
+ceremonies locally while Purrmission handles account metadata, guardian
+approvals, audit logs, and short-lived approval leases.
+
+## Security Notes
 
 > [!WARNING]
-> **MVP Status**: This is an initial release (v0.0.1).
+> **Shared 2FA Status**: TOTP support is useful today, but shared 2FA remains a
+> sensitive operational workflow. Treat shared credentials as high-value secrets.
 
-- **Encryption**: Secrets are currently stored in **plaintext** in the SQLite database. Encryption at rest is planned for a future release.
+- **Encryption**: TOTP secrets and backup keys are encrypted at rest with the
+  repository's AES-256-GCM encryption helper.
 - **Delivery**: Codes are delivered via Direct Message (DM). Ensure your Discord account is secure.
 - **Access Control**: Currently, `shared:True` accounts are visible to **all** users who can use the bot. Granular ACLs are coming soon.
+- **Passkeys**: WebAuthn/passkey credentials must not be treated as
+  server-generated codes. See the design doc before adding implementation.
 
 ## Environment
 
