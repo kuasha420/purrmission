@@ -12,20 +12,11 @@ keys at the edge and preserving local user verification.
 
 ## Current Private Repo State
 
-`purrfectsoft/purrmission` is reachable through the GitHub connector and appears
-empty. The local `gh` token is currently invalid, so the repo still needs a real
-authenticated git seed from the OSS checkout before sprint implementation starts.
+`purrfectsoft/purrmission` has been seeded from the OSS checkout and now carries
+the experimental planning docs. The local remote name is `purrfectsoft`.
 
-Recommended seed command once GitHub auth is repaired:
-
-```bash
-gh auth login -h github.com
-git remote add purrfectsoft git@github.com:purrfectsoft/purrmission.git
-git push purrfectsoft master:master
-```
-
-If SSH auth is not available, use the HTTPS remote shown by GitHub for the
-private repository.
+The soft-fork workflow is documented in
+[Passkey Soft-Fork Workflow](../internal/passkey-soft-fork-workflow.md).
 
 ## Milestones
 
