@@ -23,7 +23,8 @@ purrmission/
 ├── apps/
 │   ├── purrmission-bot/       # Main Discord bot & Fastify API server
 │   │   ├── src/
-│   │   │   ├── commands/      # Slash command handlers
+│   │   │   ├── discord/       # Discord handlers, client & slash commands
+│   │   │   │   └── commands/  # Slash command definitions
 │   │   │   ├── domain/        # Core logic: models, repositories, and services
 │   │   │   ├── http/          # Fastify server router & endpoints
 │   │   │   └── logging/       # Shared logger instance

@@ -8,8 +8,8 @@ trigger: always_on
 
 Welcome! To start work in this workspace:
 
-- Familiarize yourself with the project structure and tech stack in [overview.md](file:///home/kuasha/Dev/purrmission/.agent/rules/overview.md).
-- Read and follow the branching, coding, and safety guidelines in [development.md](file:///home/kuasha/Dev/purrmission/.agent/rules/development.md).
+- Familiarize yourself with the project structure and tech stack in [overview.md](./overview.md).
+- Read and follow the branching, coding, and safety guidelines in [development.md](./development.md).
 - Explicitly locate target files using directory search tools before editing.
 
 ---

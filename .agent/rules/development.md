@@ -16,10 +16,10 @@ trigger: always_on
 - **Strict TypeScript**: Do not use `any`. Use `unknown` with type guards.
 - **ES Modules (ESM)**: All imports must end with `.js` extensions (even for `.ts` files).
 - **Architecture & Layering**: Follow the Domain-Repository-Service architecture:
-  - Domain logic in `src/domain/`.
-  - Data persistence strictly encapsulated in repositories under `src/domain/repositories.ts` (Prisma implementations). Never access the database directly in routes/commands.
-  - API handlers in `src/http/`.
-  - Discord slash commands in `src/discord/commands/`.
+  - Domain logic in `apps/purrmission-bot/src/domain/`.
+  - Data persistence strictly encapsulated in repositories under `apps/purrmission-bot/src/domain/repositories.ts` (Prisma implementations). Never access the database directly in routes/commands.
+  - API handlers in `apps/purrmission-bot/src/http/`.
+  - Discord slash commands in `apps/purrmission-bot/src/discord/commands/`.
   - Services injected via the `Services` container.
 - **Validation**: Use Zod for all input validation (API request schemas, slash command inputs).
 - **Async/Await**: Use for all I/O and Discord API calls. Implement proper try/catch error handling.
@@ -36,12 +36,13 @@ Create `apps/purrmission-bot/src/discord/commands/mycommand.ts` using this boile
 ```typescript
 import { SlashCommandBuilder, ChatInputCommandInteraction } from 'discord.js';
 import { Command } from '../types/command.js';
+import type { Services } from '../../domain/services.js';
 
 export const data = new SlashCommandBuilder()
   .setName('mycommand')
   .setDescription('Boilerplate desc');
 
-export async function execute(interaction: ChatInputCommandInteraction) {
+export async function execute(interaction: ChatInputCommandInteraction, services: Services) {
   await interaction.reply('Hello World!');
 }
 
