@@ -2,88 +2,67 @@
 trigger: always_on
 ---
 
-# Development Workflows
+# 🛠️ Development Standards & Workflows
 
-## Common Tasks
+## 🛡️ Guardrails & Safety First
 
-### Adding a New Command
-1. Create file in `apps/purrmission-bot/src/commands/` (e.g., `mycommand.ts`)
-2. Use this boilerplate:
-   ```typescript
-   import { SlashCommandBuilder, ChatInputCommandInteraction } from "discord.js";
-   import { Command } from "../types/command.js";
+1. **Branching Strategy**: **NEVER** commit directly to `main` or `master`. Always create feature (`feat/`), bugfix (`fix/`), or chore (`chore/`) branches.
+2. **Environment & Sync**: Run `git status` to ensure a clean slate before any commits. Propose gitignoring newly discovered temporary files instead of committing them.
+3. **Dependencies & CVEs**: Do not install npm packages without approval. Run `pnpm audit` before upgrades/additions to check for vulnerability alerts.
+4. **Fail Early**: Stop execution immediately on any non-zero exit code. Never ignore lint, test, or build errors.
 
-   export const data = new SlashCommandBuilder()
-     .setName("mycommand")
-     .setDescription("Does something cool");
+## 📝 Code Standards & TypeScript Guidelines
 
-   export async function execute(interaction: ChatInputCommandInteraction) {
-     await interaction.reply("Hello!");
-   }
+- **Strict TypeScript**: Do not use `any`. Use `unknown` with type guards.
+- **ES Modules (ESM)**: All imports must end with `.js` extensions (even for `.ts` files).
+- **Architecture & Layering**: Follow the Domain-Repository-Service architecture:
+  - Domain logic in `apps/purrmission-bot/src/domain/`.
+  - Data persistence strictly encapsulated in repositories under `apps/purrmission-bot/src/domain/repositories.ts` (Prisma implementations). Never access the database directly in routes/commands.
+  - API handlers in `apps/purrmission-bot/src/http/`.
+  - Discord slash commands in `apps/purrmission-bot/src/discord/commands/`.
+  - Services injected via the `Services` container.
+- **Validation**: Use Zod for all input validation (API request schemas, slash command inputs).
+- **Async/Await**: Use for all I/O and Discord API calls. Implement proper try/catch error handling.
+- **Error Handling**: Use domain-specific custom error classes and type guards for narrowing. Log errors via the shared logger; do not use `console.log`.
 
-   export default { data, execute } satisfies Command;
-   ```
-3. Add to command index if needed
-4. Run `pnpm discord:deploy-commands` to register with Discord
-5. Restart the bot
+---
 
-### Modifying Domain Logic
-- Edit files in `apps/purrmission-bot/src/domain/`
-- Update models in `models.ts`
-- **Database**:
-    - Update `prisma/schema.prisma` if model structure changes
-    - Run `pnpm prisma migrate dev --name <change_name>` to generate and apply migrations
-    - Run `pnpm prisma generate` to update the client
-- Update repository interfaces in `repositories.ts`
-- Implement changes in repository implementations (Prisma)
-- Update TOTP logic in `totp.ts`
+## 🚀 Key Workflows
 
-### Adding API Endpoints
-1. Add route to `apps/purrmission-bot/src/api/server.ts`
-2. Define Zod schema for validation
-3. Implement handler with proper error handling
-4. Test with curl or Postman
+### 1. Adding a Slash Command
 
-## Code Standards
+Create `apps/purrmission-bot/src/discord/commands/mycommand.ts` using this boilerplate:
 
-### TypeScript
-- Strict mode enabled
-- Explicit type annotations required
-- Avoid `any` types (use `unknown` with type guards)
-- Use defined interfaces for type safety
-- File extensions (`.js`) required in imports (ESM)
+```typescript
+import { SlashCommandBuilder, ChatInputCommandInteraction } from 'discord.js';
+import { Command } from '../types/command.js';
+import type { Services } from '../../domain/services.js';
 
-### Error Handling
-- Use custom error classes for domain-specific errors
-- Add type guards for runtime validation
-- Log errors with logger, not `console.error()`
-- Provide user-friendly error messages
+export const data = new SlashCommandBuilder()
+  .setName('mycommand')
+  .setDescription('Boilerplate desc');
 
-### Async/Await
-- Used for all Discord API calls and file I/O
-- Proper error handling in try-catch blocks
-- Avoid callback-based patterns
+export async function execute(interaction: ChatInputCommandInteraction, services: Services) {
+  await interaction.reply('Hello World!');
+}
 
-### Import Patterns
-- ES Modules only (`import`/`export`)
-- Use `.js` extensions even for `.ts` files
-- Organize imports: external → internal → types
-
-## Testing
-
-### Running Tests
-We use the Node.js native test runner (`node:test`) with `tsx`.
-
-```bash
-# Run all tests
-pnpm test
-
-# Run a specific test file
-node --import tsx --test apps/purrmission-bot/src/domain/totp.test.ts
+export default { data, execute } satisfies Command;
 ```
 
-### Writing Tests
-- Use `node:test` module (`test`, `describe`, `it`)
-- Use `node:assert` for assertions
-- Mock external dependencies (Discord.js, Prisma) where appropriate
-- Place test files next to source files (e.g., `totp.test.ts` next to `totp.ts`)
+After creating, run `pnpm discord:deploy-commands` to register it with Discord.
+
+### 2. Modifying DB Schemas & Domain Logic
+
+- Edit `prisma/schema.prisma` if schema changes.
+- Run `pnpm prisma:migrate:dev` to generate and apply migrations.
+- Run `pnpm prisma:generate` to update the Prisma Client.
+- Update interfaces and classes under `src/domain/repositories.ts`.
+
+### 3. Verification & Testing
+
+We use Node.js's native test runner (`node:test`) with `tsx`. Place tests adjacent to the source code (e.g., `totp.test.ts` next to `totp.ts`).
+
+- **Run all tests**: `pnpm test`
+- **Run specific test file**: `node --import tsx --test apps/purrmission-bot/src/domain/totp.test.ts`
+- **Format codebase**: `pnpm format`
+- **Lint codebase**: `pnpm lint`
