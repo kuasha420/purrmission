@@ -165,9 +165,9 @@ describe('handleResourceAutocomplete', () => {
   });
 
   it('should cap /resource register names at 100 characters', () => {
-    const registerOption = resourceCommand
-      .toJSON()
-      .options?.find((option: any) => option.name === 'register');
+    const registerOption = (resourceCommand.toJSON() as any).options?.find(
+      (option: any) => option.name === 'register'
+    );
     const nameOption = registerOption?.options?.find((option: any) => option.name === 'name');
 
     assert.strictEqual(nameOption?.max_length, 100);

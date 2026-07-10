@@ -37,7 +37,7 @@ describe('ProjectService', () => {
       createResource: createResourceMock,
     };
 
-    projectService = new ProjectService(projectRepo, resourceService);
+    projectService = new ProjectService(projectRepo as any, resourceService);
   });
 
   it('should create a project', async () => {
