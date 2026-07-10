@@ -389,7 +389,7 @@ describe('Credential Sync Logic Smoke Test', () => {
       slug: 'dev',
       projectId: project.id,
     });
-    const resourceId = env.resourceId;
+    const resourceId = env.resourceId!;
 
     // Create approval request with default expiration (24h)
     const result = await services.approval.createApprovalRequest({

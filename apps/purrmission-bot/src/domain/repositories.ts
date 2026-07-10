@@ -7,7 +7,7 @@
  *
  * TODO: Replace in-memory implementations with Postgres/Prisma for production.
  */
-import type { PrismaClient } from '@prisma/client';
+import { type PrismaClient, Prisma } from '@prisma/client';
 
 import { decryptValue, encryptValue } from '../infra/crypto.js';
 import { logger } from '../logging/logger.js';
@@ -235,7 +235,7 @@ export class PrismaResourceRepository implements ResourceRepository {
               name: {
                 contains: query,
                 mode: 'insensitive',
-              },
+              } as any,
             }
           : {}),
       },
