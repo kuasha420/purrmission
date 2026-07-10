@@ -18,7 +18,7 @@ const mockDiscordClient = {
 } as unknown as Client;
 
 describe('System API E2E Tests', () => {
-  let server: FastifyInstance | undefined;
+  let server: FastifyInstance;
 
   // Shared mock implementations that tests can override
   const mockVerifyApiKey = { fn: async (_apiKey: string): Promise<any> => null };
