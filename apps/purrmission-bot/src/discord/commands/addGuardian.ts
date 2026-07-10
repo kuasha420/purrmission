@@ -41,7 +41,7 @@ export async function handleAddGuardian(
   // }
 
   try {
-    const result = await services.resource.addGuardian(resourceId, targetUser.id);
+    const result = await services.resource.addGuardian(resourceId, targetUser.id, callerId);
 
     if (!result.success) {
       await interaction.reply({

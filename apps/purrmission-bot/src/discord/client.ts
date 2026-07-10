@@ -21,6 +21,7 @@ import { handleSlashCommand, handleAutocomplete } from './commands/index.js';
 import { handleApprovalButton } from './interactions/approvalButtons.js';
 
 import type { Repositories } from '../domain/repositories.js';
+import { getGuardedResourcesForUser } from '../domain/policy.js';
 
 /**
  * Dependencies for the Discord client.
@@ -169,33 +170,18 @@ export function createDiscordClient(deps: DiscordClientDeps): Client {
         const userId = message.author.id;
 
         // Fetch resources guarded by this user
-        const guardianships = await deps.repositories.guardians.findByUserId(userId);
-
-        // Deduplicate resource IDs
-        const resourceIds = Array.from(new Set(guardianships.map((g) => g.resourceId)));
+        const validResources = await getGuardedResourcesForUser(deps.repositories, userId);
+        const resourceIds = validResources.map((r) => r.id);
 
         let guardedList = '_None. You are not registered as a guardian for any resources._';
         let pendingList = '_No pending approval requests waiting for you._';
 
-        if (resourceIds.length > 0) {
-          // Fetch resources details
-          const resources = await Promise.all(
-            resourceIds.map(async (id) => {
-              const res = await deps.repositories.resources.findById(id);
-              return res;
-            })
-          );
-
-          // Use type guard to safely filter and narrow type
-          const validResources = resources.filter((r): r is NonNullable<typeof r> => !!r);
-
+        if (validResources.length > 0) {
           const maxDisplay = 15;
-          if (validResources.length > 0) {
-            const displayedResources = validResources.slice(0, maxDisplay);
-            guardedList = displayedResources.map((r) => `- **${r.name}** (\`${r.id}\`)`).join('\n');
-            if (validResources.length > maxDisplay) {
-              guardedList += `\n_...and ${validResources.length - maxDisplay} more resources_`;
-            }
+          const displayedResources = validResources.slice(0, maxDisplay);
+          guardedList = displayedResources.map((r) => `- **${r.name}** (\`${r.id}\`)`).join('\n');
+          if (validResources.length > maxDisplay) {
+            guardedList += `\n_...and ${validResources.length - maxDisplay} more resources_`;
           }
 
           // Fetch pending approval requests for these resources

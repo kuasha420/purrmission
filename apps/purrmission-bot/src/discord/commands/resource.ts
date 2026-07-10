@@ -21,7 +21,12 @@ import {
   createAccessRequestEmbed,
 } from '../interactions/approvalButtons.js';
 import { rateLimiter } from '../../infra/rateLimit.js';
-import { checkAccessPolicy, requiresApproval } from '../../domain/policy.js';
+import {
+  checkAccessPolicy,
+  requiresApproval,
+  getEffectiveGuardians,
+  isEffectiveGuardian,
+} from '../../domain/policy.js';
 import { handleResourceIdAutocomplete } from './resourceAutocomplete.js';
 
 const MAX_RESOURCE_NAME_LENGTH = 100;
@@ -340,9 +345,7 @@ async function isOwnerOrGuardian(
   resourceId: string,
   discordUserId: string
 ): Promise<boolean> {
-  const { guardians } = context.repositories;
-  const guardian = await guardians.findByResourceAndUser(resourceId, discordUserId);
-  return guardian !== null;
+  return isEffectiveGuardian(context.repositories, resourceId, discordUserId);
 }
 
 /**
@@ -637,7 +640,7 @@ async function handleFieldsGet(
   }
 
   // Check access policy
-  const guardians = await context.repositories.guardians.findByResourceId(resourceId);
+  const guardians = await getEffectiveGuardians(context.repositories, resourceId);
   const accessResult = await checkAccessPolicy(resource, guardians, userId, context.repositories);
 
   if (requiresApproval(accessResult)) {
@@ -952,7 +955,7 @@ async function handleGet2FA(
   }
 
   // Check access policy
-  const guardians = await context.repositories.guardians.findByResourceId(resourceId);
+  const guardians = await getEffectiveGuardians(context.repositories, resourceId);
   const accessResult = await checkAccessPolicy(resource, guardians, userId, context.repositories);
 
   if (requiresApproval(accessResult)) {

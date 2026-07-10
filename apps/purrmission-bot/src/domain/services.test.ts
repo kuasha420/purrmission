@@ -35,6 +35,9 @@ describe('ResourceService', () => {
     mockRepositories = {
       guardians: mockGuardianRepo as GuardianRepository,
       resources: mockResourceRepo as ResourceRepository,
+      projects: {
+        findEnvironmentByResourceId: mock.fn(async () => null),
+      } as any,
     } as Repositories;
 
     const deps: ServiceDependencies = { repositories: mockRepositories };
@@ -211,6 +214,9 @@ describe('ApprovalService', () => {
       approvalRequests: mockApprovalRepo as ApprovalRequestRepository,
       resources: mockResourceRepo as ResourceRepository,
       guardians: mockGuardianRepo as GuardianRepository,
+      projects: {
+        findEnvironmentByResourceId: mock.fn(async () => null),
+      } as any,
     } as Repositories;
 
     const deps: ServiceDependencies = { repositories: mockRepositories };

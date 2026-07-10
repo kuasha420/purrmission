@@ -8,6 +8,7 @@
  * TODO: Replace in-memory implementations with Postgres/Prisma for production.
  */
 import type { PrismaClient } from '@prisma/client';
+import { Prisma } from '@prisma/client';
 
 import { decryptValue, encryptValue } from '../infra/crypto.js';
 import { logger } from '../logging/logger.js';
@@ -227,18 +228,17 @@ export class PrismaResourceRepository implements ResourceRepository {
   }
 
   async findManyByIds(ids: string[], query?: string): Promise<Resource[]> {
+    const where: any = {
+      id: { in: ids },
+    };
+    if (query) {
+      where.name = {
+        contains: query,
+        mode: 'insensitive',
+      };
+    }
     const rows = await this.prisma.resource.findMany({
-      where: {
-        id: { in: ids },
-        ...(query
-          ? {
-              name: {
-                contains: query,
-                mode: 'insensitive',
-              },
-            }
-          : {}),
-      },
+      where,
     });
     return rows.map((row) => this.mapPrismaToDomain(row));
   }
@@ -850,11 +850,13 @@ export interface ProjectRepository {
   listEnvironments(projectId: string): Promise<Environment[]>;
   findEnvironment(projectId: string, slug: string): Promise<Environment | null>;
   getEnvironmentById(projectId: string, envId: string): Promise<Environment | null>;
+  findEnvironmentByResourceId(resourceId: string): Promise<Environment | null>;
 
   addMember(input: CreateProjectMemberInput): Promise<ProjectMember>;
   removeMember(projectId: string, userId: string): Promise<void>;
   getMemberRole(projectId: string, userId: string): Promise<ProjectMemberRole | null>;
   listMembers(projectId: string): Promise<ProjectMember[]>;
+  listMembershipsByUser(userId: string): Promise<ProjectMember[]>;
 }
 
 export class PrismaAuthRepository implements AuthRepository {
@@ -1159,6 +1161,28 @@ export class PrismaProjectRepository implements ProjectRepository {
       orderBy: { createdAt: 'desc' },
     });
     return members.map((m) => ({
+      ...m,
+      role: m.role as ProjectMemberRole,
+    }));
+  }
+
+  async findEnvironmentByResourceId(resourceId: string): Promise<Environment | null> {
+    const row = await this.prisma.environment.findUnique({
+      where: { resourceId },
+    });
+    if (!row) return null;
+    return {
+      ...row,
+      resourceId: row.resourceId ?? undefined,
+    };
+  }
+
+  async listMembershipsByUser(userId: string): Promise<ProjectMember[]> {
+    const memberships = await this.prisma.projectMember.findMany({
+      where: { userId },
+      orderBy: { createdAt: 'desc' },
+    });
+    return memberships.map((m) => ({
       ...m,
       role: m.role as ProjectMemberRole,
     }));

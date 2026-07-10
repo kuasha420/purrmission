@@ -1,6 +1,13 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { checkAccessPolicy, requiresApproval } from './policy.js';
+import {
+  checkAccessPolicy,
+  requiresApproval,
+  getEffectiveGuardians,
+  isEffectiveGuardian,
+  getGuardedResourcesForUser,
+  isEffectiveOwner,
+} from './policy.js';
 import type { Resource, Guardian, ApprovalRequest } from './models.js';
 import type { Repositories, ApprovalRequestRepository } from './repositories.js';
 
@@ -144,5 +151,215 @@ describe('Access Policy', () => {
     );
     assert.equal(result.allowed, false);
     assert.equal(result.requiresApproval, true);
+  });
+
+  describe('Effective Guardians and Unified Permissions', () => {
+    const mockRes1: Resource = {
+      id: 'env-res-1',
+      name: 'Project1:dev',
+      mode: 'ONE_OF_N',
+      apiKey: 'key1',
+      createdAt: new Date(),
+    };
+
+    const mockRes2: Resource = {
+      id: 'standalone-res-1',
+      name: 'Standalone Res',
+      mode: 'ONE_OF_N',
+      apiKey: 'key2',
+      createdAt: new Date(),
+    };
+
+    const projectOwnerId = 'user-project-owner';
+    const writerMemberId = 'user-project-writer';
+    const readerMemberId = 'user-project-reader';
+    const explicitGuardianId = 'user-explicit-guardian';
+
+    const mockProject = {
+      id: 'project-1',
+      name: 'Project 1',
+      ownerId: projectOwnerId,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    };
+
+    const mockEnv = {
+      id: 'env-1',
+      name: 'Dev',
+      slug: 'dev',
+      projectId: 'project-1',
+      resourceId: 'env-res-1',
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    };
+
+    const mockExplicitGuardian: Guardian = {
+      id: 'g-explicit',
+      resourceId: 'env-res-1',
+      discordUserId: explicitGuardianId,
+      role: 'GUARDIAN',
+      createdAt: new Date(),
+    };
+
+    const mockRepos = {
+      guardians: {
+        findByResourceId: async (resId: string) => {
+          if (resId === 'env-res-1') return [mockExplicitGuardian];
+          return [];
+        },
+        findByUserId: async (userId: string) => {
+          if (userId === explicitGuardianId) return [mockExplicitGuardian];
+          return [];
+        },
+        findByResourceAndUser: async (resId: string, userId: string) => {
+          if (resId === 'env-res-1' && userId === explicitGuardianId) return mockExplicitGuardian;
+          return null;
+        },
+      },
+      projects: {
+        findEnvironmentByResourceId: async (resId: string) => {
+          if (resId === 'env-res-1') return mockEnv;
+          return null;
+        },
+        findById: async (projId: string) => {
+          if (projId === 'project-1') return mockProject;
+          return null;
+        },
+        listMembers: async (projId: string) => {
+          if (projId === 'project-1') {
+            return [
+              {
+                id: 'm-writer',
+                projectId: 'project-1',
+                userId: writerMemberId,
+                role: 'WRITER',
+                addedBy: 'owner',
+                createdAt: new Date(),
+                updatedAt: new Date(),
+              },
+              {
+                id: 'm-reader',
+                projectId: 'project-1',
+                userId: readerMemberId,
+                role: 'READER',
+                addedBy: 'owner',
+                createdAt: new Date(),
+                updatedAt: new Date(),
+              },
+            ];
+          }
+          return [];
+        },
+        listEnvironments: async (projId: string) => {
+          if (projId === 'project-1') return [mockEnv];
+          return [];
+        },
+        listProjectsByOwner: async (ownerId: string) => {
+          if (ownerId === projectOwnerId) return [mockProject];
+          return [];
+        },
+        listMembershipsByUser: async (userId: string) => {
+          if (userId === writerMemberId) {
+            return [
+              {
+                id: 'm-writer',
+                projectId: 'project-1',
+                userId: writerMemberId,
+                role: 'WRITER',
+                addedBy: 'owner',
+                createdAt: new Date(),
+                updatedAt: new Date(),
+              },
+            ];
+          }
+          if (userId === readerMemberId) {
+            return [
+              {
+                id: 'm-reader',
+                projectId: 'project-1',
+                userId: readerMemberId,
+                role: 'READER',
+                addedBy: 'owner',
+                createdAt: new Date(),
+                updatedAt: new Date(),
+              },
+            ];
+          }
+          return [];
+        },
+        getMemberRole: async (projId: string, userId: string) => {
+          if (projId === 'project-1') {
+            if (userId === writerMemberId) return 'WRITER';
+            if (userId === readerMemberId) return 'READER';
+          }
+          return null;
+        },
+      },
+      resources: {
+        findManyByIds: async (ids: string[]) => {
+          const resList = [];
+          if (ids.includes('env-res-1')) resList.push(mockRes1);
+          if (ids.includes('standalone-res-1')) resList.push(mockRes2);
+          return resList;
+        },
+        findById: async (id: string) => {
+          if (id === 'env-res-1') return mockRes1;
+          if (id === 'standalone-res-1') return mockRes2;
+          return null;
+        },
+      },
+    } as unknown as Repositories;
+
+    it('should resolve effective guardians containing explicit, project owner, and writer member', async () => {
+      const guardians = await getEffectiveGuardians(mockRepos, 'env-res-1');
+      assert.equal(guardians.length, 3);
+
+      const explicit = guardians.find((g) => g.discordUserId === explicitGuardianId);
+      assert.ok(explicit);
+      assert.equal(explicit.role, 'GUARDIAN');
+
+      const owner = guardians.find((g) => g.discordUserId === projectOwnerId);
+      assert.ok(owner);
+      assert.equal(owner.role, 'OWNER');
+
+      const writer = guardians.find((g) => g.discordUserId === writerMemberId);
+      assert.ok(writer);
+      assert.equal(writer.role, 'GUARDIAN');
+
+      const reader = guardians.find((g) => g.discordUserId === readerMemberId);
+      assert.equal(reader, undefined);
+    });
+
+    it('should correctly evaluate isEffectiveGuardian', async () => {
+      assert.equal(await isEffectiveGuardian(mockRepos, 'env-res-1', projectOwnerId), true);
+      assert.equal(await isEffectiveGuardian(mockRepos, 'env-res-1', writerMemberId), true);
+      assert.equal(await isEffectiveGuardian(mockRepos, 'env-res-1', explicitGuardianId), true);
+      assert.equal(await isEffectiveGuardian(mockRepos, 'env-res-1', readerMemberId), false);
+      assert.equal(await isEffectiveGuardian(mockRepos, 'env-res-1', 'random-user'), false);
+    });
+
+    it('should retrieve correctly guarded resources for users', async () => {
+      const ownerResources = await getGuardedResourcesForUser(mockRepos, projectOwnerId);
+      assert.equal(ownerResources.length, 1);
+      assert.equal(ownerResources[0].id, 'env-res-1');
+
+      const writerResources = await getGuardedResourcesForUser(mockRepos, writerMemberId);
+      assert.equal(writerResources.length, 1);
+      assert.equal(writerResources[0].id, 'env-res-1');
+
+      const explicitResources = await getGuardedResourcesForUser(mockRepos, explicitGuardianId);
+      assert.equal(explicitResources.length, 1);
+      assert.equal(explicitResources[0].id, 'env-res-1');
+
+      const readerResources = await getGuardedResourcesForUser(mockRepos, readerMemberId);
+      assert.equal(readerResources.length, 0);
+    });
+
+    it('should correctly evaluate isEffectiveOwner', async () => {
+      assert.equal(await isEffectiveOwner(mockRepos, 'env-res-1', projectOwnerId), true);
+      assert.equal(await isEffectiveOwner(mockRepos, 'env-res-1', explicitGuardianId), false); // explicit but role is GUARDIAN
+      assert.equal(await isEffectiveOwner(mockRepos, 'env-res-1', writerMemberId), false);
+      assert.equal(await isEffectiveOwner(mockRepos, 'env-res-1', readerMemberId), false);
+    });
   });
 });
