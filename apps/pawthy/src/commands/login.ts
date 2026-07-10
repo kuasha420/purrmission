@@ -42,7 +42,7 @@ export const loginCommand = new Command('login')
       console.log('Waiting for approval...');
 
       // 3. Poll for Token
-      const pollInterval = (interval || 5) * 1000;
+      let pollInterval = (interval || 5) * 1000;
       const expiresInMs = (initResponse.data.expires_in || 1800) * 1000;
       const startTime = Date.now();
 
@@ -81,7 +81,8 @@ export const loginCommand = new Command('login')
               setTimeout(poll, pollInterval);
             } else if (errorCode === 'slow_down') {
               // Slow down
-              setTimeout(poll, pollInterval * 2);
+              pollInterval += 5000;
+              setTimeout(poll, pollInterval);
             } else if (errorCode === 'expired_token') {
               console.error(chalk.red('\nSession expired. Please try again.'));
               process.exit(1);
@@ -93,8 +94,8 @@ export const loginCommand = new Command('login')
               process.exit(1);
             }
           } else {
-            console.error(chalk.red('\nNetwork error during polling.'));
-            process.exit(1);
+            console.log(chalk.yellow('\nNetwork error during polling. Retrying...'));
+            setTimeout(poll, pollInterval);
           }
         }
       };
