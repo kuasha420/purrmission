@@ -355,6 +355,29 @@ describe('Access Policy', () => {
       assert.equal(readerResources.length, 0);
     });
 
+    it('should upgrade project owner to OWNER role even if explicitly registered as GUARDIAN', async () => {
+      const explicitGuardianWithOwnerId: Guardian = {
+        id: 'g-owner-explicit',
+        resourceId: 'env-res-1',
+        discordUserId: projectOwnerId,
+        role: 'GUARDIAN', // Lower privilege role
+        createdAt: new Date(),
+      };
+
+      const customRepos = {
+        ...mockRepos,
+        guardians: {
+          ...mockRepos.guardians,
+          findByResourceId: async () => [explicitGuardianWithOwnerId],
+        },
+      } as unknown as Repositories;
+
+      const guardians = await getEffectiveGuardians(customRepos, 'env-res-1');
+      const owner = guardians.find((g) => g.discordUserId === projectOwnerId);
+      assert.ok(owner);
+      assert.equal(owner.role, 'OWNER', 'Should be upgraded to OWNER role');
+    });
+
     it('should correctly evaluate isEffectiveOwner', async () => {
       assert.equal(await isEffectiveOwner(mockRepos, 'env-res-1', projectOwnerId), true);
       assert.equal(await isEffectiveOwner(mockRepos, 'env-res-1', explicitGuardianId), false); // explicit but role is GUARDIAN

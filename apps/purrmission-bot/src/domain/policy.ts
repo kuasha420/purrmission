@@ -98,8 +98,9 @@ export async function getEffectiveGuardians(
   if (environment) {
     const project = await repositories.projects.findById(environment.projectId);
     if (project) {
-      // Project owner -> OWNER role
-      if (!guardianMap.has(project.ownerId)) {
+      // Project owner -> OWNER role (upgrade if they only have GUARDIAN role explicitly)
+      const existingOwner = guardianMap.get(project.ownerId);
+      if (!existingOwner || existingOwner.role !== 'OWNER') {
         guardianMap.set(project.ownerId, {
           id: `project-owner-${project.id}-${project.ownerId}`,
           resourceId,
@@ -199,37 +200,39 @@ export async function getGuardedResourcesForUser(
 
   // 1. Get explicit guarded resources
   const explicitGuardians = await repositories.guardians.findByUserId(userId);
-  if (explicitGuardians && explicitGuardians.length > 0) {
-    const resourceIds = explicitGuardians
-      .map((g) => g.resourceId)
-      .filter((id): id is string => !!id);
-    if (resourceIds.length > 0) {
-      const explicitResources = await repositories.resources.findManyByIds(resourceIds);
-      explicitResources.forEach((r) => resourceMap.set(r.id, r));
-    }
-  }
+  const explicitResourceIds = explicitGuardians
+    ? explicitGuardians.map((g) => g.resourceId).filter((id): id is string => !!id)
+    : [];
 
   // 2. Resolve resources inherited via project ownership
   const ownedProjects = await repositories.projects.listProjectsByOwner(userId);
-  for (const project of ownedProjects) {
-    const envs = await repositories.projects.listEnvironments(project.id);
-    const resourceIds = envs.map((e) => e.resourceId).filter((id): id is string => !!id);
-    if (resourceIds.length > 0) {
-      const projectResources = await repositories.resources.findManyByIds(resourceIds);
-      projectResources.forEach((r) => resourceMap.set(r.id, r));
-    }
-  }
+  const ownedProjectEnvironments = await Promise.all(
+    ownedProjects.map((project) => repositories.projects.listEnvironments(project.id))
+  );
+  const ownedResourceIds = ownedProjectEnvironments
+    .flat()
+    .map((e) => e.resourceId)
+    .filter((id): id is string => !!id);
 
   // 3. Resolve resources inherited via project writer role
   const memberships = await repositories.projects.listMembershipsByUser(userId);
   const writerProjectIds = memberships.filter((m) => m.role === 'WRITER').map((m) => m.projectId);
-  for (const projectId of writerProjectIds) {
-    const envs = await repositories.projects.listEnvironments(projectId);
-    const resourceIds = envs.map((e) => e.resourceId).filter((id): id is string => !!id);
-    if (resourceIds.length > 0) {
-      const projectResources = await repositories.resources.findManyByIds(resourceIds);
-      projectResources.forEach((r) => resourceMap.set(r.id, r));
-    }
+  const writerProjectEnvironments = await Promise.all(
+    writerProjectIds.map((projectId) => repositories.projects.listEnvironments(projectId))
+  );
+  const writerResourceIds = writerProjectEnvironments
+    .flat()
+    .map((e) => e.resourceId)
+    .filter((id): id is string => !!id);
+
+  // Combine all resource IDs and deduplicate before querying
+  const allResourceIds = Array.from(
+    new Set([...explicitResourceIds, ...ownedResourceIds, ...writerResourceIds])
+  );
+
+  if (allResourceIds.length > 0) {
+    const resources = await repositories.resources.findManyByIds(allResourceIds);
+    resources.forEach((r) => resourceMap.set(r.id, r));
   }
 
   return Array.from(resourceMap.values());
