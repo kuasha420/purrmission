@@ -91,11 +91,13 @@ export async function getEffectiveGuardians(
 
   // Use a map keyed by discordUserId to deduplicate/override
   const guardianMap = new Map<string, Guardian>();
-  explicitGuardians.forEach((g) => guardianMap.set(g.discordUserId || g.id, g));
+  explicitGuardians.forEach((g) => guardianMap.set(g.discordUserId, g));
 
   // 2. Check if resource is linked to an environment
-  const environment = await repositories.projects.findEnvironmentByResourceId(resourceId);
-  if (environment) {
+  const environment = repositories.projects
+    ? await repositories.projects.findEnvironmentByResourceId(resourceId)
+    : null;
+  if (environment && repositories.projects) {
     const project = await repositories.projects.findById(environment.projectId);
     if (project) {
       // Project owner -> OWNER role (upgrade if they only have GUARDIAN role explicitly)
@@ -139,14 +141,22 @@ export async function isEffectiveGuardian(
   userId: string
 ): Promise<boolean> {
   // 1. Check explicit guardians table for this user first
-  const explicitGuardian = await repositories.guardians.findByResourceAndUser(resourceId, userId);
+  let explicitGuardian = null;
+  if (repositories.guardians.findByResourceAndUser) {
+    explicitGuardian = await repositories.guardians.findByResourceAndUser(resourceId, userId);
+  } else if (repositories.guardians.findByUserId) {
+    const list = await repositories.guardians.findByUserId(userId);
+    explicitGuardian = list.find((g) => g.resourceId === resourceId) || null;
+  }
   if (explicitGuardian) {
     return true;
   }
 
   // 2. Resolve other effective guardians (project owner, project writer)
-  const environment = await repositories.projects.findEnvironmentByResourceId(resourceId);
-  if (environment) {
+  const environment = repositories.projects
+    ? await repositories.projects.findEnvironmentByResourceId(resourceId)
+    : null;
+  if (environment && repositories.projects) {
     const project = await repositories.projects.findById(environment.projectId);
     if (project) {
       if (project.ownerId === userId) {
@@ -171,14 +181,22 @@ export async function isEffectiveOwner(
   userId: string
 ): Promise<boolean> {
   // 1. Check explicit guardians table for this user first
-  const explicitGuardian = await repositories.guardians.findByResourceAndUser(resourceId, userId);
+  let explicitGuardian = null;
+  if (repositories.guardians.findByResourceAndUser) {
+    explicitGuardian = await repositories.guardians.findByResourceAndUser(resourceId, userId);
+  } else if (repositories.guardians.findByUserId) {
+    const list = await repositories.guardians.findByUserId(userId);
+    explicitGuardian = list.find((g) => g.resourceId === resourceId) || null;
+  }
   if (explicitGuardian && explicitGuardian.role === 'OWNER') {
     return true;
   }
 
   // 2. Resolve other effective guardians (project owner)
-  const environment = await repositories.projects.findEnvironmentByResourceId(resourceId);
-  if (environment) {
+  const environment = repositories.projects
+    ? await repositories.projects.findEnvironmentByResourceId(resourceId)
+    : null;
+  if (environment && repositories.projects) {
     const project = await repositories.projects.findById(environment.projectId);
     if (project && project.ownerId === userId) {
       return true;
@@ -193,7 +211,8 @@ export async function isEffectiveOwner(
  */
 export async function getGuardedResourcesForUser(
   repositories: Repositories,
-  userId: string
+  userId: string,
+  query?: string
 ): Promise<Resource[]> {
   // Use a Map keyed by resourceId to deduplicate
   const resourceMap = new Map<string, Resource>();
@@ -205,7 +224,9 @@ export async function getGuardedResourcesForUser(
     : [];
 
   // 2. Resolve resources inherited via project ownership
-  const ownedProjects = await repositories.projects.listProjectsByOwner(userId);
+  const ownedProjects = repositories.projects
+    ? await repositories.projects.listProjectsByOwner(userId)
+    : [];
   const ownedProjectEnvironments = await Promise.all(
     ownedProjects.map((project) => repositories.projects.listEnvironments(project.id))
   );
@@ -215,7 +236,9 @@ export async function getGuardedResourcesForUser(
     .filter((id): id is string => !!id);
 
   // 3. Resolve resources inherited via project writer role
-  const memberships = await repositories.projects.listMembershipsByUser(userId);
+  const memberships = repositories.projects
+    ? await repositories.projects.listMembershipsByUser(userId)
+    : [];
   const writerProjectIds = memberships.filter((m) => m.role === 'WRITER').map((m) => m.projectId);
   const writerProjectEnvironments = await Promise.all(
     writerProjectIds.map((projectId) => repositories.projects.listEnvironments(projectId))
@@ -231,7 +254,7 @@ export async function getGuardedResourcesForUser(
   );
 
   if (allResourceIds.length > 0) {
-    const resources = await repositories.resources.findManyByIds(allResourceIds);
+    const resources = await repositories.resources.findManyByIds(allResourceIds, query);
     resources.forEach((r) => resourceMap.set(r.id, r));
   }
 

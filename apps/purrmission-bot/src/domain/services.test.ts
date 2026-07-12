@@ -101,6 +101,37 @@ describe('ResourceService', () => {
       assert.strictEqual((mockGuardianRepo.remove as any).mock.calls.length, 0);
     });
 
+    it('should fail with custom error if target is a dynamic guardian', async () => {
+      // Mock Actor is Owner, Target is not in guardians table but is in projects membership
+      (mockGuardianRepo.findByResourceAndUser as any).mock.mockImplementation(
+        async (_rid: string, uid: string) => {
+          if (uid === ownerId)
+            return { id: 'g1', role: 'OWNER', discordUserId: ownerId } as Guardian;
+          return null;
+        }
+      );
+
+      const customProjectsRepo = {
+        findEnvironmentByResourceId: mock.fn(async () => ({ projectId: 'p-1' })),
+        findById: mock.fn(async () => ({ id: 'p-1', ownerId: 'some-other-owner' })),
+        getMemberRole: mock.fn(async () => 'WRITER'),
+      };
+
+      const customRepos = {
+        ...mockRepositories,
+        projects: customProjectsRepo,
+      } as any;
+
+      const customDeps: ServiceDependencies = { repositories: customRepos };
+      const customService = new ResourceService(customDeps);
+
+      const result = await customService.removeGuardian(resourceId, ownerId, otherId);
+
+      assert.strictEqual(result.success, false);
+      assert.match(result.error!, /inherit guardian status/);
+      assert.strictEqual((mockGuardianRepo.remove as any).mock.calls.length, 0);
+    });
+
     it('should fail if target is owner', async () => {
       // Mock Actor is Owner, Target is Owner
       (mockGuardianRepo.findByResourceAndUser as any).mock.mockImplementation(
@@ -134,8 +165,8 @@ describe('ResourceService', () => {
 
       // Mock List return
       (mockGuardianRepo.findByResourceId as any).mock.mockImplementation(async () => [
-        { id: 'g1', role: 'OWNER' },
-        { id: 'g2', role: 'GUARDIAN' },
+        { id: 'g1', role: 'OWNER', discordUserId: 'owner-id' },
+        { id: 'g2', role: 'GUARDIAN', discordUserId: guardianId },
       ]);
 
       const result = await resourceService.listGuardians(resourceId, guardianId);

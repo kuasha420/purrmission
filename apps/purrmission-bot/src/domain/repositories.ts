@@ -227,19 +227,16 @@ export class PrismaResourceRepository implements ResourceRepository {
   }
 
   async findManyByIds(ids: string[], query?: string): Promise<Resource[]> {
-    const rows = await this.prisma.resource.findMany({
-      where: {
-        id: { in: ids },
-        ...(query
-          ? {
-              name: {
-                contains: query,
-                mode: 'insensitive',
-              } as any,
-            }
-          : {}),
-      },
-    });
+    const where: Prisma.ResourceWhereInput = {
+      id: { in: ids },
+    };
+    if (query) {
+      where.name = {
+        contains: query,
+        mode: 'insensitive',
+      } as any;
+    }
+    const rows = await this.prisma.resource.findMany({ where });
     return rows.map((row) => this.mapPrismaToDomain(row));
   }
 

@@ -421,6 +421,14 @@ export class ResourceService {
       targetUserId
     );
     if (!targetGuardian) {
+      const isDynamic = await isEffectiveGuardian(repositories, resourceId, targetUserId);
+      if (isDynamic) {
+        return {
+          success: false,
+          error:
+            'Cannot remove this user directly because they inherit guardian status from a project role (Project Owner or Writer member). Remove them from the project instead.',
+        };
+      }
       return { success: false, error: 'User is not a guardian of this resource.' };
     }
     if (targetGuardian.role === 'OWNER') {
