@@ -15,10 +15,13 @@ describe('Push Command', () => {
     exitCode = null;
 
     // Reset commander options to prevent test pollution
-    pushCommand.setOptionValue('file', '.env');
-    pushCommand.setOptionValue('force', undefined);
-    pushCommand.setOptionValue('projectId', undefined);
-    pushCommand.setOptionValue('envId', undefined);
+    pushCommand.setOptionValueWithSource('file', undefined, 'default');
+    pushCommand.setOptionValueWithSource('format', undefined, 'default');
+    pushCommand.setOptionValueWithSource('force', undefined, 'default');
+    pushCommand.setOptionValueWithSource('projectId', undefined, 'default');
+    pushCommand.setOptionValueWithSource('envId', undefined, 'default');
+    pushCommand.setOptionValueWithSource('keys', undefined, 'default');
+    pushCommand.setOptionValueWithSource('env', undefined, 'default');
     pushCommand.setOptionValue('keys', undefined);
 
     // Create a unique temp directory outside the repository
@@ -354,6 +357,111 @@ describe('Push Command', () => {
 
     assert.deepStrictEqual(pushedSecrets, {
       DATABASE_URL: 'postgres://localhost/db',
+    });
+  });
+
+  it('should load merged secrets from cascading env files when --env flag is passed', async () => {
+    let pushedSecrets: Record<string, string> = {};
+    mock.method(config, 'get', (key: string) => {
+      if (key === 'token') return 'test-token';
+      if (key === 'apiUrl') return 'http://localhost:3000';
+      return undefined;
+    });
+
+    await fs.writeFile(path.join(tempDir, '.env'), 'VAR1=base\nVAR2=base\nVAR3=base');
+    await fs.writeFile(path.join(tempDir, '.env.development'), 'VAR1=dev');
+    await fs.writeFile(path.join(tempDir, '.env.local'), 'VAR2=local');
+    await fs.writeFile(path.join(tempDir, '.env.development.local'), 'VAR3=dev_local');
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    mock.method(axios, 'put', async (url: string, data: any): Promise<any> => {
+      pushedSecrets = data.secrets;
+      return {
+        status: 200,
+        data: { success: true },
+      };
+    });
+
+    mock.method(console, 'log', () => {});
+    mock.method(console, 'error', () => {});
+
+    await pushCommand.parseAsync(['node', 'pawthy', 'push', '--force', '-E', 'development']);
+
+    assert.deepStrictEqual(pushedSecrets, {
+      VAR1: 'dev',
+      VAR2: 'local',
+      VAR3: 'dev_local',
+    });
+  });
+
+  it('should support standard cascading (.env < .env.local) when --env flag is not passed', async () => {
+    let pushedSecrets: Record<string, string> = {};
+    mock.method(config, 'get', (key: string) => {
+      if (key === 'token') return 'test-token';
+      if (key === 'apiUrl') return 'http://localhost:3000';
+      return undefined;
+    });
+
+    await fs.writeFile(path.join(tempDir, '.env'), 'FOO=base\nBAR=base');
+    await fs.writeFile(path.join(tempDir, '.env.local'), 'FOO=local');
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    mock.method(axios, 'put', async (url: string, data: any): Promise<any> => {
+      pushedSecrets = data.secrets;
+      return {
+        status: 200,
+        data: { success: true },
+      };
+    });
+
+    mock.method(console, 'log', () => {});
+    mock.method(console, 'error', () => {});
+
+    await pushCommand.parseAsync(['node', 'pawthy', 'push', '--force']);
+
+    assert.deepStrictEqual(pushedSecrets, {
+      FOO: 'local',
+      BAR: 'base',
+    });
+  });
+
+  it('should preserve explicit -f flag override over cascading env loader', async () => {
+    let pushedSecrets: Record<string, string> = {};
+    mock.method(config, 'get', (key: string) => {
+      if (key === 'token') return 'test-token';
+      if (key === 'apiUrl') return 'http://localhost:3000';
+      return undefined;
+    });
+
+    await fs.writeFile(path.join(tempDir, '.env'), 'FOO=base');
+    await fs.writeFile(path.join(tempDir, '.env.local'), 'FOO=local');
+    await fs.writeFile(path.join(tempDir, 'custom.env'), 'FOO=custom');
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    mock.method(axios, 'put', async (url: string, data: any): Promise<any> => {
+      pushedSecrets = data.secrets;
+      return {
+        status: 200,
+        data: { success: true },
+      };
+    });
+
+    mock.method(console, 'log', () => {});
+    mock.method(console, 'error', () => {});
+
+    await pushCommand.parseAsync([
+      'node',
+      'pawthy',
+      'push',
+      '--force',
+      '-f',
+      'custom.env',
+      '-E',
+      'development',
+    ]);
+
+    assert.deepStrictEqual(pushedSecrets, {
+      FOO: 'custom',
     });
   });
 });

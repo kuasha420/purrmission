@@ -4,13 +4,19 @@ import chalk from 'chalk';
 import fs from 'fs/promises';
 import path from 'path';
 import { getToken, getApiUrl, getProjectConfig } from '../config.js';
+import { resolveFileAndFormat, SecretFormat, serializeSecrets } from '../format.js';
 
 export const pullCommand = new Command('pull')
-  .description('Pull secrets from Purrmission to local .env')
-  .option('-f, --file <path>', 'Path to .env file', '.env')
+  .description('Pull secrets from Purrmission to local secret file')
+  .option(
+    '-f, --file <path>',
+    'Path to secret file (default: .env, secrets.json, secrets.yaml, or secrets.toml depending on format)'
+  )
+  .option('-F, --format <format>', 'Secret file format (env, json, yaml, toml)')
+  .option('-E, --env <environment>', 'Environment variant (e.g. development, production)')
   .option('-p, --project-id <id>', 'Project ID')
   .option('-e, --env-id <id>', 'Environment ID')
-  .option('-m, --merge', 'Merge with existing .env file instead of overwriting')
+  .option('-m, --merge', 'Merge with existing file instead of overwriting')
   .option('-k, --keys <list>', 'Comma-separated list of keys to pull')
   .action(async (options) => {
     const token = getToken();
@@ -46,7 +52,25 @@ export const pullCommand = new Command('pull')
       return;
     }
 
-    const envPath = path.resolve(process.cwd(), options.file);
+    let file: string;
+    let format: SecretFormat;
+    try {
+      const resolved = resolveFileAndFormat(options.file, options.format);
+      file = resolved.file;
+      format = resolved.format;
+    } catch (err) {
+      console.error(chalk.red(err instanceof Error ? err.message : String(err)));
+      process.exit(1);
+      return;
+    }
+
+    const isFileExplicit = pullCommand.getOptionValueSource('file') === 'cli';
+    const isFormatExplicit = pullCommand.getOptionValueSource('format') === 'cli';
+    if (options.env && !isFileExplicit && !isFormatExplicit && format === 'env') {
+      file = `.env.${options.env}`;
+    }
+
+    const envPath = path.resolve(process.cwd(), file);
 
     try {
       console.log(chalk.dim('Fetching secrets from Purrmission...'));
@@ -110,7 +134,7 @@ export const pullCommand = new Command('pull')
       if (shouldMerge) {
         try {
           const existingContent = await fs.readFile(envPath, 'utf-8');
-          content = mergeEnvSecrets(existingContent, secrets);
+          content = serializeSecrets(secrets, format, existingContent);
           isMerged = true;
         } catch (e: unknown) {
           if ((e as NodeJS.ErrnoException).code !== 'ENOENT') {
@@ -121,16 +145,12 @@ export const pullCommand = new Command('pull')
       }
 
       if (!isMerged) {
-        // 2. Format as .env
-        content =
-          Object.entries(secrets)
-            .map(([key, value]) => `${key}=${formatEnvValue(value)}`)
-            .join('\n') + '\n';
+        content = serializeSecrets(secrets, format);
 
         // 3. Write to file with safety check
         try {
           await fs.access(envPath);
-          console.warn(chalk.yellow(`\n⚠️  File ${options.file} already exists.`));
+          console.warn(chalk.yellow(`\n⚠️  File ${file} already exists.`));
           console.warn(chalk.yellow('Overwriting existing file...'));
         } catch {
           // File doesn't exist, proceed safe.
@@ -141,9 +161,7 @@ export const pullCommand = new Command('pull')
       await fs.writeFile(envPath, content);
 
       console.log(
-        chalk.green(
-          `\n✅ Successfully pulled ${Object.keys(secrets).length} secrets to ${options.file}`
-        )
+        chalk.green(`\n✅ Successfully pulled ${Object.keys(secrets).length} secrets to ${file}`)
       );
     } catch (error) {
       if (axios.isAxiosError(error)) {
@@ -168,235 +186,6 @@ export const pullCommand = new Command('pull')
       process.exit(1);
     }
   });
-
-interface EnvBlock {
-  type: 'comment' | 'empty' | 'key-value';
-  raw: string;
-  key?: string;
-  value?: string;
-  leadingWhitespace?: string;
-  middleWhitespace?: string;
-  quote?: '"' | "'" | null;
-  comment?: string;
-}
-
-function parseEnv(content: string, eol: string = '\n'): EnvBlock[] {
-  const lines = content.split(/\r?\n/);
-  const blocks: EnvBlock[] = [];
-  let i = 0;
-  while (i < lines.length) {
-    const line = lines[i];
-
-    if (/^\s*#/.test(line) || /^\s*$/.test(line)) {
-      blocks.push({
-        type: /^\s*#/.test(line) ? 'comment' : 'empty',
-        raw: line,
-      });
-      i++;
-      continue;
-    }
-
-    const declMatch = line.match(/^(\s*)([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)$/);
-    if (!declMatch) {
-      blocks.push({
-        type: 'comment',
-        raw: line,
-      });
-      i++;
-      continue;
-    }
-
-    const leadingWhitespace = declMatch[1];
-    const key = declMatch[2];
-    const rest = declMatch[3];
-
-    const prefixLength = leadingWhitespace.length + key.length;
-    const middleWhitespaceMatch = line.slice(prefixLength).match(/^\s*=\s*/);
-    const middleWhitespace = middleWhitespaceMatch ? middleWhitespaceMatch[0] : '=';
-
-    let value = '';
-    let quote: '"' | "'" | null = null;
-    let trailingComment = '';
-    const rawBlockLines = [line];
-
-    if (rest.startsWith('"')) {
-      quote = '"';
-      const restValue = rest.slice(1);
-      let currentLineIndex = i;
-      let foundEnd = false;
-      let valAcc = '';
-
-      while (currentLineIndex < lines.length) {
-        const curLine = currentLineIndex === i ? restValue : lines[currentLineIndex];
-        let escaped = false;
-        let quoteIndex = -1;
-        for (let charIdx = 0; charIdx < curLine.length; charIdx++) {
-          const char = curLine[charIdx];
-          if (char === '\\') {
-            escaped = !escaped;
-          } else if (char === '"' && !escaped) {
-            quoteIndex = charIdx;
-            break;
-          } else {
-            escaped = false;
-          }
-        }
-
-        if (quoteIndex !== -1) {
-          valAcc += curLine.slice(0, quoteIndex);
-          trailingComment = curLine.slice(quoteIndex + 1);
-          foundEnd = true;
-          break;
-        } else {
-          valAcc += curLine + '\n';
-          if (currentLineIndex > i) {
-            rawBlockLines.push(lines[currentLineIndex]);
-          }
-          currentLineIndex++;
-        }
-      }
-
-      if (foundEnd) {
-        value = valAcc;
-        i = currentLineIndex + 1;
-      } else {
-        quote = null;
-        value = rest;
-        i++;
-      }
-    } else if (rest.startsWith("'")) {
-      quote = "'";
-      const restValue = rest.slice(1);
-      let currentLineIndex = i;
-      let foundEnd = false;
-      let valAcc = '';
-
-      while (currentLineIndex < lines.length) {
-        const curLine = currentLineIndex === i ? restValue : lines[currentLineIndex];
-        let escaped = false;
-        let quoteIndex = -1;
-        for (let charIdx = 0; charIdx < curLine.length; charIdx++) {
-          const char = curLine[charIdx];
-          if (char === '\\') {
-            escaped = !escaped;
-          } else if (char === "'" && !escaped) {
-            quoteIndex = charIdx;
-            break;
-          } else {
-            escaped = false;
-          }
-        }
-
-        if (quoteIndex !== -1) {
-          valAcc += curLine.slice(0, quoteIndex);
-          trailingComment = curLine.slice(quoteIndex + 1);
-          foundEnd = true;
-          break;
-        } else {
-          valAcc += curLine + '\n';
-          if (currentLineIndex > i) {
-            rawBlockLines.push(lines[currentLineIndex]);
-          }
-          currentLineIndex++;
-        }
-      }
-
-      if (foundEnd) {
-        value = valAcc;
-        i = currentLineIndex + 1;
-      } else {
-        quote = null;
-        value = rest;
-        i++;
-      }
-    } else {
-      const commentMatch = rest.match(/(\s+#.*)$/);
-      if (commentMatch) {
-        value = rest.slice(0, rest.length - commentMatch[1].length).trim();
-        trailingComment = commentMatch[1];
-      } else {
-        value = rest.trim();
-        trailingComment = '';
-      }
-      quote = null;
-      i++;
-    }
-
-    blocks.push({
-      type: 'key-value',
-      raw: rawBlockLines.join(eol),
-      key,
-      value,
-      leadingWhitespace,
-      middleWhitespace,
-      quote,
-      comment: trailingComment,
-    });
-  }
-  return blocks;
-}
-
-function formatEnvValue(value: string, originalQuote?: '"' | "'" | null): string {
-  if (value.includes('\n') || value.includes('\r')) {
-    return `"${value.replace(/"/g, '\\"')}"`;
-  }
-
-  if (/[#=\s'"]/.test(value)) {
-    const quote = originalQuote === '"' || originalQuote === "'" ? originalQuote : '"';
-    if (quote === '"') {
-      return `"${value.replace(/"/g, '\\"')}"`;
-    } else {
-      return `'${value.replace(/'/g, "\\'")}'`;
-    }
-  }
-
-  if (originalQuote === '"') {
-    return `"${value.replace(/"/g, '\\"')}"`;
-  } else if (originalQuote === "'") {
-    return `'${value.replace(/'/g, "\\'")}'`;
-  }
-
-  return value;
-}
-
-function mergeEnvSecrets(existingContent: string, secrets: Record<string, string>): string {
-  const eol = existingContent.includes('\r\n') ? '\r\n' : '\n';
-  const blocks = parseEnv(existingContent, eol);
-  const updatedKeys = new Set<string>();
-  const resultLines: string[] = [];
-
-  for (const block of blocks) {
-    if (block.type === 'key-value' && block.key) {
-      const key = block.key;
-      if (Object.prototype.hasOwnProperty.call(secrets, key)) {
-        const value = secrets[key];
-        resultLines.push(
-          block.leadingWhitespace +
-            key +
-            block.middleWhitespace +
-            formatEnvValue(value, block.quote) +
-            block.comment
-        );
-        updatedKeys.add(key);
-        continue;
-      }
-    }
-    resultLines.push(block.raw);
-  }
-
-  const newKeys = Object.keys(secrets).filter((k) => !updatedKeys.has(k));
-  if (newKeys.length > 0) {
-    if (resultLines.length > 0 && resultLines[resultLines.length - 1].trim() !== '') {
-      resultLines.push('');
-    }
-    for (const key of newKeys) {
-      const value = secrets[key];
-      resultLines.push(key + '=' + formatEnvValue(value));
-    }
-  }
-
-  return resultLines.join(eol);
-}
 
 function getKeysWhitelist(
   optionsKeys?: string,
