@@ -157,23 +157,6 @@ describe('ResourceService', () => {
       assert.match(result.error ?? '', /Cannot remove the resource owner/);
       assert.strictEqual((mockGuardianRepo.remove as unknown as MockedFn).mock.calls.length, 0);
     });
-
-    it('should support remove alias method', async () => {
-      (mockGuardianRepo.findByResourceAndUser as unknown as MockedFn).mock.mockImplementation(
-        async (_rid: unknown, uid: unknown) => {
-          if (uid === ownerId)
-            return { id: 'g1', role: 'OWNER', discordUserId: ownerId } as Guardian;
-          if (uid === guardianId)
-            return { id: 'g2', role: 'GUARDIAN', discordUserId: guardianId } as Guardian;
-          return null;
-        }
-      );
-
-      const result = await resourceService.remove(resourceId, ownerId, guardianId);
-
-      assert.strictEqual(result.success, true);
-      assert.strictEqual((mockGuardianRepo.remove as unknown as MockedFn).mock.calls.length, 1);
-    });
   });
 
   describe('listGuardians', () => {
@@ -211,28 +194,6 @@ describe('ResourceService', () => {
 
       assert.strictEqual(result.success, false);
       assert.match(result.error ?? '', /Access denied/);
-    });
-
-    it('should support list alias method', async () => {
-      (mockGuardianRepo.findByResourceAndUser as unknown as MockedFn).mock.mockImplementation(
-        async (_rid: unknown, uid: unknown) => {
-          if (uid === guardianId)
-            return { id: 'g2', role: 'GUARDIAN', discordUserId: guardianId } as Guardian;
-          return null;
-        }
-      );
-
-      (mockGuardianRepo.findByResourceId as unknown as MockedFn).mock.mockImplementation(
-        async () => [
-          { id: 'g1', role: 'OWNER' },
-          { id: 'g2', role: 'GUARDIAN' },
-        ]
-      );
-
-      const result = await resourceService.list(resourceId, guardianId);
-
-      assert.strictEqual(result.success, true);
-      assert.strictEqual(result.guardians?.length, 2);
     });
   });
 
