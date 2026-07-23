@@ -101,6 +101,12 @@ class MemProjectRepo implements ProjectRepository {
   async findEnvironment(projectId: string, slug: string): Promise<Environment | null> {
     return this.environments.find((e) => e.projectId === projectId && e.slug === slug) || null;
   }
+  async findEnvironmentByResourceId(resourceId: string): Promise<Environment | null> {
+    return this.environments.find((e) => e.resourceId === resourceId) || null;
+  }
+  async listMembershipsByUser(userId: string): Promise<ProjectMember[]> {
+    return this.members.filter((m) => m.userId === userId);
+  }
 }
 
 class MemResourceRepo implements ResourceRepository {
@@ -339,7 +345,7 @@ describe('Credential Sync Logic Smoke Test', () => {
 
     // 4. Guardian Access Flow
     // 4a. Add Guardian
-    await services.resource.addGuardian(resource.id, guardianId);
+    await services.resource.addGuardian(resource.id, guardianId, ownerId);
     const isGuardian = await services.resource.isGuardian(resource.id, guardianId);
     assert.strictEqual(isGuardian, true);
 

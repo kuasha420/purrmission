@@ -23,6 +23,7 @@ import { AuditService } from './audit.js';
 import { AuthService } from './auth.js';
 import { ProjectService } from './project.js';
 import { ResourceNotFoundError, DuplicateError } from './errors.js';
+import { getEffectiveGuardians, isEffectiveGuardian, isEffectiveOwner } from './policy.js';
 
 /**
  * Service dependencies.
@@ -84,7 +85,7 @@ export class ApprovalService {
     }
 
     // Get guardians for the resource
-    const guardians = await repositories.guardians.findByResourceId(input.resourceId);
+    const guardians = await getEffectiveGuardians(repositories, input.resourceId);
     if (guardians.length === 0) {
       return {
         success: false,
@@ -171,23 +172,22 @@ export class ApprovalService {
       };
     }
 
-    // TODO: Verify that the user is actually a guardian for this resource
-    // For MVP, we accept any user but log a warning
-    const guardian = await repositories.guardians.findByResourceAndUser(
+    // Verify that the user is actually a guardian for this resource
+    const isGuardian = await isEffectiveGuardian(
+      repositories,
       request.resourceId,
       byGuardianDiscordId
     );
-    if (!guardian) {
+    if (!isGuardian) {
       logger.warn('Decision made by non-guardian user', {
         requestId,
         discordUserId: byGuardianDiscordId,
         resourceId: request.resourceId,
       });
-      // TODO: In production, reject decisions from non-guardians
-      // return {
-      //   success: false,
-      //   error: 'User is not a guardian for this resource',
-      // };
+      return {
+        success: false,
+        error: 'User is not a guardian for this resource',
+      };
     }
 
     // Update the request status
@@ -300,11 +300,7 @@ export class ResourceService {
    * Check if a user is a guardian (or owner) of a resource.
    */
   async isGuardian(resourceId: string, userId: string): Promise<boolean> {
-    const guardian = await this.deps.repositories.guardians.findByResourceAndUser(
-      resourceId,
-      userId
-    );
-    return !!guardian;
+    return isEffectiveGuardian(this.deps.repositories, resourceId, userId);
   }
 
   /**
@@ -357,7 +353,8 @@ export class ResourceService {
    */
   async addGuardian(
     resourceId: string,
-    discordUserId: string
+    discordUserId: string,
+    actorId: string
   ): Promise<{ success: boolean; guardian?: Guardian; error?: string }> {
     const { repositories } = this.deps;
 
@@ -368,6 +365,12 @@ export class ResourceService {
         success: false,
         error: `Resource not found: ${resourceId}`,
       };
+    }
+
+    // Verify Actor is Owner
+    const hasOwnerAccess = await isEffectiveOwner(repositories, resourceId, actorId);
+    if (!hasOwnerAccess) {
+      return { success: false, error: 'Only the resource owner can add guardians.' };
     }
 
     // Check if user is already a guardian
@@ -407,8 +410,8 @@ export class ResourceService {
     const { repositories } = this.deps;
 
     // Verify Actor is Owner
-    const actorGuardian = await repositories.guardians.findByResourceAndUser(resourceId, actorId);
-    if (!actorGuardian || actorGuardian.role !== 'OWNER') {
+    const hasOwnerAccess = await isEffectiveOwner(repositories, resourceId, actorId);
+    if (!hasOwnerAccess) {
       return { success: false, error: 'Only the resource owner can remove guardians.' };
     }
 
@@ -418,6 +421,14 @@ export class ResourceService {
       targetUserId
     );
     if (!targetGuardian) {
+      const isDynamic = await isEffectiveGuardian(repositories, resourceId, targetUserId);
+      if (isDynamic) {
+        return {
+          success: false,
+          error:
+            'Cannot remove this user directly because they inherit guardian status from a project role (Project Owner or Writer member). Remove them from the project instead.',
+        };
+      }
       return { success: false, error: 'User is not a guardian of this resource.' };
     }
     if (targetGuardian.role === 'OWNER') {
@@ -448,7 +459,7 @@ export class ResourceService {
       return { success: false, error: 'Access denied. You must be a guardian to list guardians.' };
     }
 
-    const guardians = await this.deps.repositories.guardians.findByResourceId(resourceId);
+    const guardians = await getEffectiveGuardians(this.deps.repositories, resourceId);
     return { success: true, guardians };
   }
 
@@ -463,7 +474,7 @@ export class ResourceService {
    * Get guardians for a resource.
    */
   async getGuardians(resourceId: string): Promise<Guardian[]> {
-    return this.deps.repositories.guardians.findByResourceId(resourceId);
+    return getEffectiveGuardians(this.deps.repositories, resourceId);
   }
 
   /**

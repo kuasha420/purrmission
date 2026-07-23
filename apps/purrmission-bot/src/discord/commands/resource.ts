@@ -21,7 +21,14 @@ import {
   createAccessRequestEmbed,
 } from '../interactions/approvalButtons.js';
 import { rateLimiter } from '../../infra/rateLimit.js';
-import { checkAccessPolicy, requiresApproval } from '../../domain/policy.js';
+import {
+  checkAccessPolicy,
+  requiresApproval,
+  getEffectiveGuardians,
+  isEffectiveGuardian,
+  getGuardedResourcesForUser,
+  isEffectiveOwner,
+} from '../../domain/policy.js';
 import { handleResourceIdAutocomplete } from './resourceAutocomplete.js';
 
 const MAX_RESOURCE_NAME_LENGTH = 100;
@@ -340,9 +347,7 @@ async function isOwnerOrGuardian(
   resourceId: string,
   discordUserId: string
 ): Promise<boolean> {
-  const { guardians } = context.repositories;
-  const guardian = await guardians.findByResourceAndUser(resourceId, discordUserId);
-  return guardian !== null;
+  return isEffectiveGuardian(context.repositories, resourceId, discordUserId);
 }
 
 /**
@@ -509,11 +514,19 @@ async function handleResourceList(
   context: CommandContext
 ): Promise<void> {
   const userId = interaction.user.id;
-  const { guardians, resources } = context.repositories;
 
-  const userGuardianships = await guardians.findByUserId(userId);
+  const validResources = await getGuardedResourcesForUser(context.repositories, userId);
 
-  if (userGuardianships.length === 0) {
+  if (validResources.length === 0) {
+    const explicitGuardians = await context.repositories.guardians.findByUserId(userId);
+    if (explicitGuardians && explicitGuardians.length > 0) {
+      await interaction.reply({
+        content: 'You do not own or guard any resources (orphaned records found).',
+        ephemeral: true,
+      });
+      return;
+    }
+
     await interaction.reply({
       content: 'You do not own or guard any resources yet.',
       ephemeral: true,
@@ -521,34 +534,12 @@ async function handleResourceList(
     return;
   }
 
-  const resourceIds = userGuardianships.map((g) => g.resourceId);
-  const validResources = await resources.findManyByIds(resourceIds);
-
-  if (validResources.length === 0) {
-    // This might happen if guardianships exist but resources were deleted (orphan records)
-    // Ideally shouldn't happen with proper cascade delete, but good to handle.
-    await interaction.reply({
-      content: 'You do not own or guard any resources (orphaned records found).',
-      ephemeral: true,
-    });
-    return;
+  const lines = ['**📋 Your Resources:**', ''];
+  for (const r of validResources) {
+    const isOwner = await isEffectiveOwner(context.repositories, r.id, userId);
+    const roleBadge = isOwner ? '👑 Owner' : '🛡️ Guardian';
+    lines.push(`• **${r.name}** (\`${r.id}\`) — ${roleBadge}`);
   }
-
-  // Create a map to look up guardian role for each resource
-  const roleMap = new Map<string, string>();
-  userGuardianships.forEach((g) => {
-    roleMap.set(g.resourceId, g.role);
-  });
-
-  const lines = [
-    '**📋 Your Resources:**',
-    '',
-    ...validResources.map((r) => {
-      const role = roleMap.get(r.id);
-      const roleBadge = role === 'OWNER' ? '👑 Owner' : '🛡️ Guardian';
-      return `• **${r.name}** (\`${r.id}\`) — ${roleBadge}`;
-    }),
-  ];
 
   await interaction.reply({
     content: lines.join('\n'),
@@ -637,7 +628,7 @@ async function handleFieldsGet(
   }
 
   // Check access policy
-  const guardians = await context.repositories.guardians.findByResourceId(resourceId);
+  const guardians = await getEffectiveGuardians(context.repositories, resourceId);
   const accessResult = await checkAccessPolicy(resource, guardians, userId, context.repositories);
 
   if (requiresApproval(accessResult)) {
@@ -952,7 +943,7 @@ async function handleGet2FA(
   }
 
   // Check access policy
-  const guardians = await context.repositories.guardians.findByResourceId(resourceId);
+  const guardians = await getEffectiveGuardians(context.repositories, resourceId);
   const accessResult = await checkAccessPolicy(resource, guardians, userId, context.repositories);
 
   if (requiresApproval(accessResult)) {
@@ -1053,7 +1044,7 @@ async function createFieldAccessRequest(
   fieldName: string,
   requesterId: string
 ): Promise<void> {
-  const { guardians, resourceFields } = context.repositories;
+  const { resourceFields } = context.repositories;
   const { approval } = context.services;
 
   // Validate field still exists before creating approval request (prevent race condition)
@@ -1090,7 +1081,7 @@ async function createFieldAccessRequest(
   }
 
   // Get guardians to notify
-  const resourceGuardians = await guardians.findByResourceId(resourceId);
+  const resourceGuardians = await getEffectiveGuardians(context.repositories, resourceId);
 
   // Send approval requests to guardians via DM (in parallel)
   const embed = createAccessRequestEmbed(resourceName, accessContext, result.request.expiresAt);
@@ -1159,7 +1150,6 @@ async function create2FAAccessRequest(
   resourceId: string,
   requesterId: string
 ): Promise<void> {
-  const { guardians } = context.repositories;
   const { approval, resource: resourceService } = context.services;
 
   // Validate TOTP account still linked before creating approval request (prevent race condition)
@@ -1195,7 +1185,7 @@ async function create2FAAccessRequest(
   }
 
   // Get guardians to notify
-  const resourceGuardians = await guardians.findByResourceId(resourceId);
+  const resourceGuardians = await getEffectiveGuardians(context.repositories, resourceId);
 
   // Send approval requests to guardians via DM (in parallel)
   const embed = createAccessRequestEmbed(resourceName, accessContext, result.request.expiresAt);

@@ -13,7 +13,8 @@ interface MockServices {
   resource: {
     addGuardian: (
       resourceId: string,
-      userId: string
+      userId: string,
+      actorId: string
     ) => Promise<{ success: boolean; guardian?: { id: string; role: string } }>;
     removeGuardian: (
       resourceId: string,
@@ -35,7 +36,7 @@ describe('handleGuardianCommand', () => {
   let mockInteraction: Partial<ChatInputCommandInteraction>;
   let mockOptions: CommandInteractionOptionResolver<CacheType>;
   let mockContext: CommandContext;
-  let addGuardianCalls: { resourceId: string; userId: string }[] = [];
+  let addGuardianCalls: { resourceId: string; userId: string; actorId: string }[] = [];
   let removeGuardianCalls: { resourceId: string; targetUserId: string; actorId: string }[] = [];
   let listGuardiansCalls: { resourceId: string; actorId: string }[] = [];
   let replyCalls: unknown[] = [];
@@ -76,8 +77,8 @@ describe('handleGuardianCommand', () => {
     mockContext = {
       services: {
         resource: {
-          addGuardian: async (resourceId: string, userId: string) => {
-            addGuardianCalls.push({ resourceId, userId });
+          addGuardian: async (resourceId: string, userId: string, actorId: string) => {
+            addGuardianCalls.push({ resourceId, userId, actorId });
             // simulate success so handleAddGuardian completes
             return { success: true, guardian: { id: 'g-1', role: 'GUARDIAN' } };
           },
@@ -113,6 +114,7 @@ describe('handleGuardianCommand', () => {
     assert.deepStrictEqual(addGuardianCalls[0], {
       resourceId: 'res-123',
       userId: 'target-user-id',
+      actorId: 'caller-id',
     });
 
     // Also verify the success reply from handleAddGuardian to be sure

@@ -572,6 +572,19 @@ export class InMemoryProjectRepository implements ProjectRepository {
     }
     return null;
   }
+
+  async findEnvironmentByResourceId(resourceId: string): Promise<Environment | null> {
+    for (const env of this.environments.values()) {
+      if (env.resourceId === resourceId) {
+        return env;
+      }
+    }
+    return null;
+  }
+
+  async listMembershipsByUser(userId: string): Promise<ProjectMember[]> {
+    return Array.from(this.members.values()).filter((m) => m.userId === userId);
+  }
 }
 
 /**
