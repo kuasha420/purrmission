@@ -66,3 +66,10 @@ We use Node.js's native test runner (`node:test`) with `tsx`. Place tests adjace
 - **Run specific test file**: `node --import tsx --test apps/purrmission-bot/src/domain/totp.test.ts`
 - **Format codebase**: `pnpm format`
 - **Lint codebase**: `pnpm lint`
+
+---
+
+## 🔒 Disaster Recovery & Multi-Agent Resiliency Guidelines
+
+1. **Atomic Branch Checkpoints:** When executing complex multi-task workflows or subagent swarms, isolate work into atomic feature branches. Commit frequently after passing local unit tests to ensure 100% progress recovery in case of execution interrupts.
+2. **Pre-Deploy Storage Safety:** Always verify that database backup files and `.env` encryption keys are safely written outside volatile workspace directories before running production deployments.
