@@ -43,7 +43,6 @@ export interface Resource {
   createdAt: Date;
 }
 
-
 /**
  * Role of a guardian for a resource.
  * - OWNER: Can add/remove other guardians, full control
@@ -262,7 +261,6 @@ export interface AuditLog {
 }
 
 export type CreateAuditLogInput = Omit<AuditLog, 'id' | 'createdAt'>;
-
 
 /**
  * Represents a device login session (OAuth Device Flow).

@@ -21,26 +21,26 @@ describe('System API E2E Tests', () => {
   let server: FastifyInstance;
 
   // Shared mock implementations that tests can override
-  const mockVerifyApiKey = { fn: async (_apiKey: string): Promise<any> => null };
+  const mockVerifyApiKey = { fn: async (_apiKey: string): Promise<unknown> => null };
   const mockCreateApprovalRequest = {
-    fn: async (_input: any): Promise<any> => ({ success: false }),
+    fn: async (_input: unknown): Promise<unknown> => ({ success: false }),
   };
-  const mockGetApprovalRequest = { fn: async (_id: string): Promise<any> => null };
+  const mockGetApprovalRequest = { fn: async (_id: string): Promise<unknown> => null };
   const mockFindActiveApproval = {
-    fn: async (_resourceId: string, _userId: string): Promise<any> => null,
+    fn: async (_resourceId: string, _userId: string): Promise<unknown> => null,
   };
-  const mockValidateToken = { fn: async (_token: string): Promise<any> => null };
-  const mockGetProject = { fn: async (_projectId: string): Promise<any> => null };
+  const mockValidateToken = { fn: async (_token: string): Promise<unknown> => null };
+  const mockGetProject = { fn: async (_projectId: string): Promise<unknown> => null };
   const mockGetEnvironmentById = {
-    fn: async (_projectId: string, _envId: string): Promise<any> => null,
+    fn: async (_projectId: string, _envId: string): Promise<unknown> => null,
   };
   const mockGetMemberRole = {
-    fn: async (_projectId: string, _userId: string): Promise<any> => null,
+    fn: async (_projectId: string, _userId: string): Promise<unknown> => null,
   };
   const mockIsGuardian = {
     fn: async (_resourceId: string, _userId: string): Promise<boolean> => false,
   };
-  const mockListFields = { fn: async (_resourceId: string): Promise<any[]> => [] };
+  const mockListFields = { fn: async (_resourceId: string): Promise<unknown[]> => [] };
   const mockUpsertField = {
     fn: async (_resourceId: string, _key: string, _value: string): Promise<void> => {},
   };
@@ -54,7 +54,7 @@ describe('System API E2E Tests', () => {
         mockUpsertField.fn(resourceId, key, value),
     },
     approval: {
-      createApprovalRequest: (input: any) => mockCreateApprovalRequest.fn(input),
+      createApprovalRequest: (input: unknown) => mockCreateApprovalRequest.fn(input),
       getApprovalRequest: (id: string) => mockGetApprovalRequest.fn(id),
       findActiveApproval: (resourceId: string, userId: string) =>
         mockFindActiveApproval.fn(resourceId, userId),
@@ -289,9 +289,9 @@ describe('System API E2E Tests', () => {
       mockFindActiveApproval.fn = async () => null; // none exists yet
 
       let createdRequest = false;
-      mockCreateApprovalRequest.fn = async (input: any) => {
+      mockCreateApprovalRequest.fn = async (input: unknown) => {
         createdRequest = true;
-        assert.strictEqual(input.resourceId, 'res-1');
+        assert.strictEqual((input as { resourceId: string }).resourceId, 'res-1');
         return {
           success: true,
           request: {

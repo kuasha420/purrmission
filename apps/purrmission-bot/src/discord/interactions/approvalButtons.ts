@@ -220,7 +220,10 @@ async function revealAccessToRequester(
 
     if (context.type === 'FIELD_ACCESS' && context.fieldName) {
       // Reveal field value
-      const field = await repositories.resourceFields.findByResourceAndName(resourceId, context.fieldName);
+      const field = await repositories.resourceFields.findByResourceAndName(
+        resourceId,
+        context.fieldName
+      );
       if (field) {
         await dm.send(
           [
@@ -239,7 +242,9 @@ async function revealAccessToRequester(
           fieldName: context.fieldName,
         });
       } else {
-        await dm.send(`✅ Your access request for field **${context.fieldName}** on **${resourceName}** was approved, but the field could not be found. It may have been deleted.`);
+        await dm.send(
+          `✅ Your access request for field **${context.fieldName}** on **${resourceName}** was approved, but the field could not be found. It may have been deleted.`
+        );
         logger.warn('Approved field access request for a non-existent field', {
           requesterId: context.requesterId,
           resourceId,
@@ -269,7 +274,9 @@ async function revealAccessToRequester(
           totpAccountId: linkedAccount.id,
         });
       } else {
-        await dm.send(`✅ Your access request for 2FA on **${resourceName}** was approved, but no 2FA account is linked to it. It may have been unlinked.`);
+        await dm.send(
+          `✅ Your access request for 2FA on **${resourceName}** was approved, but no 2FA account is linked to it. It may have been unlinked.`
+        );
         logger.warn('Approved 2FA access request for a resource with no linked account', {
           requesterId: context.requesterId,
           resourceId,
@@ -401,4 +408,3 @@ export function createAccessRequestEmbed(
 
   return embed;
 }
-

@@ -1,27 +1,18 @@
 {
-    "$schema": "https://turbo.build/schema.json",
-    "globalEnv": [
-        "DISCORD_BOT_TOKEN",
-        "DISCORD_CLIENT_ID",
-        "DISCORD_GUILD_ID",
-        "DATABASE_URL"
-    ],
-    "tasks": {
-        "build": {
-            "dependsOn": [
-                "^build"
-            ],
-            "outputs": [
-                "dist/**"
-            ]
-        },
-        "lint": {},
-        "dev": {
-            "cache": false,
-            "persistent": true
-        },
-        "discord:deploy-commands": {
-            "cache": false
-        }
+  "$schema": "https://turbo.build/schema.json",
+  "globalEnv": ["DISCORD_BOT_TOKEN", "DISCORD_CLIENT_ID", "DISCORD_GUILD_ID", "DATABASE_URL"],
+  "tasks": {
+    "build": {
+      "dependsOn": ["^build"],
+      "outputs": ["dist/**"]
+    },
+    "lint": {},
+    "dev": {
+      "cache": false,
+      "persistent": true
+    },
+    "discord:deploy-commands": {
+      "cache": false
     }
+  }
 }

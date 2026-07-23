@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [0.0.1] - 2025-12-10
 
 ### Added
+
 - Initial Purrmission 2FA MVP for Discord (`@purrfecthq/purrmission-bot`).
 - `/purrmission 2fa` command group:
   - `add`: Store TOTP secrets via URI or Base32 secret.

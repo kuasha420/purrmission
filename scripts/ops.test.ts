@@ -42,7 +42,6 @@ describe('Operations Scripts', () => {
       }
     }
   });
-
   describe('backup-db', () => {
     it('should create a backup file for a valid SQLite DB', async () => {
       // Mock env.DATABASE_URL if possible, or just rely on existing dev.db if it exists

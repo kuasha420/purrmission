@@ -9,6 +9,13 @@ import {
 } from './repositories.js';
 import type { Guardian } from './models.js';
 
+type MockedFn = {
+  mock: {
+    calls: Array<{ arguments: unknown[] }>;
+    mockImplementation: (fn: (...args: unknown[]) => unknown) => void;
+  };
+};
+
 describe('ResourceService', () => {
   let resourceService: ResourceService;
   let mockRepositories: Repositories;
@@ -22,14 +29,14 @@ describe('ResourceService', () => {
 
   beforeEach(() => {
     mockGuardianRepo = {
-      findByResourceAndUser: mock.fn() as any,
-      findByResourceId: mock.fn() as any,
-      remove: mock.fn() as any,
-      add: mock.fn() as any,
+      findByResourceAndUser: mock.fn() as unknown as GuardianRepository['findByResourceAndUser'],
+      findByResourceId: mock.fn() as unknown as GuardianRepository['findByResourceId'],
+      remove: mock.fn() as unknown as GuardianRepository['remove'],
+      add: mock.fn() as unknown as GuardianRepository['add'],
     };
 
     mockResourceRepo = {
-      findById: mock.fn() as any,
+      findById: mock.fn() as unknown as ResourceRepository['findById'],
     };
 
     mockRepositories = {
@@ -47,8 +54,8 @@ describe('ResourceService', () => {
   describe('removeGuardian', () => {
     it('should remove guardian if actor is owner', async () => {
       // Mock Actor is Owner
-      (mockGuardianRepo.findByResourceAndUser as any).mock.mockImplementation(
-        async (_rid: string, uid: string) => {
+      (mockGuardianRepo.findByResourceAndUser as unknown as MockedFn).mock.mockImplementation(
+        async (_rid: unknown, uid: unknown) => {
           if (uid === ownerId)
             return { id: 'g1', role: 'OWNER', discordUserId: ownerId } as Guardian;
           if (uid === guardianId)
@@ -60,17 +67,17 @@ describe('ResourceService', () => {
       const result = await resourceService.removeGuardian(resourceId, ownerId, guardianId);
 
       assert.strictEqual(result.success, true);
-      assert.strictEqual((mockGuardianRepo.remove as any).mock.calls.length, 1);
-      assert.deepStrictEqual((mockGuardianRepo.remove as any).mock.calls[0].arguments, [
-        resourceId,
-        guardianId,
-      ]);
+      assert.strictEqual((mockGuardianRepo.remove as unknown as MockedFn).mock.calls.length, 1);
+      assert.deepStrictEqual(
+        (mockGuardianRepo.remove as unknown as MockedFn).mock.calls[0].arguments,
+        [resourceId, guardianId]
+      );
     });
 
     it('should fail if actor is not owner', async () => {
       // Mock Actor is Guardian (not Owner)
-      (mockGuardianRepo.findByResourceAndUser as any).mock.mockImplementation(
-        async (_rid: string, uid: string) => {
+      (mockGuardianRepo.findByResourceAndUser as unknown as MockedFn).mock.mockImplementation(
+        async (_rid: unknown, uid: unknown) => {
           if (uid === guardianId)
             return { id: 'g2', role: 'GUARDIAN', discordUserId: guardianId } as Guardian;
           return null;
@@ -80,14 +87,14 @@ describe('ResourceService', () => {
       const result = await resourceService.removeGuardian(resourceId, guardianId, otherId);
 
       assert.strictEqual(result.success, false);
-      assert.match(result.error!, /Only the resource owner/);
-      assert.strictEqual((mockGuardianRepo.remove as any).mock.calls.length, 0);
+      assert.match(result.error ?? '', /Only the resource owner/);
+      assert.strictEqual((mockGuardianRepo.remove as unknown as MockedFn).mock.calls.length, 0);
     });
 
     it('should fail if target is not a guardian', async () => {
       // Mock Actor is Owner, Target not found
-      (mockGuardianRepo.findByResourceAndUser as any).mock.mockImplementation(
-        async (_rid: string, uid: string) => {
+      (mockGuardianRepo.findByResourceAndUser as unknown as MockedFn).mock.mockImplementation(
+        async (_rid: unknown, uid: unknown) => {
           if (uid === ownerId)
             return { id: 'g1', role: 'OWNER', discordUserId: ownerId } as Guardian;
           return null;
@@ -97,8 +104,8 @@ describe('ResourceService', () => {
       const result = await resourceService.removeGuardian(resourceId, ownerId, otherId);
 
       assert.strictEqual(result.success, false);
-      assert.match(result.error!, /not a guardian/);
-      assert.strictEqual((mockGuardianRepo.remove as any).mock.calls.length, 0);
+      assert.match(result.error ?? '', /not a guardian/);
+      assert.strictEqual((mockGuardianRepo.remove as unknown as MockedFn).mock.calls.length, 0);
     });
 
     it('should fail with custom error if target is a dynamic guardian', async () => {
@@ -134,8 +141,8 @@ describe('ResourceService', () => {
 
     it('should fail if target is owner', async () => {
       // Mock Actor is Owner, Target is Owner
-      (mockGuardianRepo.findByResourceAndUser as any).mock.mockImplementation(
-        async (_rid: string, uid: string) => {
+      (mockGuardianRepo.findByResourceAndUser as unknown as MockedFn).mock.mockImplementation(
+        async (_rid: unknown, uid: unknown) => {
           if (uid === ownerId)
             return { id: 'g1', role: 'OWNER', discordUserId: ownerId } as Guardian;
           if (uid === guardianId)
@@ -147,16 +154,33 @@ describe('ResourceService', () => {
       const result = await resourceService.removeGuardian(resourceId, ownerId, guardianId);
 
       assert.strictEqual(result.success, false);
-      assert.match(result.error!, /Cannot remove the resource owner/);
-      assert.strictEqual((mockGuardianRepo.remove as any).mock.calls.length, 0);
+      assert.match(result.error ?? '', /Cannot remove the resource owner/);
+      assert.strictEqual((mockGuardianRepo.remove as unknown as MockedFn).mock.calls.length, 0);
+    });
+
+    it('should support remove alias method', async () => {
+      (mockGuardianRepo.findByResourceAndUser as unknown as MockedFn).mock.mockImplementation(
+        async (_rid: unknown, uid: unknown) => {
+          if (uid === ownerId)
+            return { id: 'g1', role: 'OWNER', discordUserId: ownerId } as Guardian;
+          if (uid === guardianId)
+            return { id: 'g2', role: 'GUARDIAN', discordUserId: guardianId } as Guardian;
+          return null;
+        }
+      );
+
+      const result = await resourceService.remove(resourceId, ownerId, guardianId);
+
+      assert.strictEqual(result.success, true);
+      assert.strictEqual((mockGuardianRepo.remove as unknown as MockedFn).mock.calls.length, 1);
     });
   });
 
   describe('listGuardians', () => {
     it('should list guardians if actor is authorized', async () => {
       // Mock Actor is Guardian
-      (mockGuardianRepo.findByResourceAndUser as any).mock.mockImplementation(
-        async (_rid: string, uid: string) => {
+      (mockGuardianRepo.findByResourceAndUser as unknown as MockedFn).mock.mockImplementation(
+        async (_rid: unknown, uid: unknown) => {
           if (uid === guardianId)
             return { id: 'g2', role: 'GUARDIAN', discordUserId: guardianId } as Guardian;
           return null;
@@ -164,25 +188,51 @@ describe('ResourceService', () => {
       );
 
       // Mock List return
-      (mockGuardianRepo.findByResourceId as any).mock.mockImplementation(async () => [
-        { id: 'g1', role: 'OWNER', discordUserId: 'owner-id' },
-        { id: 'g2', role: 'GUARDIAN', discordUserId: guardianId },
-      ]);
+      (mockGuardianRepo.findByResourceId as unknown as MockedFn).mock.mockImplementation(
+        async () => [
+          { id: 'g1', role: 'OWNER', discordUserId: 'owner-id' } as Guardian,
+          { id: 'g2', role: 'GUARDIAN', discordUserId: guardianId } as Guardian,
+        ]
+      );
 
       const result = await resourceService.listGuardians(resourceId, guardianId);
 
       assert.strictEqual(result.success, true);
-      assert.strictEqual(result.guardians!.length, 2);
+      assert.strictEqual(result.guardians?.length, 2);
     });
 
     it('should fail if actor is unauthorized', async () => {
       // Mock Actor not found
-      (mockGuardianRepo.findByResourceAndUser as any).mock.mockImplementation(async () => null);
+      (mockGuardianRepo.findByResourceAndUser as unknown as MockedFn).mock.mockImplementation(
+        async () => null
+      );
 
       const result = await resourceService.listGuardians(resourceId, otherId);
 
       assert.strictEqual(result.success, false);
-      assert.match(result.error!, /Access denied/);
+      assert.match(result.error ?? '', /Access denied/);
+    });
+
+    it('should support list alias method', async () => {
+      (mockGuardianRepo.findByResourceAndUser as unknown as MockedFn).mock.mockImplementation(
+        async (_rid: unknown, uid: unknown) => {
+          if (uid === guardianId)
+            return { id: 'g2', role: 'GUARDIAN', discordUserId: guardianId } as Guardian;
+          return null;
+        }
+      );
+
+      (mockGuardianRepo.findByResourceId as unknown as MockedFn).mock.mockImplementation(
+        async () => [
+          { id: 'g1', role: 'OWNER' },
+          { id: 'g2', role: 'GUARDIAN' },
+        ]
+      );
+
+      const result = await resourceService.list(resourceId, guardianId);
+
+      assert.strictEqual(result.success, true);
+      assert.strictEqual(result.guardians?.length, 2);
     });
   });
 
@@ -193,8 +243,12 @@ describe('ResourceService', () => {
       const mockTotpRepo = {
         findById: mock.fn(async () => mockTotpAccount),
       };
-      mockResourceRepo.findById = mock.fn(async () => mockResource) as any;
-      mockResourceRepo.update = mock.fn(async () => mockResource) as any;
+      mockResourceRepo.findById = mock.fn(
+        async () => mockResource
+      ) as unknown as ResourceRepository['findById'];
+      mockResourceRepo.update = mock.fn(
+        async () => mockResource
+      ) as unknown as ResourceRepository['update'];
 
       const failingAuditService = {
         log: mock.fn(async () => {
@@ -205,16 +259,16 @@ describe('ResourceService', () => {
       const deps: ServiceDependencies = {
         repositories: {
           ...mockRepositories,
-          totp: mockTotpRepo as any,
+          totp: mockTotpRepo as unknown as Repositories['totp'],
         },
-        audit: failingAuditService as any,
+        audit: failingAuditService as unknown as ServiceDependencies['audit'],
       };
       const svc = new ResourceService(deps);
 
       // Should complete successfully without throwing
       await svc.linkTOTPAccount(resourceId, 'totp-1', ownerId);
 
-      assert.strictEqual((mockResourceRepo.update as any).mock.calls.length, 1);
+      assert.strictEqual((mockResourceRepo.update as unknown as MockedFn).mock.calls.length, 1);
       assert.strictEqual(failingAuditService.log.mock.calls.length, 1);
     });
   });
@@ -229,16 +283,17 @@ describe('ApprovalService', () => {
 
   beforeEach(() => {
     mockApprovalRepo = {
-      create: mock.fn() as any,
-      findById: mock.fn() as any,
-      updateStatus: mock.fn() as any,
-      findActiveByRequester: mock.fn() as any,
+      create: mock.fn() as unknown as ApprovalRequestRepository['create'],
+      findById: mock.fn() as unknown as ApprovalRequestRepository['findById'],
+      updateStatus: mock.fn() as unknown as ApprovalRequestRepository['updateStatus'],
+      findActiveByRequester:
+        mock.fn() as unknown as ApprovalRequestRepository['findActiveByRequester'],
     };
     mockResourceRepo = {
-      findById: mock.fn() as any,
+      findById: mock.fn() as unknown as ResourceRepository['findById'],
     };
     mockGuardianRepo = {
-      findByResourceId: mock.fn() as any,
+      findByResourceId: mock.fn() as unknown as GuardianRepository['findByResourceId'],
     };
 
     mockRepositories = {
@@ -260,16 +315,19 @@ describe('ApprovalService', () => {
       const requesterId = 'user-1';
       const mockRequest = { id: 'req-1', status: 'PENDING' };
 
-      (mockApprovalRepo.findActiveByRequester as any).mock.mockImplementation(
+      (mockApprovalRepo.findActiveByRequester as unknown as MockedFn).mock.mockImplementation(
         async () => mockRequest
       );
 
       const result = await approvalService.findActiveApproval(resourceId, requesterId);
 
       assert.strictEqual(result, mockRequest);
-      assert.strictEqual((mockApprovalRepo.findActiveByRequester as any).mock.calls.length, 1);
+      assert.strictEqual(
+        (mockApprovalRepo.findActiveByRequester as unknown as MockedFn).mock.calls.length,
+        1
+      );
       assert.deepStrictEqual(
-        (mockApprovalRepo.findActiveByRequester as any).mock.calls[0].arguments,
+        (mockApprovalRepo.findActiveByRequester as unknown as MockedFn).mock.calls[0].arguments,
         [resourceId, requesterId]
       );
     });
@@ -283,12 +341,16 @@ describe('ApprovalService', () => {
         resourceId: 'res-1',
         context: { requesterId: 'requester-1' },
       };
-      mockApprovalRepo.findById = mock.fn(async () => mockRequest) as any;
-      mockApprovalRepo.updateStatus = mock.fn(async () => {}) as any;
+      mockApprovalRepo.findById = mock.fn(
+        async () => mockRequest
+      ) as unknown as ApprovalRequestRepository['findById'];
+      mockApprovalRepo.updateStatus = mock.fn(
+        async () => {}
+      ) as unknown as ApprovalRequestRepository['updateStatus'];
       mockGuardianRepo.findByResourceAndUser = mock.fn(async () => ({
         id: 'g-1',
         role: 'OWNER',
-      })) as any;
+      })) as unknown as GuardianRepository['findByResourceAndUser'];
 
       const failingAuditService = {
         log: mock.fn(async () => {
@@ -298,14 +360,17 @@ describe('ApprovalService', () => {
 
       const deps: ServiceDependencies = {
         repositories: mockRepositories,
-        audit: failingAuditService as any,
+        audit: failingAuditService as unknown as ServiceDependencies['audit'],
       };
       const svc = new ApprovalService(deps);
 
       const result = await svc.recordDecision('req-1', 'APPROVE', 'guardian-1');
 
       assert.strictEqual(result.success, true);
-      assert.strictEqual((mockApprovalRepo.updateStatus as any).mock.calls.length, 1);
+      assert.strictEqual(
+        (mockApprovalRepo.updateStatus as unknown as MockedFn).mock.calls.length,
+        1
+      );
       assert.strictEqual(failingAuditService.log.mock.calls.length, 1);
     });
   });

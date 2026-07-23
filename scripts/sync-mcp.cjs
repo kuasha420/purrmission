@@ -15,416 +15,400 @@
  *                (Useful if you want this project to be the SINGLE source of truth).
  */
 
-const fs = require("node:fs");
-const path = require("node:path");
-const os = require("node:os");
-const dotenv = require("dotenv");
+const fs = require('node:fs');
+const path = require('node:path');
+const os = require('node:os');
+const dotenv = require('dotenv');
 
 // --- Configuration ---
 
 // 1. Project Configs
-const PROJECT_ROOT = path.resolve(__dirname, "..");
-const PROJECT_MCP_PATH = path.join(PROJECT_ROOT, "mcp.json");
-const LOCAL_MCP_PATH = path.join(PROJECT_ROOT, "mcp.local.json"); // For personal overrides (ignored by git)
-const ENV_PATH = path.join(PROJECT_ROOT, ".env");
+const PROJECT_ROOT = path.resolve(__dirname, '..');
+const PROJECT_MCP_PATH = path.join(PROJECT_ROOT, 'mcp.json');
+const LOCAL_MCP_PATH = path.join(PROJECT_ROOT, 'mcp.local.json'); // For personal overrides (ignored by git)
+const ENV_PATH = path.join(PROJECT_ROOT, '.env');
 
 // 2. Global Config Paths
 // Platform specific paths for Claude and VS Code
 let CLAUDE_CONFIG_DIR;
 
-if (process.platform === "win32") {
-    CLAUDE_CONFIG_DIR = path.join(process.env.APPDATA, "Claude");
-} else if (process.platform === "darwin") {
-    CLAUDE_CONFIG_DIR = path.join(
-        os.homedir(),
-        "Library",
-        "Application Support",
-        "Claude",
-    );
+if (process.platform === 'win32') {
+  CLAUDE_CONFIG_DIR = path.join(process.env.APPDATA, 'Claude');
+} else if (process.platform === 'darwin') {
+  CLAUDE_CONFIG_DIR = path.join(os.homedir(), 'Library', 'Application Support', 'Claude');
 } else {
-    // Linux
-    CLAUDE_CONFIG_DIR = path.join(os.homedir(), ".config", "Claude");
+  // Linux
+  CLAUDE_CONFIG_DIR = path.join(os.homedir(), '.config', 'Claude');
 }
 
-const GLOBAL_MCP_PATH = path.join(CLAUDE_CONFIG_DIR, "claude_desktop_config.json");
-const ANTIGRAVITY_CONFIG_PATH = path.join(os.homedir(), ".gemini/antigravity/mcp_config.json");
-const VSCODE_MCP_PATH = path.join(PROJECT_ROOT, ".vscode", "mcp.json"); // Per-project VS Code config
-const CODEX_CONFIG_PATH = path.join(PROJECT_ROOT, ".codex", "config.toml");
-const USER_CODEX_CONFIG_PATH = path.join(os.homedir(), ".codex", "config.toml");
-const CODEX_EXCLUDED_SERVER_NAMES = new Set(["filesystem"]);
+const GLOBAL_MCP_PATH = path.join(CLAUDE_CONFIG_DIR, 'claude_desktop_config.json');
+const ANTIGRAVITY_CONFIG_PATH = path.join(os.homedir(), '.gemini/antigravity/mcp_config.json');
+const VSCODE_MCP_PATH = path.join(PROJECT_ROOT, '.vscode', 'mcp.json'); // Per-project VS Code config
+const CODEX_CONFIG_PATH = path.join(PROJECT_ROOT, '.codex', 'config.toml');
+const USER_CODEX_CONFIG_PATH = path.join(os.homedir(), '.codex', 'config.toml');
+const CODEX_EXCLUDED_SERVER_NAMES = new Set(['filesystem']);
 
 // --- Helpers ---
 
 function ensureDirectoryExists(filePath) {
-    const dirname = path.dirname(filePath);
-    if (!fs.existsSync(dirname)) {
-        fs.mkdirSync(dirname, { recursive: true });
-    }
+  const dirname = path.dirname(filePath);
+  if (!fs.existsSync(dirname)) {
+    fs.mkdirSync(dirname, { recursive: true });
+  }
 }
 
 function parseEnv() {
-    if (fs.existsSync(ENV_PATH)) {
-        return dotenv.parse(fs.readFileSync(ENV_PATH));
-    }
-    return {};
+  if (fs.existsSync(ENV_PATH)) {
+    return dotenv.parse(fs.readFileSync(ENV_PATH));
+  }
+  return {};
 }
 
 function substitute(value, envVars) {
-    if (typeof value !== "string") return value;
-    return value.replace(/\$\{([^}]+)\}/g, (_, key) => {
-        return process.env[key] || envVars[key] || "";
-    });
+  if (typeof value !== 'string') return value;
+  return value.replace(/\$\{([^}]+)\}/g, (_, key) => {
+    return process.env[key] || envVars[key] || '';
+  });
 }
 
 function escapeTomlString(value) {
-    return value.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+  return value.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
 }
 
 function renderTomlStringArray(values) {
-    if (!Array.isArray(values) || values.length === 0) {
-        return "[]";
-    }
+  if (!Array.isArray(values) || values.length === 0) {
+    return '[]';
+  }
 
-    return `[${values
-        .map((value) => `"${escapeTomlString(String(value))}"`)
-        .join(", ")}]`;
+  return `[${values.map((value) => `"${escapeTomlString(String(value))}"`).join(', ')}]`;
 }
 
 function escapeRegExp(value) {
-    return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
 function ensureCodexProjectTrusted() {
-    const escapedProjectRoot = escapeTomlString(PROJECT_ROOT);
-    const sectionHeader = `[projects."${escapedProjectRoot}"]`;
-    const sectionKeyPatterns = [PROJECT_ROOT, escapedProjectRoot]
-        .filter((value, index, values) => values.indexOf(value) === index)
-        .map((value) => escapeRegExp(value))
-        .join("|");
+  const escapedProjectRoot = escapeTomlString(PROJECT_ROOT);
+  const sectionHeader = `[projects."${escapedProjectRoot}"]`;
+  const sectionKeyPatterns = [PROJECT_ROOT, escapedProjectRoot]
+    .filter((value, index, values) => values.indexOf(value) === index)
+    .map((value) => escapeRegExp(value))
+    .join('|');
 
-    ensureDirectoryExists(USER_CODEX_CONFIG_PATH);
+  ensureDirectoryExists(USER_CODEX_CONFIG_PATH);
 
-    let content = "";
-    if (fs.existsSync(USER_CODEX_CONFIG_PATH)) {
-        content = fs.readFileSync(USER_CODEX_CONFIG_PATH, "utf8");
-    }
+  let content = '';
+  if (fs.existsSync(USER_CODEX_CONFIG_PATH)) {
+    content = fs.readFileSync(USER_CODEX_CONFIG_PATH, 'utf8');
+  }
 
-    const sectionPattern = new RegExp(
-        `(^|\\n)\\[projects\\."(?:${sectionKeyPatterns})"\\]\\n([\\s\\S]*?)(?=\\n\\[[^\\]]+\\]|$)`,
-        "m",
-    );
+  const sectionPattern = new RegExp(
+    `(^|\\n)\\[projects\\."(?:${sectionKeyPatterns})"\\]\\n([\\s\\S]*?)(?=\\n\\[[^\\]]+\\]|$)`,
+    'm'
+  );
 
-    if (sectionPattern.test(content)) {
-        content = content.replace(sectionPattern, (match, prefix, body) => {
-            if (/^trust_level\s*=.*$/m.test(body)) {
-                const nextBody = body.replace(/^trust_level\s*=.*$/m, 'trust_level = "trusted"');
-                return `${prefix}${sectionHeader}\n${nextBody}`;
-            }
-            return `${prefix}${sectionHeader}\ntrust_level = "trusted"\n${body}`;
-        });
-    } else {
-        const separator = content.trimEnd().length === 0 ? "" : "\n\n";
-        content = `${content.trimEnd()}${separator}${sectionHeader}\ntrust_level = "trusted"\n`;
-    }
+  if (sectionPattern.test(content)) {
+    content = content.replace(sectionPattern, (match, prefix, body) => {
+      if (/^trust_level\s*=.*$/m.test(body)) {
+        const nextBody = body.replace(/^trust_level\s*=.*$/m, 'trust_level = "trusted"');
+        return `${prefix}${sectionHeader}\n${nextBody}`;
+      }
+      return `${prefix}${sectionHeader}\ntrust_level = "trusted"\n${body}`;
+    });
+  } else {
+    const separator = content.trimEnd().length === 0 ? '' : '\n\n';
+    content = `${content.trimEnd()}${separator}${sectionHeader}\ntrust_level = "trusted"\n`;
+  }
 
-    fs.writeFileSync(USER_CODEX_CONFIG_PATH, `${content.trimEnd()}\n`);
+  fs.writeFileSync(USER_CODEX_CONFIG_PATH, `${content.trimEnd()}\n`);
 }
 
 function renderCodexConfig(processedProjectServers) {
-    const lines = [
-        "# Generated by scripts/sync-mcp.cjs",
-        "# Do not edit manually. This file is local-only and gitignored.",
-        "",
-    ];
+  const lines = [
+    '# Generated by scripts/sync-mcp.cjs',
+    '# Do not edit manually. This file is local-only and gitignored.',
+    '',
+  ];
 
-    for (const [serverName, serverConfig] of Object.entries(processedProjectServers)) {
-        if (CODEX_EXCLUDED_SERVER_NAMES.has(serverName)) {
-            continue;
-        }
-
-        const envEntries = Object.entries(serverConfig.env || {}).filter(([, value]) => {
-            return typeof value === "string" && value.trim() !== "";
-        });
-
-        lines.push(`[mcp_servers.${serverName}]`);
-
-        if (typeof serverConfig.command === "string" && serverConfig.command.length > 0) {
-            lines.push(`command = "${escapeTomlString(serverConfig.command)}"`);
-        }
-
-        if (Array.isArray(serverConfig.args) && serverConfig.args.length > 0) {
-            lines.push(`args = ${renderTomlStringArray(serverConfig.args)}`);
-        }
-
-        if (typeof serverConfig.url === "string" && serverConfig.url.length > 0) {
-            lines.push(`url = "${escapeTomlString(serverConfig.url)}"`);
-        } else if (
-            typeof serverConfig.serverUrl === "string" &&
-            serverConfig.serverUrl.length > 0
-        ) {
-            lines.push(`url = "${escapeTomlString(serverConfig.serverUrl)}"`);
-        }
-
-        if (typeof serverConfig.command === "string" && serverConfig.command.length > 0) {
-            const cwd = serverConfig.cwd || PROJECT_ROOT;
-            lines.push(`cwd = "${escapeTomlString(cwd)}"`);
-        }
-
-        if (serverName === "github") {
-            const githubToken = processedProjectServers.github?.env?.GITHUB_PERSONAL_ACCESS_TOKEN;
-            if (!githubToken) {
-                lines.push("enabled = false");
-            }
-            lines.push("startup_timeout_sec = 20");
-            lines.push("tool_timeout_sec = 60");
-        } else if (serverName === "prisma") {
-            lines.push("startup_timeout_sec = 20");
-            lines.push("tool_timeout_sec = 90");
-        } else {
-            lines.push("startup_timeout_sec = 20");
-            lines.push("tool_timeout_sec = 60");
-        }
-
-        if (envEntries.length > 0) {
-            lines.push("");
-            lines.push(`[mcp_servers.${serverName}.env]`);
-            for (const [envKey, envValue] of envEntries) {
-                lines.push(`${envKey} = "${escapeTomlString(String(envValue))}"`);
-            }
-        }
-
-        lines.push("");
+  for (const [serverName, serverConfig] of Object.entries(processedProjectServers)) {
+    if (CODEX_EXCLUDED_SERVER_NAMES.has(serverName)) {
+      continue;
     }
 
-    return `${lines.join("\n").trimEnd()}\n`;
+    const envEntries = Object.entries(serverConfig.env || {}).filter(([, value]) => {
+      return typeof value === 'string' && value.trim() !== '';
+    });
+
+    lines.push(`[mcp_servers.${serverName}]`);
+
+    if (typeof serverConfig.command === 'string' && serverConfig.command.length > 0) {
+      lines.push(`command = "${escapeTomlString(serverConfig.command)}"`);
+    }
+
+    if (Array.isArray(serverConfig.args) && serverConfig.args.length > 0) {
+      lines.push(`args = ${renderTomlStringArray(serverConfig.args)}`);
+    }
+
+    if (typeof serverConfig.url === 'string' && serverConfig.url.length > 0) {
+      lines.push(`url = "${escapeTomlString(serverConfig.url)}"`);
+    } else if (typeof serverConfig.serverUrl === 'string' && serverConfig.serverUrl.length > 0) {
+      lines.push(`url = "${escapeTomlString(serverConfig.serverUrl)}"`);
+    }
+
+    if (typeof serverConfig.command === 'string' && serverConfig.command.length > 0) {
+      const cwd = serverConfig.cwd || PROJECT_ROOT;
+      lines.push(`cwd = "${escapeTomlString(cwd)}"`);
+    }
+
+    if (serverName === 'github') {
+      const githubToken = processedProjectServers.github?.env?.GITHUB_PERSONAL_ACCESS_TOKEN;
+      if (!githubToken) {
+        lines.push('enabled = false');
+      }
+      lines.push('startup_timeout_sec = 20');
+      lines.push('tool_timeout_sec = 60');
+    } else if (serverName === 'prisma') {
+      lines.push('startup_timeout_sec = 20');
+      lines.push('tool_timeout_sec = 90');
+    } else {
+      lines.push('startup_timeout_sec = 20');
+      lines.push('tool_timeout_sec = 60');
+    }
+
+    if (envEntries.length > 0) {
+      lines.push('');
+      lines.push(`[mcp_servers.${serverName}.env]`);
+      for (const [envKey, envValue] of envEntries) {
+        lines.push(`${envKey} = "${escapeTomlString(String(envValue))}"`);
+      }
+    }
+
+    lines.push('');
+  }
+
+  return `${lines.join('\n').trimEnd()}\n`;
 }
 
 function syncMcp() {
-    console.log("🔄 Syncing MCP Configuration...");
+  console.log('🔄 Syncing MCP Configuration...');
 
-    // 1. Read Project Config
-    if (!fs.existsSync(PROJECT_MCP_PATH)) {
-        console.error("❌ Error: mcp.json not found in project root.");
-        process.exit(1);
+  // 1. Read Project Config
+  if (!fs.existsSync(PROJECT_MCP_PATH)) {
+    console.error('❌ Error: mcp.json not found in project root.');
+    process.exit(1);
+  }
+
+  let projectConfig;
+  try {
+    projectConfig = JSON.parse(fs.readFileSync(PROJECT_MCP_PATH, 'utf8'));
+  } catch (e) {
+    console.error('❌ Error: mcp.json contains invalid JSON.');
+    if (e instanceof Error) {
+      console.error(`   Details: ${e.message}`);
     }
+    process.exit(1);
+  }
 
-    let projectConfig;
+  // Ensure mcpServers exists
+  if (!projectConfig.mcpServers) {
+    projectConfig.mcpServers = {};
+  }
+
+  // 1a. Apply Local Overrides
+  if (fs.existsSync(LOCAL_MCP_PATH)) {
     try {
-        projectConfig = JSON.parse(fs.readFileSync(PROJECT_MCP_PATH, "utf8"));
+      console.log('   🔸 Detected mcp.local.json. Applying overrides...');
+      const localConfig = JSON.parse(fs.readFileSync(LOCAL_MCP_PATH, 'utf8'));
+      if (localConfig.mcpServers) {
+        for (const [key, value] of Object.entries(localConfig.mcpServers)) {
+          if (projectConfig.mcpServers[key]) {
+            // Merge shallowly for now (flags like disabled, env, etc)
+            projectConfig.mcpServers[key] = { ...projectConfig.mcpServers[key], ...value };
+          } else {
+            // Strict mode: Ignore local-only servers to prevent pollution.
+            console.warn(`      ⚠️  Ignoring local-only server: ${key} (not in mcp.json)`);
+          }
+        }
+      }
     } catch (e) {
-        console.error(
-            "❌ Error: mcp.json contains invalid JSON.",
-        );
-        if (e instanceof Error) {
-            console.error(`   Details: ${e.message}`);
-        }
-        process.exit(1);
+      console.warn(`⚠️  Warning: mcp.local.json exists but is invalid: ${e.message}. Ignoring.`);
     }
+  }
 
-    // Ensure mcpServers exists
-    if (!projectConfig.mcpServers) {
-        projectConfig.mcpServers = {};
-    }
+  // 2. Read (or Init) Global Config
+  let globalConfig = { mcpServers: {} };
+  const args = process.argv.slice(2);
+  const replaceMode = args.includes('--replace');
 
-    // 1a. Apply Local Overrides
-    if (fs.existsSync(LOCAL_MCP_PATH)) {
-        try {
-            console.log("   🔸 Detected mcp.local.json. Applying overrides...");
-            const localConfig = JSON.parse(fs.readFileSync(LOCAL_MCP_PATH, "utf8"));
-            if (localConfig.mcpServers) {
-                for (const [key, value] of Object.entries(localConfig.mcpServers)) {
-                    if (projectConfig.mcpServers[key]) {
-                        // Merge shallowly for now (flags like disabled, env, etc)
-                        projectConfig.mcpServers[key] = { ...projectConfig.mcpServers[key], ...value };
-                    } else {
-                        // Strict mode: Ignore local-only servers to prevent pollution.
-                        console.warn(`      ⚠️  Ignoring local-only server: ${key} (not in mcp.json)`);
-                    }
-                }
-            }
-        } catch (e) {
-            console.warn(`⚠️  Warning: mcp.local.json exists but is invalid: ${e.message}. Ignoring.`);
-        }
-    }
-
-    // 2. Read (or Init) Global Config
-    let globalConfig = { mcpServers: {} };
-    const args = process.argv.slice(2);
-    const replaceMode = args.includes("--replace");
-
-    if (fs.existsSync(GLOBAL_MCP_PATH)) {
-        try {
-            const content = fs.readFileSync(GLOBAL_MCP_PATH, "utf8");
-            globalConfig = JSON.parse(content);
-            if (!globalConfig || typeof globalConfig !== "object") {
-                globalConfig = {};
-            }
-            if (
-                !globalConfig.mcpServers ||
-                typeof globalConfig.mcpServers !== "object"
-            ) {
-                globalConfig.mcpServers = {};
-            }
-        } catch (e) {
-            console.warn(
-                "⚠️  Warning: Global config found but invalid/unreadable. Overwriting.",
-            );
-            globalConfig = { mcpServers: {} };
-        }
-    } else {
-        ensureDirectoryExists(GLOBAL_MCP_PATH);
-    }
-
-    if (replaceMode) {
-        console.log("🔥 Replace mode: Clearing existing global servers.");
+  if (fs.existsSync(GLOBAL_MCP_PATH)) {
+    try {
+      const content = fs.readFileSync(GLOBAL_MCP_PATH, 'utf8');
+      globalConfig = JSON.parse(content);
+      if (!globalConfig || typeof globalConfig !== 'object') {
+        globalConfig = {};
+      }
+      if (!globalConfig.mcpServers || typeof globalConfig.mcpServers !== 'object') {
         globalConfig.mcpServers = {};
+      }
+    } catch (e) {
+      console.warn('⚠️  Warning: Global config found but invalid/unreadable. Overwriting.');
+      globalConfig = { mcpServers: {} };
+    }
+  } else {
+    ensureDirectoryExists(GLOBAL_MCP_PATH);
+  }
+
+  if (replaceMode) {
+    console.log('🔥 Replace mode: Clearing existing global servers.');
+    globalConfig.mcpServers = {};
+  }
+
+  // 3. Merge Strategies
+  const servers = projectConfig.mcpServers || {};
+  const processedProjectServers = {};
+
+  // Load .env vars once
+  const fileEnvVars = parseEnv();
+
+  for (const [key, config] of Object.entries(servers)) {
+    // 3a. Check for disabled flag
+    if (config.disabled === true) {
+      console.log(`   ⛔ Skipping disabled server: ${key}`);
+      if (globalConfig.mcpServers && globalConfig.mcpServers[key]) {
+        delete globalConfig.mcpServers[key];
+        console.log(`      - Removed ${key} from global config (disabled locally).`);
+      }
+      continue;
     }
 
-    // 3. Merge Strategies
-    const servers = projectConfig.mcpServers || {};
-    const processedProjectServers = {};
+    // Basic validation
+    if (!config.command && !config.url && !config.serverUrl) {
+      console.warn(
+        `⚠️  Skipping invalid server '${key}': missing 'command', 'url', or 'serverUrl'`
+      );
+      continue;
+    }
 
-    // Load .env vars once
-    const fileEnvVars = parseEnv();
+    const serverConfig = structuredClone(config);
 
-    for (const [key, config] of Object.entries(servers)) {
-        // 3a. Check for disabled flag
-        if (config.disabled === true) {
-            console.log(`   ⛔ Skipping disabled server: ${key}`);
-            if (globalConfig.mcpServers && globalConfig.mcpServers[key]) {
-                delete globalConfig.mcpServers[key];
-                console.log(`      - Removed ${key} from global config (disabled locally).`);
-            }
-            continue;
-        }
-
-        // Basic validation
-        if (!config.command && !config.url && !config.serverUrl) {
-            console.warn(
-                `⚠️  Skipping invalid server '${key}': missing 'command', 'url', or 'serverUrl'`,
-            );
-            continue;
-        }
-
-        const serverConfig = structuredClone(config);
-
-        // 1. Filesystem: Resolve relative paths
-        if (key === "filesystem" && Array.isArray(serverConfig.args)) {
-            const newArgs = serverConfig.args.map((arg) => {
-                if (typeof arg === 'string' && !path.isAbsolute(arg) && !arg.startsWith('-') && !arg.startsWith('@')) {
-                    return path.resolve(process.cwd(), arg);
-                }
-                return arg;
-            });
-            serverConfig.args = newArgs;
-            console.log(`   - Resolved relative paths for 'filesystem' server.`);
-        }
-
-        // 2. Generic Variable Substitution
-        if (Array.isArray(serverConfig.args)) {
-            serverConfig.args = serverConfig.args.map((arg) =>
-                substitute(arg, fileEnvVars),
-            );
-        }
-
-        // 5. Env Block Substitution
-        if (serverConfig.env && typeof serverConfig.env === "object") {
-            for (const [envKey, envValue] of Object.entries(serverConfig.env)) {
-                serverConfig.env[envKey] = substitute(envValue, fileEnvVars);
-            }
-        }
-
-        // 6. CWD Resolution
+    // 1. Filesystem: Resolve relative paths
+    if (key === 'filesystem' && Array.isArray(serverConfig.args)) {
+      const newArgs = serverConfig.args.map((arg) => {
         if (
-            serverConfig.cwd &&
-            typeof serverConfig.cwd === "string" &&
-            !path.isAbsolute(serverConfig.cwd)
+          typeof arg === 'string' &&
+          !path.isAbsolute(arg) &&
+          !arg.startsWith('-') &&
+          !arg.startsWith('@')
         ) {
-            serverConfig.cwd = path.resolve(process.cwd(), serverConfig.cwd);
+          return path.resolve(process.cwd(), arg);
         }
+        return arg;
+      });
+      serverConfig.args = newArgs;
+      console.log(`   - Resolved relative paths for 'filesystem' server.`);
+    }
 
-        // 3. Postgres/Prisma Handling
-        // (Simplified for now, add logic if needed)
+    // 2. Generic Variable Substitution
+    if (Array.isArray(serverConfig.args)) {
+      serverConfig.args = serverConfig.args.map((arg) => substitute(arg, fileEnvVars));
+    }
 
-        // 4. Context7: Special Handling
-        if (key === "context7" && Array.isArray(serverConfig.args)) {
-            const flagIndex = serverConfig.args.indexOf("--api-key");
-            if (flagIndex !== -1 && flagIndex + 1 < serverConfig.args.length) {
-                const apiKeyValue = serverConfig.args[flagIndex + 1];
-                if (!apiKeyValue || apiKeyValue.trim() === "") {
-                    console.log("   - Removing empty --api-key argument (optional).");
-                    serverConfig.args.splice(flagIndex, 2);
-                }
-            }
+    // 5. Env Block Substitution
+    if (serverConfig.env && typeof serverConfig.env === 'object') {
+      for (const [envKey, envValue] of Object.entries(serverConfig.env)) {
+        serverConfig.env[envKey] = substitute(envValue, fileEnvVars);
+      }
+    }
+
+    // 6. CWD Resolution
+    if (
+      serverConfig.cwd &&
+      typeof serverConfig.cwd === 'string' &&
+      !path.isAbsolute(serverConfig.cwd)
+    ) {
+      serverConfig.cwd = path.resolve(process.cwd(), serverConfig.cwd);
+    }
+
+    // 3. Postgres/Prisma Handling
+    // (Simplified for now, add logic if needed)
+
+    // 4. Context7: Special Handling
+    if (key === 'context7' && Array.isArray(serverConfig.args)) {
+      const flagIndex = serverConfig.args.indexOf('--api-key');
+      if (flagIndex !== -1 && flagIndex + 1 < serverConfig.args.length) {
+        const apiKeyValue = serverConfig.args[flagIndex + 1];
+        if (!apiKeyValue || apiKeyValue.trim() === '') {
+          console.log('   - Removing empty --api-key argument (optional).');
+          serverConfig.args.splice(flagIndex, 2);
         }
-
-        globalConfig.mcpServers[key] = serverConfig;
-        processedProjectServers[key] = serverConfig;
-        console.log(`   - Synced server: ${key}`);
+      }
     }
 
-    // 4a. Write Global Config
-    try {
-        ensureDirectoryExists(GLOBAL_MCP_PATH);
-        fs.writeFileSync(GLOBAL_MCP_PATH, JSON.stringify(globalConfig, null, 2), {
-            mode: 0o600,
-        });
-        console.log(
-            `✅ Global: Synced to ${GLOBAL_MCP_PATH}`,
-        );
-    } catch (e) {
-        console.error(`❌ Error: Could not write to global config: ${e.message}`);
-        process.exit(1);
+    globalConfig.mcpServers[key] = serverConfig;
+    processedProjectServers[key] = serverConfig;
+    console.log(`   - Synced server: ${key}`);
+  }
+
+  // 4a. Write Global Config
+  try {
+    ensureDirectoryExists(GLOBAL_MCP_PATH);
+    fs.writeFileSync(GLOBAL_MCP_PATH, JSON.stringify(globalConfig, null, 2), {
+      mode: 0o600,
+    });
+    console.log(`✅ Global: Synced to ${GLOBAL_MCP_PATH}`);
+  } catch (e) {
+    console.error(`❌ Error: Could not write to global config: ${e.message}`);
+    process.exit(1);
+  }
+
+  // 4b. Write VS Code Config
+  try {
+    const vscodeConfig = { servers: {} };
+    // Re-create the VS Code config from the processed servers that belong to this project.
+    for (const key of Object.keys(processedProjectServers)) {
+      if (Object.prototype.hasOwnProperty.call(processedProjectServers, key)) {
+        vscodeConfig.servers[key] = processedProjectServers[key];
+      }
     }
 
-    // 4b. Write VS Code Config
-    try {
-        const vscodeConfig = { servers: {} };
-        // Re-create the VS Code config from the processed servers that belong to this project.
-        for (const key of Object.keys(processedProjectServers)) {
-            if (Object.prototype.hasOwnProperty.call(processedProjectServers, key)) {
-                vscodeConfig.servers[key] = processedProjectServers[key];
-            }
-        }
+    ensureDirectoryExists(VSCODE_MCP_PATH);
+    fs.writeFileSync(VSCODE_MCP_PATH, JSON.stringify(vscodeConfig, null, 2));
+    console.log(`✅ VS Code: Synced to ${VSCODE_MCP_PATH}`);
+  } catch (e) {
+    console.error(`❌ Error: Could not write to VS Code config: ${e.message}`);
+    // Don't exit, just warn
+  }
 
-        ensureDirectoryExists(VSCODE_MCP_PATH);
-        fs.writeFileSync(VSCODE_MCP_PATH, JSON.stringify(vscodeConfig, null, 2));
-        console.log(`✅ VS Code: Synced to ${VSCODE_MCP_PATH}`);
-    } catch (e) {
-        console.error(`❌ Error: Could not write to VS Code config: ${e.message}`);
-        // Don't exit, just warn
-    }
+  // 4c. Write Antigravity Config
+  try {
+    ensureDirectoryExists(ANTIGRAVITY_CONFIG_PATH);
+    // Antigravity might expect a slightly different format or strictly specific one.
+    // Assuming same format as Claude Desktop for now.
+    fs.writeFileSync(ANTIGRAVITY_CONFIG_PATH, JSON.stringify(globalConfig, null, 2), {
+      mode: 0o600,
+    });
+    console.log(`✅ Antigravity: Synced to ${ANTIGRAVITY_CONFIG_PATH}`);
+  } catch (e) {
+    console.error(`❌ Error: Could not write to Antigravity config: ${e.message}`);
+  }
 
-    // 4c. Write Antigravity Config
-    try {
-        ensureDirectoryExists(ANTIGRAVITY_CONFIG_PATH);
-        // Antigravity might expect a slightly different format or strictly specific one.
-        // Assuming same format as Claude Desktop for now.
-        fs.writeFileSync(ANTIGRAVITY_CONFIG_PATH, JSON.stringify(globalConfig, null, 2), {
-            mode: 0o600,
-        });
-        console.log(`✅ Antigravity: Synced to ${ANTIGRAVITY_CONFIG_PATH}`);
-    } catch (e) {
-        console.error(`❌ Error: Could not write to Antigravity config: ${e.message}`);
-    }
+  // 4d. Write Codex Config
+  try {
+    const codexConfig = renderCodexConfig(processedProjectServers);
+    ensureDirectoryExists(CODEX_CONFIG_PATH);
+    fs.writeFileSync(CODEX_CONFIG_PATH, codexConfig);
+    console.log(`✅ Codex: Synced to ${CODEX_CONFIG_PATH}`);
+  } catch (e) {
+    console.error(`❌ Error: Could not write to Codex config: ${e.message}`);
+  }
 
-    // 4d. Write Codex Config
-    try {
-        const codexConfig = renderCodexConfig(processedProjectServers);
-        ensureDirectoryExists(CODEX_CONFIG_PATH);
-        fs.writeFileSync(CODEX_CONFIG_PATH, codexConfig);
-        console.log(`✅ Codex: Synced to ${CODEX_CONFIG_PATH}`);
-    } catch (e) {
-        console.error(`❌ Error: Could not write to Codex config: ${e.message}`);
-    }
-
-    // 4e. Trust this project for Codex
-    try {
-        ensureCodexProjectTrusted();
-        console.log(`✅ Codex: Trusted project in ${USER_CODEX_CONFIG_PATH}`);
-    } catch (e) {
-        console.error(`❌ Error: Could not update Codex trust config: ${e.message}`);
-    }
+  // 4e. Trust this project for Codex
+  try {
+    ensureCodexProjectTrusted();
+    console.log(`✅ Codex: Trusted project in ${USER_CODEX_CONFIG_PATH}`);
+  } catch (e) {
+    console.error(`❌ Error: Could not update Codex trust config: ${e.message}`);
+  }
 }
 
 syncMcp();

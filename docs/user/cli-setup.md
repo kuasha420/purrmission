@@ -20,6 +20,7 @@ npx @psl-oss/pawthy pull
 ## Installation
 
 ### Global Installation
+
 For frequent use, install globally:
 
 ```bash
@@ -27,11 +28,13 @@ npm install -g @psl-oss/pawthy
 ```
 
 Then run commands directly:
+
 ```bash
 pawthy push
 ```
 
 ### Project Installation
+
 To pin a specific version for your project:
 
 ```bash
@@ -39,6 +42,7 @@ npm install -D @psl-oss/pawthy
 ```
 
 Run via npm scripts or `npx`:
+
 ```bash
 npx pawthy pull
 ```
@@ -46,4 +50,5 @@ npx pawthy pull
 ## Troubleshooting
 
 ### "Package not found"
+
 Ensure you are using the correct scope `@psl-oss`.
