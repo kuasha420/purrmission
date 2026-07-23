@@ -3,14 +3,20 @@ import axios from 'axios';
 import chalk from 'chalk';
 import fs from 'fs/promises';
 import path from 'path';
-import dotenv from 'dotenv';
 import { getToken, getApiUrl, getProjectConfig } from '../config.js';
+import { loadCascadingEnv } from '../loader.js';
+import { resolveFileAndFormat, deserializeSecrets, SecretFormat } from '../format.js';
 
 export const pushCommand = new Command('push')
   .description(
-    'Push local .env secrets to Purrmission, updating existing values. This does not remove secrets.'
+    'Push local secrets to Purrmission, updating existing values. This does not remove secrets.'
   )
-  .option('-f, --file <path>', 'Path to .env file', '.env')
+  .option(
+    '-f, --file <path>',
+    'Path to secret file (default: .env, secrets.json, secrets.yaml, or secrets.toml depending on format)'
+  )
+  .option('-F, --format <format>', 'Secret file format (env, json, yaml, toml)')
+  .option('-E, --env <environment>', 'Environment variant (e.g. development, production)')
   .option('--force', 'Push secrets without confirmation')
   .option('-p, --project-id <id>', 'Project ID')
   .option('-e, --env-id <id>', 'Environment ID')
@@ -49,12 +55,61 @@ export const pushCommand = new Command('push')
       return;
     }
 
-    const envPath = path.resolve(process.cwd(), options.file);
+    let file: string;
+    let format: SecretFormat;
+    try {
+      const resolved = resolveFileAndFormat(options.file, options.format);
+      file = resolved.file;
+      format = resolved.format;
+    } catch (err) {
+      console.error(chalk.red(err instanceof Error ? err.message : String(err)));
+      process.exit(1);
+      return;
+    }
+
+    const isFileExplicit = pushCommand.getOptionValueSource('file') === 'cli';
+    const isFormatExplicit = pushCommand.getOptionValueSource('format') === 'cli';
+    if (options.env && !isFileExplicit && !isFormatExplicit && format === 'env') {
+      file = `.env.${options.env}`;
+    }
+
+    const envPath = path.resolve(process.cwd(), file);
 
     try {
-      // 1. Read and Parse .env
-      const envContent = await fs.readFile(envPath, 'utf-8');
-      let secrets = dotenv.parse(envContent);
+      // 1. Read and Parse secrets file
+      let secrets: Record<string, string>;
+      if (!isFileExplicit && !isFormatExplicit && format === 'env') {
+        secrets = loadCascadingEnv({
+          rootDir: process.cwd(),
+          environment: options.env,
+        });
+      } else {
+        let envContent: string;
+        try {
+          envContent = await fs.readFile(envPath, 'utf-8');
+        } catch (error) {
+          if (
+            error instanceof Error &&
+            'code' in error &&
+            (error as NodeJS.ErrnoException).code === 'ENOENT'
+          ) {
+            console.error(chalk.red(`File not found: ${envPath}`));
+            process.exit(1);
+            return;
+          }
+          throw error;
+        }
+
+        try {
+          secrets = deserializeSecrets(envContent, format, envPath);
+        } catch (parseError) {
+          console.error(
+            chalk.red(parseError instanceof Error ? parseError.message : String(parseError))
+          );
+          process.exit(1);
+          return;
+        }
+      }
 
       // Whitelisting / selective keys sync (Issue #80)
       const keysWhitelist = getKeysWhitelist(options.keys, config);

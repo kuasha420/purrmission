@@ -15,10 +15,13 @@ describe('Pull Command', () => {
     exitCode = null;
 
     // Reset commander options to prevent test pollution
-    pullCommand.setOptionValue('file', '.env');
-    pullCommand.setOptionValue('projectId', undefined);
-    pullCommand.setOptionValue('envId', undefined);
-    pullCommand.setOptionValue('keys', undefined);
+    pullCommand.setOptionValueWithSource('file', undefined, 'default');
+    pullCommand.setOptionValueWithSource('format', undefined, 'default');
+    pullCommand.setOptionValueWithSource('projectId', undefined, 'default');
+    pullCommand.setOptionValueWithSource('envId', undefined, 'default');
+    pullCommand.setOptionValueWithSource('keys', undefined, 'default');
+    pullCommand.setOptionValueWithSource('merge', undefined, 'default');
+    pullCommand.setOptionValueWithSource('env', undefined, 'default');
     pullCommand.setOptionValue('merge', undefined);
 
     // Create a unique temp directory outside the repository
@@ -468,5 +471,76 @@ describe('Pull Command', () => {
 
     assert.ok(lines.includes('DATABASE_URL=postgres://prod-host/db'));
     assert.ok(!lines.includes('API_KEY=secret-key'));
+  });
+
+  it('should write secrets to environment-specific file when --env flag is passed', async () => {
+    mock.method(config, 'get', (key: string) => {
+      if (key === 'token') return 'test-token';
+      if (key === 'apiUrl') return 'http://localhost:3000';
+      return undefined;
+    });
+
+    mock.method(axios, 'get', async () => {
+      return {
+        status: 200,
+        data: {
+          secrets: {
+            DEV_SECRET: 'dev-val',
+          },
+        },
+      };
+    });
+
+    mock.method(console, 'log', () => {});
+    mock.method(console, 'error', () => {});
+
+    await pullCommand.parseAsync(['node', 'pawthy', 'pull', '-E', 'development']);
+
+    const devContent = await fs.readFile(path.join(tempDir, '.env.development'), 'utf-8');
+    assert.ok(devContent.includes('DEV_SECRET=dev-val'));
+  });
+
+  it('should preserve explicit -f flag over --env flag in pull command', async () => {
+    mock.method(config, 'get', (key: string) => {
+      if (key === 'token') return 'test-token';
+      if (key === 'apiUrl') return 'http://localhost:3000';
+      return undefined;
+    });
+
+    mock.method(axios, 'get', async () => {
+      return {
+        status: 200,
+        data: {
+          secrets: {
+            CUSTOM_SECRET: 'custom-val',
+          },
+        },
+      };
+    });
+
+    mock.method(console, 'log', () => {});
+    mock.method(console, 'error', () => {});
+
+    await pullCommand.parseAsync([
+      'node',
+      'pawthy',
+      'pull',
+      '-f',
+      'custom.env',
+      '-E',
+      'development',
+    ]);
+
+    const customContent = await fs.readFile(path.join(tempDir, 'custom.env'), 'utf-8');
+    assert.ok(customContent.includes('CUSTOM_SECRET=custom-val'));
+
+    // Ensure .env.development was not created
+    let devExists = true;
+    try {
+      await fs.access(path.join(tempDir, '.env.development'));
+    } catch {
+      devExists = false;
+    }
+    assert.strictEqual(devExists, false);
   });
 });
