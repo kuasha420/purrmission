@@ -152,6 +152,9 @@ class MemGuardianRepo implements GuardianRepository {
   async findByResourceId(resourceId: string): Promise<Guardian[]> {
     return this.guardians.filter((g) => g.resourceId === resourceId);
   }
+  async list(resourceId: string): Promise<Guardian[]> {
+    return this.findByResourceId(resourceId);
+  }
   async findByResourceAndUser(resourceId: string, userId: string): Promise<Guardian | null> {
     return (
       this.guardians.find((g) => g.resourceId === resourceId && g.discordUserId === userId) || null

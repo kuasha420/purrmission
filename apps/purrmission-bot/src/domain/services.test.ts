@@ -5,6 +5,7 @@ import {
   type GuardianRepository,
   type ResourceRepository,
   type ApprovalRequestRepository,
+  type ProjectRepository,
   type Repositories,
 } from './repositories.js';
 import type { Guardian } from './models.js';
@@ -44,7 +45,7 @@ describe('ResourceService', () => {
       resources: mockResourceRepo as ResourceRepository,
       projects: {
         findEnvironmentByResourceId: mock.fn(async () => null),
-      } as any,
+      } as unknown as ProjectRepository,
     } as Repositories;
 
     const deps: ServiceDependencies = { repositories: mockRepositories };
@@ -110,8 +111,8 @@ describe('ResourceService', () => {
 
     it('should fail with custom error if target is a dynamic guardian', async () => {
       // Mock Actor is Owner, Target is not in guardians table but is in projects membership
-      (mockGuardianRepo.findByResourceAndUser as any).mock.mockImplementation(
-        async (_rid: string, uid: string) => {
+      (mockGuardianRepo.findByResourceAndUser as unknown as MockedFn).mock.mockImplementation(
+        async (_rid: unknown, uid: unknown) => {
           if (uid === ownerId)
             return { id: 'g1', role: 'OWNER', discordUserId: ownerId } as Guardian;
           return null;
@@ -126,8 +127,8 @@ describe('ResourceService', () => {
 
       const customRepos = {
         ...mockRepositories,
-        projects: customProjectsRepo,
-      } as any;
+        projects: customProjectsRepo as unknown as ProjectRepository,
+      } as Repositories;
 
       const customDeps: ServiceDependencies = { repositories: customRepos };
       const customService = new ResourceService(customDeps);
@@ -135,8 +136,8 @@ describe('ResourceService', () => {
       const result = await customService.removeGuardian(resourceId, ownerId, otherId);
 
       assert.strictEqual(result.success, false);
-      assert.match(result.error!, /inherit guardian status/);
-      assert.strictEqual((mockGuardianRepo.remove as any).mock.calls.length, 0);
+      assert.match(result.error ?? '', /inherit guardian status/);
+      assert.strictEqual((mockGuardianRepo.remove as unknown as MockedFn).mock.calls.length, 0);
     });
 
     it('should fail if target is owner', async () => {
@@ -263,7 +264,7 @@ describe('ApprovalService', () => {
       guardians: mockGuardianRepo as GuardianRepository,
       projects: {
         findEnvironmentByResourceId: mock.fn(async () => null),
-      } as any,
+      } as unknown as ProjectRepository,
     } as Repositories;
 
     const deps: ServiceDependencies = { repositories: mockRepositories };
