@@ -24,6 +24,13 @@ export class AccessDeniedError extends Error {
   }
 }
 
+export class ForbiddenError extends Error {
+  constructor(message = 'Forbidden') {
+    super(message);
+    this.name = 'ForbiddenError';
+  }
+}
+
 const DEFAULT_TOKEN_EXPIRY_DAYS = 90;
 
 export class AuthService {

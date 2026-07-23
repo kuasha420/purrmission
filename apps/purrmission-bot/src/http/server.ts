@@ -14,7 +14,12 @@ import {
   createApprovalEmbed,
   isAccessRequestContext,
 } from '../discord/interactions/approvalButtons.js';
-import { AccessDeniedError, ExpiredTokenError, InvalidGrantError } from '../domain/auth.js';
+import {
+  AccessDeniedError,
+  ExpiredTokenError,
+  ForbiddenError,
+  InvalidGrantError,
+} from '../domain/auth.js';
 import { ResourceNotFoundError } from '../domain/errors.js';
 import type { ApprovalRequest, ResourceField } from '../domain/models.js';
 import type { Services } from '../domain/services.js';
@@ -320,6 +325,12 @@ export function createHttpServer(deps: HttpServerDeps): FastifyInstance {
     if (err.name === 'AccessDeniedError') {
       return reply.status(401).send({ error: 'unauthorized', message: err.message });
     }
+    if (err.name === 'ForbiddenError') {
+      return reply.status(403).send({
+        error: 'INSUFFICIENT_PERMISSIONS',
+        message: err.message,
+      });
+    }
     if (err.name === 'InvalidGrantError') {
       return reply.status(400).send({ error: 'invalid_grant', message: err.message });
     }
@@ -550,7 +561,9 @@ export function createHttpServer(deps: HttpServerDeps): FastifyInstance {
         hasWriteAccess = role === 'WRITER';
       }
 
-      if (!hasWriteAccess) throw new AccessDeniedError('Access denied');
+      if (!hasWriteAccess) {
+        throw new ForbiddenError('Write permission required');
+      }
 
       const environment = await services.project.getEnvironmentById(projectId, envId);
       if (!environment) throw new ResourceNotFoundError('Environment not found');

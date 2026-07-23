@@ -397,7 +397,7 @@ describe('Format Module (Issue #64)', () => {
         'get',
         async (): Promise<{ status: number; data: unknown }> => ({
           status: 200,
-          data: { SERVICE: 'auth' },
+          data: { secrets: { SERVICE: 'auth' } },
         })
       );
 
