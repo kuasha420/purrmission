@@ -160,6 +160,36 @@ describe('handleGuardianCommand', () => {
     assert.ok((replyCalls[0] as { content: string }).content.includes('Guardians for'));
   });
 
+  it('should route /purrmission guardian remove to handleRemoveGuardian logic', async () => {
+    mockInteraction.commandName = 'purrmission';
+    mockOptions.getSubcommandGroup = () => 'guardian';
+    mockOptions.getSubcommand = () => 'remove';
+
+    await handleGuardianCommand(mockInteraction as ChatInputCommandInteraction, mockContext);
+
+    assert.strictEqual(removeGuardianCalls.length, 1);
+    assert.deepStrictEqual(removeGuardianCalls[0], {
+      resourceId: 'res-123',
+      targetUserId: 'target-user-id',
+      actorId: 'caller-id',
+    });
+    assert.ok(replyCalls.length > 0);
+    assert.ok((replyCalls[0] as { content: string }).content.includes('Removed'));
+  });
+
+  it('should route /purrmission guardian list to handleListGuardians logic', async () => {
+    mockInteraction.commandName = 'purrmission';
+    mockOptions.getSubcommandGroup = () => 'guardian';
+    mockOptions.getSubcommand = () => 'list';
+
+    await handleGuardianCommand(mockInteraction as ChatInputCommandInteraction, mockContext);
+
+    assert.strictEqual(listGuardiansCalls.length, 1);
+    assert.deepStrictEqual(listGuardiansCalls[0], { resourceId: 'res-123', actorId: 'caller-id' });
+    assert.ok(replyCalls.length > 0);
+    assert.ok((replyCalls[0] as { content: string }).content.includes('Guardians for'));
+  });
+
   it('should show error for unknown guardian subcommand', async () => {
     // Setup
     mockOptions.getSubcommand = () => 'unknown_cmd';

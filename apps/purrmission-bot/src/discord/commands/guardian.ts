@@ -62,6 +62,57 @@ export const guardianCommand = new SlashCommandBuilder()
       )
   );
 
+export const purrmissionCommand = new SlashCommandBuilder()
+  .setName('purrmission')
+  .setDescription('Purrmission management commands')
+  .addSubcommandGroup((group) =>
+    group
+      .setName('guardian')
+      .setDescription('Manage guardians for protected resources')
+      .addSubcommand((subcommand) =>
+        subcommand
+          .setName('add')
+          .setDescription('Add a guardian to a protected resource')
+          .addStringOption((option) =>
+            option
+              .setName('resource-id')
+              .setDescription('ID of the resource')
+              .setRequired(true)
+              .setAutocomplete(true)
+          )
+          .addUserOption((option) =>
+            option.setName('user').setDescription('User to add as guardian').setRequired(true)
+          )
+      )
+      .addSubcommand((subcommand) =>
+        subcommand
+          .setName('remove')
+          .setDescription('Remove a guardian from a protected resource')
+          .addStringOption((option) =>
+            option
+              .setName('resource-id')
+              .setDescription('ID of the resource')
+              .setRequired(true)
+              .setAutocomplete(true)
+          )
+          .addUserOption((option) =>
+            option.setName('user').setDescription('User to remove').setRequired(true)
+          )
+      )
+      .addSubcommand((subcommand) =>
+        subcommand
+          .setName('list')
+          .setDescription('List all guardians for a resource')
+          .addStringOption((option) =>
+            option
+              .setName('resource-id')
+              .setDescription('ID of the resource')
+              .setRequired(true)
+              .setAutocomplete(true)
+          )
+      )
+  );
+
 /**
  * Handle /guardian subcommands.
  */

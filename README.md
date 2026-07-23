@@ -106,16 +106,17 @@ codex "Show which instruction files are active for this repo."
 
 ## Discord Commands
 
-Purrmission now exposes six top-level Discord slash commands:
+Purrmission exposes seven top-level Discord slash commands:
 
-| Top-level Command | Purpose                                                  |
-| ----------------- | -------------------------------------------------------- |
-| `/2fa`            | Manage personal and shared TOTP accounts                 |
-| `/resource`       | Register resources, manage fields, and manage linked 2FA |
-| `/guardian`       | Add, remove, and list resource guardians                 |
-| `/access`         | Request access and approve or deny requests              |
-| `/auth`           | Approve CLI login requests                               |
-| `/project`        | Manage project members                                   |
+| Top-level Command | Purpose                                                    |
+| ----------------- | ---------------------------------------------------------- |
+| `/2fa`            | Manage personal and shared TOTP accounts                   |
+| `/resource`       | Register resources, manage fields, and manage linked 2FA   |
+| `/guardian`       | Add, remove, and list resource guardians                   |
+| `/purrmission`    | Main application subcommands (`/purrmission guardian ...`) |
+| `/access`         | Request access and approve or deny requests                |
+| `/auth`           | Approve CLI login requests                                 |
+| `/project`        | Manage project members                                     |
 
 ### `/2fa`
 

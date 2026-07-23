@@ -67,6 +67,11 @@ export interface GuardianRepository {
   findByResourceId(resourceId: string): Promise<Guardian[]>;
 
   /**
+   * List all guardians for a specific resource (alias for findByResourceId).
+   */
+  list(resourceId: string): Promise<Guardian[]>;
+
+  /**
    * Find a specific guardian by resource and Discord user ID.
    */
   findByResourceAndUser(resourceId: string, discordUserId: string): Promise<Guardian | null>;
@@ -234,7 +239,7 @@ export class PrismaResourceRepository implements ResourceRepository {
       where.name = {
         contains: query,
         mode: 'insensitive',
-      } as any;
+      } as unknown as Prisma.StringFilter;
     }
     const rows = await this.prisma.resource.findMany({ where });
     return rows.map((row) => this.mapPrismaToDomain(row));
@@ -639,6 +644,10 @@ export class PrismaGuardianRepository implements GuardianRepository {
       where: { resourceId },
     });
     return rows.map((row) => this.mapPrismaToDomain(row));
+  }
+
+  async list(resourceId: string): Promise<Guardian[]> {
+    return this.findByResourceId(resourceId);
   }
 
   async findByResourceAndUser(resourceId: string, discordUserId: string): Promise<Guardian | null> {
