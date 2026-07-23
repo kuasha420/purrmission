@@ -66,6 +66,14 @@ jobs:
       - name: Build
         run: pnpm --filter pawthy build
 
+      - name: Upgrade npm CLI
+        run: npm install -g npm@latest
+
+      - name: Clear static npmrc to force OIDC Trusted Publishing
+        run: |
+          npm config delete //registry.npmjs.org/:_authToken || true
+          rm -f ~/.npmrc /home/runner/work/_temp/.npmrc || true
+
       - name: Publish to NPM
         run: npm publish --provenance --access public
         working-directory: apps/pawthy
