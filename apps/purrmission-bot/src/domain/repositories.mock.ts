@@ -117,6 +117,10 @@ export class InMemoryGuardianRepository implements GuardianRepository {
     return result;
   }
 
+  async list(resourceId: string): Promise<Guardian[]> {
+    return this.findByResourceId(resourceId);
+  }
+
   async findByResourceAndUser(resourceId: string, discordUserId: string): Promise<Guardian | null> {
     for (const guardian of this.guardians.values()) {
       if (guardian.resourceId === resourceId && guardian.discordUserId === discordUserId) {
