@@ -374,11 +374,10 @@ describe('Format Module (Issue #64)', () => {
     });
 
     it('pawthy pull with --format json writes secrets.json', async () => {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       mock.method(
         axios,
         'get',
-        async (): Promise<any> => ({
+        async (): Promise<{ status: number; data: unknown }> => ({
           status: 200,
           data: { secrets: { DB_HOST: 'localhost', PORT: '5432' } },
         })
@@ -393,13 +392,12 @@ describe('Format Module (Issue #64)', () => {
     });
 
     it('pawthy pull auto-detects .yaml file extension', async () => {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       mock.method(
         axios,
         'get',
-        async (): Promise<any> => ({
+        async (): Promise<{ status: number; data: unknown }> => ({
           status: 200,
-          data: { secrets: { SERVICE: 'auth' } },
+          data: { SERVICE: 'auth' },
         })
       );
 
