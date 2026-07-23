@@ -43,13 +43,15 @@ export async function handleAddGuardian(
   try {
     const result = await services.resource.addGuardian(resourceId, targetUser.id, callerId);
 
-    if (!result.success) {
+    if (!result.success || !result.guardian) {
       await interaction.reply({
-        content: `❌ ${result.error}`,
+        content: `❌ ${result.error ?? 'Failed to add guardian'}`,
         ephemeral: true,
       });
       return;
     }
+
+    const guardian = result.guardian;
 
     await interaction.reply({
       content: [
@@ -57,15 +59,15 @@ export async function handleAddGuardian(
         '',
         `**User:** <@${targetUser.id}>`,
         `**Resource ID:** \`${resourceId}\``,
-        `**Guardian ID:** \`${result.guardian!.id}\``,
-        `**Role:** ${result.guardian!.role}`,
+        `**Guardian ID:** \`${guardian.id}\``,
+        `**Role:** ${guardian.role}`,
       ].join('\n'),
       ephemeral: true,
     });
 
     logger.info('Guardian added successfully', {
       resourceId,
-      guardianId: result.guardian!.id,
+      guardianId: guardian.id,
       targetUserId: targetUser.id,
     });
   } catch (error) {

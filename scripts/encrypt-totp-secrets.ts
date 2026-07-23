@@ -1,17 +1,17 @@
 #!/usr/bin/env tsx
 /**
  * Migration script to encrypt existing plaintext TOTP secrets.
- * 
+ *
  * This script should be run once after deploying the TOTP encryption feature.
  * It will:
  * 1. Read all TOTP accounts from the database
  * 2. Check if secrets are already encrypted (by attempting to decrypt)
  * 3. Encrypt any plaintext secrets found
  * 4. Update the database with encrypted values
- * 
+ *
  * Usage:
  *   ENCRYPTION_KEY=<your-key> tsx scripts/encrypt-totp-secrets.ts
- * 
+ *
  * Safety:
  * - Dry run by default (use --apply to actually update the database)
  * - IMPORTANT: Back up your database manually before using the --apply flag.
@@ -40,13 +40,13 @@ function isEncrypted(value: string): boolean {
 
 /**
  * Check if a value looks like a valid Base32 TOTP secret (plaintext).
- * 
+ *
  * This is a heuristic check with limitations:
  * - Base32 alphabet consists of A-Z, 2-7, and optional padding (=)
  * - Typical TOTP secrets are 16-32 characters (80-160 bits)
  * - May produce false negatives for very short or long secrets
  * - May produce false positives for encrypted data that happens to contain only Base32 chars
- * 
+ *
  * Used in conjunction with isEncrypted() to determine migration needs.
  */
 function looksLikePlaintextSecret(value: string): boolean {
@@ -75,7 +75,9 @@ function encryptAndValidate(
 ): { encryptedSecret: string; encryptedBackupKey: string | null } {
   const encryptedSecret = secretIsEncrypted ? secret : encryptValue(secret);
   const encryptedBackupKey = backupKey
-    ? (backupIsEncrypted ? backupKey : encryptValue(backupKey))
+    ? backupIsEncrypted
+      ? backupKey
+      : encryptValue(backupKey)
     : null;
 
   // Validate by decrypting
@@ -96,7 +98,9 @@ async function main() {
     process.exit(1);
   }
 
-  console.log(`Mode: ${APPLY_CHANGES ? '✍️  APPLY (will modify database)' : '👁️  DRY RUN (read-only)'}\n`);
+  console.log(
+    `Mode: ${APPLY_CHANGES ? '✍️  APPLY (will modify database)' : '👁️  DRY RUN (read-only)'}\n`
+  );
 
   const prisma = new PrismaClient();
 
@@ -184,7 +188,9 @@ async function main() {
     }
 
     if (!APPLY_CHANGES) {
-      console.log('\n🚨 WARNING: This operation can be destructive. Please back up your database before proceeding.');
+      console.log(
+        '\n🚨 WARNING: This operation can be destructive. Please back up your database before proceeding.'
+      );
       console.log('💡 This was a dry run. Use --apply flag to actually update the database:');
       console.log('   ENCRYPTION_KEY=<your-key> tsx scripts/encrypt-totp-secrets.ts --apply');
       return;
@@ -210,7 +216,6 @@ async function main() {
     });
 
     console.log(`\n✅ Successfully encrypted ${accountsToUpdate.length} TOTP account(s)`);
-
   } catch (error) {
     console.error('\n❌ Error during migration:', error);
     process.exit(1);

@@ -22,15 +22,18 @@ Use the helper script to run the workflow locally:
 ```
 
 This will:
+
 1. Load secrets from `.github/act/deploy.secrets`
 2. Load env from `.github/act/deploy.env`
 3. Execute the `deploy` workflow in dry-run mode
 4. Run the simulation step
 
 To run a "real" (simulated) deploy inside Act:
+
 ```bash
 ./scripts/ci/act-deploy.sh false
 ```
+
 **Note:** This will attempt to SSH/SCP if you provide valid credentials in `.secrets`. If you use the default dummy secrets, it will fail connection, which is expected.
 
 ## Distrobox Verification
@@ -44,6 +47,7 @@ To test the deployment logic against a realistic OS environment (simulating a fr
 ```
 
 This script will:
+
 1. Build the project (`pnpm build`).
 2. Create two containers: `purrmission-srv-fresh` and `purrmission-srv-existing` (defined in `distrobox.ini`).
 3. **Fresh Server Test**:
@@ -62,6 +66,7 @@ distrobox enter purrmission-srv-fresh
 ```
 
 Then run the simulation manually:
+
 ```bash
 ./scripts/ci/simulate-deploy.sh "apps/purrmission-bot/dist"
 ```

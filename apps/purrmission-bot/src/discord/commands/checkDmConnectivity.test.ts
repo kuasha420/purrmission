@@ -4,7 +4,7 @@ import { handleCheckDmConnectivityCommand } from './checkDmConnectivity.js';
 import type { ChatInputCommandInteraction } from 'discord.js';
 
 describe('handleCheckDmConnectivityCommand', () => {
-  let mockInteraction: any;
+  let mockInteraction: ChatInputCommandInteraction;
   let replyCalls: unknown[] = [];
   let editReplyCalls: unknown[] = [];
   let sendCalls: unknown[] = [];

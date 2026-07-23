@@ -66,7 +66,6 @@ export function createTOTPAccountFromUri(
 ): Omit<TOTPAccount, 'id' | 'createdAt' | 'updatedAt'> {
   const { accountName, issuer, secret } = parseOtpauthUri(uri);
 
-
   return {
     ownerDiscordUserId,
     accountName,
@@ -86,7 +85,6 @@ export function createTOTPAccountFromSecret(
   issuer: string | undefined,
   shared: boolean
 ): Omit<TOTPAccount, 'id' | 'createdAt' | 'updatedAt'> {
-
   if (!secret || secret.trim().length === 0) {
     throw new Error('Secret cannot be empty');
   }

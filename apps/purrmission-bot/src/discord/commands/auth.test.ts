@@ -1,67 +1,103 @@
-import { test, describe, beforeEach, mock } from 'node:test';
+import { test, describe, mock } from 'node:test';
 import assert from 'node:assert';
 import { handleAuthLogin } from './auth.js';
-import { ChatInputCommandInteraction } from 'discord.js';
-import { CommandContext } from './context.js';
+import type { ChatInputCommandInteraction } from 'discord.js';
+import type { CommandContext } from './context.js';
 
 describe('Discord Command: handleAuthLogin', () => {
-    let mockInteraction: any;
-    let mockContext: any;
+  test('should reply with success when session is approved', async () => {
+    const mockReply = mock.fn();
+    const mockApproveSession = mock.fn(async () => true);
+    const interaction = {
+      options: {
+        getString: mock.fn(() => 'ABCD-1234'),
+      },
+      user: {
+        id: 'user-123',
+      },
+      reply: mockReply,
+    };
 
-    beforeEach(() => {
-        mockInteraction = {
-            options: {
-                getString: mock.fn(),
-            },
-            user: {
-                id: 'user-123',
-            },
-            reply: mock.fn(),
-        };
+    const context = {
+      services: {
+        auth: {
+          approveSession: mockApproveSession,
+        },
+      },
+    };
 
-        mockContext = {
-            services: {
-                auth: {
-                    approveSession: mock.fn(),
-                },
-            },
-        };
-    });
+    await handleAuthLogin(
+      interaction as unknown as ChatInputCommandInteraction,
+      context as unknown as CommandContext
+    );
 
-    test('should reply with success when session is approved', async () => {
-        // Redefine methods with implementations
-        mockInteraction.options.getString = mock.fn(() => 'ABCD-1234');
-        mockContext.services.auth.approveSession = mock.fn(async () => true);
+    assert.strictEqual(mockApproveSession.mock.callCount(), 1);
+    assert.deepStrictEqual(mockApproveSession.mock.calls[0].arguments, ['ABCD-1234', 'user-123']);
 
-        await handleAuthLogin(mockInteraction as ChatInputCommandInteraction, mockContext as CommandContext);
+    assert.strictEqual(mockReply.mock.callCount(), 1);
+    const replyArg = mockReply.mock.calls[0].arguments[0];
+    assert.ok(replyArg.content.includes('Successfully authenticated'));
+  });
 
-        assert.strictEqual(mockContext.services.auth.approveSession.mock.callCount(), 1);
-        assert.deepStrictEqual(mockContext.services.auth.approveSession.mock.calls[0].arguments, ['ABCD-1234', 'user-123']);
+  test('should reply with error when session is not approved', async () => {
+    const mockReply = mock.fn();
+    const interaction = {
+      options: {
+        getString: mock.fn(() => 'INVALID'),
+      },
+      user: {
+        id: 'user-123',
+      },
+      reply: mockReply,
+    };
 
-        assert.strictEqual(mockInteraction.reply.mock.callCount(), 1);
-        const replyArg = mockInteraction.reply.mock.calls[0].arguments[0];
-        assert.ok(replyArg.content.includes('Successfully authenticated'));
-    });
+    const context = {
+      services: {
+        auth: {
+          approveSession: mock.fn(async () => false),
+        },
+      },
+    };
 
-    test('should reply with error when session is not approved', async () => {
-        mockInteraction.options.getString = mock.fn(() => 'INVALID');
-        mockContext.services.auth.approveSession = mock.fn(async () => false);
+    await handleAuthLogin(
+      interaction as unknown as ChatInputCommandInteraction,
+      context as unknown as CommandContext
+    );
 
-        await handleAuthLogin(mockInteraction as ChatInputCommandInteraction, mockContext as CommandContext);
+    assert.strictEqual(mockReply.mock.callCount(), 1);
+    const replyArg = mockReply.mock.calls[0].arguments[0];
+    assert.ok(replyArg.content.includes('Failed to approve session'));
+  });
 
-        assert.strictEqual(mockInteraction.reply.mock.callCount(), 1);
-        const replyArg = mockInteraction.reply.mock.calls[0].arguments[0];
-        assert.ok(replyArg.content.includes('Failed to approve session'));
-    });
+  test('should handle internal errors gracefully', async () => {
+    const mockReply = mock.fn();
+    const interaction = {
+      options: {
+        getString: mock.fn(() => 'ERROR'),
+      },
+      user: {
+        id: 'user-123',
+      },
+      reply: mockReply,
+    };
 
-    test('should handle internal errors gracefully', async () => {
-        mockInteraction.options.getString = mock.fn(() => 'ERROR');
-        mockContext.services.auth.approveSession = mock.fn(async () => { throw new Error('Internal Boom'); });
+    const context = {
+      services: {
+        auth: {
+          approveSession: mock.fn(async () => {
+            throw new Error('Internal Boom');
+          }),
+        },
+      },
+    };
 
-        await handleAuthLogin(mockInteraction as ChatInputCommandInteraction, mockContext as CommandContext);
+    await handleAuthLogin(
+      interaction as unknown as ChatInputCommandInteraction,
+      context as unknown as CommandContext
+    );
 
-        assert.strictEqual(mockInteraction.reply.mock.callCount(), 1);
-        const replyArg = mockInteraction.reply.mock.calls[0].arguments[0];
-        assert.ok(replyArg.content.includes('internal error occurred'));
-    });
+    assert.strictEqual(mockReply.mock.callCount(), 1);
+    const replyArg = mockReply.mock.calls[0].arguments[0];
+    assert.ok(replyArg.content.includes('internal error occurred'));
+  });
 });

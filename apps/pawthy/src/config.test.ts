@@ -1,4 +1,3 @@
-
 import { describe, it, mock, afterEach, beforeEach } from 'node:test';
 import assert from 'node:assert';
 import os from 'os';
@@ -7,148 +6,146 @@ import path from 'path';
 import { getApiUrl, config, findProjectRoot, getProjectConfig } from './config.js';
 
 describe('Config', () => {
-    const originalEnv = process.env;
+  const originalEnv = process.env;
 
-    afterEach(() => {
-        process.env = originalEnv;
-        mock.restoreAll();
+  afterEach(() => {
+    process.env = originalEnv;
+    mock.restoreAll();
+  });
+
+  it('should prioritize PAWTHY_API_URL from shell environment', () => {
+    process.env = { ...originalEnv, PAWTHY_API_URL: 'https://shell.example.com' };
+    // We don't need to mock config here because env var takes precedence
+    assert.strictEqual(getApiUrl(), 'https://shell.example.com');
+  });
+
+  it('should prioritize config file over default if env var is missing', () => {
+    process.env = { ...originalEnv };
+    delete process.env.PAWTHY_API_URL;
+
+    // Mock config.get
+    mock.method(config, 'get', (key: string) => {
+      return key === 'apiUrl' ? 'https://config.example.com' : undefined;
     });
 
-    it('should prioritize PAWTHY_API_URL from shell environment', () => {
-        process.env = { ...originalEnv, PAWTHY_API_URL: 'https://shell.example.com' };
-        // We don't need to mock config here because env var takes precedence
-        assert.strictEqual(getApiUrl(), 'https://shell.example.com');
+    assert.strictEqual(getApiUrl(), 'https://config.example.com');
+  });
+
+  it('should use default production URL if no env var or config is set', () => {
+    process.env = { ...originalEnv };
+    delete process.env.PAWTHY_API_URL;
+
+    // Mock config.get to return default value
+    mock.method(config, 'get', (key: string) => {
+      return key === 'apiUrl' ? 'https://purrmission.infra.purrfecthq.com' : undefined;
     });
 
-    it('should prioritize config file over default if env var is missing', () => {
-        process.env = { ...originalEnv };
-        delete process.env.PAWTHY_API_URL;
+    assert.strictEqual(getApiUrl(), 'https://purrmission.infra.purrfecthq.com');
+  });
 
-        // Mock config.get
-        mock.method(config, 'get', (key: string) => {
-            return key === 'apiUrl' ? 'https://config.example.com' : undefined;
-        });
+  describe('findProjectRoot', () => {
+    let tempDir: string;
 
-        assert.strictEqual(getApiUrl(), 'https://config.example.com');
+    beforeEach(async () => {
+      tempDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'pawthy-find-root-'));
     });
 
-    it('should use default production URL if no env var or config is set', () => {
-        process.env = { ...originalEnv };
-        delete process.env.PAWTHY_API_URL;
-
-
-        // Mock config.get to return default value
-        mock.method(config, 'get', (key: string) => {
-            return key === 'apiUrl' ? 'https://purrmission.infra.purrfecthq.com' : undefined;
-        });
-
-
-        assert.strictEqual(getApiUrl(), 'https://purrmission.infra.purrfecthq.com');
+    afterEach(async () => {
+      try {
+        await fs.promises.rm(tempDir, { recursive: true, force: true });
+      } catch {
+        // Ignore
+      }
     });
 
-    describe('findProjectRoot', () => {
-        let tempDir: string;
-
-        beforeEach(async () => {
-            tempDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'pawthy-find-root-'));
-        });
-
-        afterEach(async () => {
-            try {
-                await fs.promises.rm(tempDir, { recursive: true, force: true });
-            } catch {
-                // Ignore
-            }
-        });
-
-        it('should return starting directory if .pawthyrc exists', async () => {
-            await fs.promises.writeFile(path.join(tempDir, '.pawthyrc'), '{}');
-            const root = findProjectRoot(tempDir);
-            assert.strictEqual(root, tempDir);
-        });
-
-        it('should walk up to find .pawthyrc in parent directory', async () => {
-            await fs.promises.writeFile(path.join(tempDir, '.pawthyrc'), '{}');
-            const subDir = path.join(tempDir, 'sub1', 'sub2');
-            await fs.promises.mkdir(subDir, { recursive: true });
-            const root = findProjectRoot(subDir);
-            assert.strictEqual(root, tempDir);
-        });
-
-        it('should walk up to find .git in parent directory', async () => {
-            await fs.promises.mkdir(path.join(tempDir, '.git'), { recursive: true });
-            const subDir = path.join(tempDir, 'sub1', 'sub2');
-            await fs.promises.mkdir(subDir, { recursive: true });
-            const root = findProjectRoot(subDir);
-            assert.strictEqual(root, tempDir);
-        });
-
-        it('should fallback to the resolved startDir if no project root indicators are found', () => {
-            const root = findProjectRoot(tempDir);
-            assert.strictEqual(root, path.resolve(tempDir));
-        });
-
-        it('should return starting directory if .pawthy directory exists', async () => {
-            await fs.promises.mkdir(path.join(tempDir, '.pawthy'), { recursive: true });
-            const root = findProjectRoot(tempDir);
-            assert.strictEqual(root, tempDir);
-        });
-
-        it('should not match .pawthy if it is a file, not a directory', async () => {
-            await fs.promises.writeFile(path.join(tempDir, '.pawthy'), 'fake file');
-            const root = findProjectRoot(tempDir);
-            assert.strictEqual(root, path.resolve(tempDir));
-        });
+    it('should return starting directory if .pawthyrc exists', async () => {
+      await fs.promises.writeFile(path.join(tempDir, '.pawthyrc'), '{}');
+      const root = findProjectRoot(tempDir);
+      assert.strictEqual(root, tempDir);
     });
 
-    describe('getProjectConfig', () => {
-        let tempDir: string;
-
-        beforeEach(async () => {
-            tempDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'pawthy-get-config-'));
-            mock.method(process, 'cwd', () => tempDir);
-        });
-
-        afterEach(async () => {
-            try {
-                await fs.promises.rm(tempDir, { recursive: true, force: true });
-            } catch {
-                // Ignore
-            }
-        });
-
-        it('should return null if neither config file exists', async () => {
-            const result = await getProjectConfig();
-            assert.strictEqual(result, null);
-        });
-
-        it('should load .pawthyrc if it exists', async () => {
-            await fs.promises.writeFile(
-                path.join(tempDir, '.pawthyrc'),
-                JSON.stringify({ projectId: 'project-1', envId: 'env-1', keys: ['KEY_1'] })
-            );
-
-            const result = await getProjectConfig();
-            assert.deepStrictEqual(result, { projectId: 'project-1', envId: 'env-1', keys: ['KEY_1'] });
-        });
-
-        it('should load and merge both .pawthyrc and .pawthyrc.local', async () => {
-            await fs.promises.writeFile(
-                path.join(tempDir, '.pawthyrc'),
-                JSON.stringify({ projectId: 'project-1', envId: 'env-1', keys: ['KEY_1'] })
-            );
-            await fs.promises.writeFile(
-                path.join(tempDir, '.pawthyrc.local'),
-                JSON.stringify({ envId: 'env-override', keys: ['KEY_OVERRIDE'], syncKeys: ['SK_1'] })
-            );
-
-            const result = await getProjectConfig();
-            assert.deepStrictEqual(result, {
-                projectId: 'project-1',
-                envId: 'env-override',
-                keys: ['KEY_OVERRIDE'],
-                syncKeys: ['SK_1']
-            });
-        });
+    it('should walk up to find .pawthyrc in parent directory', async () => {
+      await fs.promises.writeFile(path.join(tempDir, '.pawthyrc'), '{}');
+      const subDir = path.join(tempDir, 'sub1', 'sub2');
+      await fs.promises.mkdir(subDir, { recursive: true });
+      const root = findProjectRoot(subDir);
+      assert.strictEqual(root, tempDir);
     });
+
+    it('should walk up to find .git in parent directory', async () => {
+      await fs.promises.mkdir(path.join(tempDir, '.git'), { recursive: true });
+      const subDir = path.join(tempDir, 'sub1', 'sub2');
+      await fs.promises.mkdir(subDir, { recursive: true });
+      const root = findProjectRoot(subDir);
+      assert.strictEqual(root, tempDir);
+    });
+
+    it('should fallback to the resolved startDir if no project root indicators are found', () => {
+      const root = findProjectRoot(tempDir);
+      assert.strictEqual(root, path.resolve(tempDir));
+    });
+
+    it('should return starting directory if .pawthy directory exists', async () => {
+      await fs.promises.mkdir(path.join(tempDir, '.pawthy'), { recursive: true });
+      const root = findProjectRoot(tempDir);
+      assert.strictEqual(root, tempDir);
+    });
+
+    it('should not match .pawthy if it is a file, not a directory', async () => {
+      await fs.promises.writeFile(path.join(tempDir, '.pawthy'), 'fake file');
+      const root = findProjectRoot(tempDir);
+      assert.strictEqual(root, path.resolve(tempDir));
+    });
+  });
+
+  describe('getProjectConfig', () => {
+    let tempDir: string;
+
+    beforeEach(async () => {
+      tempDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'pawthy-get-config-'));
+      mock.method(process, 'cwd', () => tempDir);
+    });
+
+    afterEach(async () => {
+      try {
+        await fs.promises.rm(tempDir, { recursive: true, force: true });
+      } catch {
+        // Ignore
+      }
+    });
+
+    it('should return null if neither config file exists', async () => {
+      const result = await getProjectConfig();
+      assert.strictEqual(result, null);
+    });
+
+    it('should load .pawthyrc if it exists', async () => {
+      await fs.promises.writeFile(
+        path.join(tempDir, '.pawthyrc'),
+        JSON.stringify({ projectId: 'project-1', envId: 'env-1', keys: ['KEY_1'] })
+      );
+
+      const result = await getProjectConfig();
+      assert.deepStrictEqual(result, { projectId: 'project-1', envId: 'env-1', keys: ['KEY_1'] });
+    });
+
+    it('should load and merge both .pawthyrc and .pawthyrc.local', async () => {
+      await fs.promises.writeFile(
+        path.join(tempDir, '.pawthyrc'),
+        JSON.stringify({ projectId: 'project-1', envId: 'env-1', keys: ['KEY_1'] })
+      );
+      await fs.promises.writeFile(
+        path.join(tempDir, '.pawthyrc.local'),
+        JSON.stringify({ envId: 'env-override', keys: ['KEY_OVERRIDE'], syncKeys: ['SK_1'] })
+      );
+
+      const result = await getProjectConfig();
+      assert.deepStrictEqual(result, {
+        projectId: 'project-1',
+        envId: 'env-override',
+        keys: ['KEY_OVERRIDE'],
+        syncKeys: ['SK_1'],
+      });
+    });
+  });
 });

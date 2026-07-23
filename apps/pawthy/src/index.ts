@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 import 'dotenv/config';
-import { Command } from "commander";
+import { Command } from 'commander';
 
 import packageJson from '../package.json' with { type: 'json' };
 import { loginCommand } from './commands/login.js';
@@ -12,9 +12,9 @@ import { pullCommand } from './commands/pull.js';
 const program = new Command();
 
 program
-    .name("pawthy")
-    .description("Official CLI for Purrmission Credential Sync")
-    .version(packageJson.version);
+  .name('pawthy')
+  .description('Official CLI for Purrmission Credential Sync')
+  .version(packageJson.version);
 
 program.addCommand(loginCommand);
 program.addCommand(initCommand);

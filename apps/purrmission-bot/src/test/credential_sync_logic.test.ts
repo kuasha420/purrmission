@@ -395,7 +395,8 @@ describe('Credential Sync Logic Smoke Test', () => {
       slug: 'dev',
       projectId: project.id,
     });
-    const resourceId = env.resourceId!;
+    assert.ok(env.resourceId, 'env.resourceId must be defined');
+    const resourceId = env.resourceId;
 
     // Create approval request with default expiration (24h)
     const result = await services.approval.createApprovalRequest({
@@ -420,7 +421,8 @@ describe('Credential Sync Logic Smoke Test', () => {
     assert.strictEqual(active.id, result.request.id);
 
     // Now, let's manually modify the request in the repo to be expired (expiresAt in the past)
-    const rawReq = approvalRepo.requests.find((r) => r.id === result.request!.id);
+    const requestId = result.request.id;
+    const rawReq = approvalRepo.requests.find((r) => r.id === requestId);
     assert.ok(rawReq);
     rawReq.expiresAt = new Date(Date.now() - 60000); // 1 minute ago
 

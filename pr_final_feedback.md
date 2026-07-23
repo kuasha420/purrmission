@@ -20,7 +20,10 @@ Code context:
 +describe('handleResourceAutocomplete', () => {
 
 
-------------------------------------------------------------
+---
+
+---
+
 Comment #2640363669 by gemini-code-assist[bot] on apps/purrmission-bot/src/discord/commands/resource.ts:N/A
 State: null | Created: 2025-12-22T15:54:10Z
 
@@ -34,18 +37,20 @@ To avoid an unnecessary database query when the user has no guardianships (and t
 
 Code context:
 @@ -201,9 +201,27 @@ export async function handleResourceAutocomplete(
-     const focusedOption = interaction.options.getFocused(true);
- 
+const focusedOption = interaction.options.getFocused(true);
+
      if (focusedOption.name === 'resource-id') {
+
 -        // TODO: Implement resource autocomplete
 -        // For now, just return empty (user needs to paste resource ID)
 -        await interaction.respond([]);
-+        const userId = interaction.user.id;
-+        const { guardians, resources } = context.repositories;
-+
-+        // Find all resources where the user is a guardian
-+        const userGuardianships = await guardians.findByUserId(userId);
-+        const resourceIds = userGuardianships.map((g) => g.resourceId);
-+
-+        // Fetch resource details optimized
-+        const validResources = await resources.findManyByIds(resourceIds);
+
+*        const userId = interaction.user.id;
+*        const { guardians, resources } = context.repositories;
+*
+*        // Find all resources where the user is a guardian
+*        const userGuardianships = await guardians.findByUserId(userId);
+*        const resourceIds = userGuardianships.map((g) => g.resourceId);
+*
+*        // Fetch resource details optimized
+*        const validResources = await resources.findManyByIds(resourceIds);
