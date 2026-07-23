@@ -174,9 +174,10 @@ export const pushCommand = new Command('push')
         if (error.response?.status === 401) {
           console.error(chalk.red('Session expired. Please run `pawthy login` again.'));
         } else if (error.response?.status === 403) {
+          const targetEnv = envId || 'this environment';
           console.error(
             chalk.red(
-              'Access denied. You do not have permission to push secrets to this environment.'
+              `Error: Insufficient permissions to push secrets to environment '${targetEnv}'. You require Manager or Owner role on this project to modify secrets.`
             )
           );
         } else if (error.response?.status === 404) {

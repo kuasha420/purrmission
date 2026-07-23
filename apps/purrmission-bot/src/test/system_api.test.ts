@@ -340,4 +340,53 @@ describe('System API E2E Tests', () => {
       assert.strictEqual(data.error, 'unauthorized');
     });
   });
+
+  describe('PUT /api/projects/:projectId/environments/:envId/secrets', () => {
+    it('should return 403 Forbidden when authenticated user lacks write permissions', async () => {
+      mockValidateToken.fn = async () => ({ userId: 'user-reader' });
+      mockGetProject.fn = async () => ({ id: 'p-1', ownerId: 'user-owner', name: 'MyProject' });
+      mockGetMemberRole.fn = async () => 'READER'; // READER is read-only, lacks WRITER/OWNER
+
+      const response = await server.inject({
+        method: 'PUT',
+        url: '/api/projects/b0f19c99-d41c-43be-82a8-9d7a96df3222/environments/e0f19c99-d41c-43be-82a8-9d7a96df3222/secrets',
+        headers: {
+          Authorization: 'Bearer valid-token',
+        },
+        payload: {
+          secrets: { FOO: 'bar' },
+        },
+      });
+
+      assert.strictEqual(response.statusCode, 403);
+      const data = JSON.parse(response.payload);
+      assert.strictEqual(data.error, 'INSUFFICIENT_PERMISSIONS');
+      assert.strictEqual(data.message, 'Write permission required');
+    });
+
+    it('should return 200 OK when authenticated user is project owner or writer', async () => {
+      mockValidateToken.fn = async () => ({ userId: 'user-owner' });
+      mockGetProject.fn = async () => ({ id: 'p-1', ownerId: 'user-owner', name: 'MyProject' });
+      mockGetEnvironmentById.fn = async () => ({ name: 'Production', resourceId: 'res-1' });
+
+      let upsertedCount = 0;
+      mockUpsertField.fn = async () => {
+        upsertedCount++;
+      };
+
+      const response = await server.inject({
+        method: 'PUT',
+        url: '/api/projects/b0f19c99-d41c-43be-82a8-9d7a96df3222/environments/e0f19c99-d41c-43be-82a8-9d7a96df3222/secrets',
+        headers: {
+          Authorization: 'Bearer valid-token',
+        },
+        payload: {
+          secrets: { FOO: 'bar', BAZ: 'qux' },
+        },
+      });
+
+      assert.strictEqual(response.statusCode, 200);
+      assert.strictEqual(upsertedCount, 2);
+    });
+  });
 });

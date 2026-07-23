@@ -464,4 +464,40 @@ describe('Push Command', () => {
       FOO: 'custom',
     });
   });
+
+  it('should display informative error message on 403 Forbidden response without asking to re-login', async () => {
+    mock.method(config, 'get', (key: string) => {
+      if (key === 'token') return 'valid-token';
+      if (key === 'apiUrl') return 'http://localhost:3000';
+      return undefined;
+    });
+
+    mock.method(axios, 'put', async (): Promise<never> => {
+      const error = Object.assign(new Error('Request failed with status code 403'), {
+        isAxiosError: true,
+        response: { status: 403, data: { error: 'INSUFFICIENT_PERMISSIONS' } },
+      });
+      throw error;
+    });
+
+    const consoleErrors: string[] = [];
+    mock.method(console, 'error', (msg: string) => {
+      consoleErrors.push(msg);
+    });
+
+    await assert.rejects(
+      () => pushCommand.parseAsync(['node', 'pawthy', 'push', '--force']),
+      /process.exit called with 1/
+    );
+
+    assert.strictEqual(exitCode, 1);
+    assert.ok(
+      consoleErrors.some((e) =>
+        e.includes("Error: Insufficient permissions to push secrets to environment 'test-env'")
+      )
+    );
+    assert.ok(
+      !consoleErrors.some((e) => e.includes('Session expired. Please run `pawthy login` again.'))
+    );
+  });
 });
