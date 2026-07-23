@@ -148,8 +148,8 @@ describe('handleRequestAccess', () => {
       resourceId,
       status: 'EXPIRED' as const,
       context: {},
-      createdAt: new Date(),
-      expiresAt: null,
+      createdAt: new Date(Date.now() - 20000),
+      expiresAt: new Date(Date.now() - 10000),
     };
     const createdRequest = {
       id: 'req-new',
