@@ -464,27 +464,6 @@ export class ResourceService {
   }
 
   /**
-   * Remove a guardian from a resource (alias for removeGuardian).
-   */
-  async remove(
-    resourceId: string,
-    actorId: string,
-    targetUserId: string
-  ): Promise<{ success: boolean; error?: string }> {
-    return this.removeGuardian(resourceId, actorId, targetUserId);
-  }
-
-  /**
-   * List confirmed guardians for a resource (alias for listGuardians).
-   */
-  async list(
-    resourceId: string,
-    actorId: string
-  ): Promise<{ success: boolean; guardians?: Guardian[]; error?: string }> {
-    return this.listGuardians(resourceId, actorId);
-  }
-
-  /**
    * Verify an API key and return the resource.
    */
   async verifyApiKey(apiKey: string): Promise<Resource | null> {

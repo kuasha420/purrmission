@@ -69,7 +69,7 @@ export interface GuardianRepository {
   /**
    * List all guardians for a specific resource (alias for findByResourceId).
    */
-  list?(resourceId: string): Promise<Guardian[]>;
+  list(resourceId: string): Promise<Guardian[]>;
 
   /**
    * Find a specific guardian by resource and Discord user ID.

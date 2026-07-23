@@ -49,11 +49,11 @@ Manage shared and personal 2FA accounts directly from Discord.
 
 ### 🛡️ Guardian Management
 
-| Command            | Description                  |
-| ------------------ | ---------------------------- |
-| `/guardian add`    | Add a guardian to a resource |
-| `/guardian remove` | Remove a guardian            |
-| `/guardian list`   | List resource guardians      |
+| Command / Subcommand                               | Description                  |
+| -------------------------------------------------- | ---------------------------- |
+| `/guardian add`, `/purrmission guardian add`       | Add a guardian to a resource |
+| `/guardian remove`, `/purrmission guardian remove` | Remove a guardian            |
+| `/guardian list`, `/purrmission guardian list`     | List resource guardians      |
 
 ### ✅ Access Requests
 
