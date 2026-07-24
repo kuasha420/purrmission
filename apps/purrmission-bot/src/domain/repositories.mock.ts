@@ -28,6 +28,8 @@ import type {
   CreateCredentialInput,
   ApprovalGrant,
   CreateApprovalGrantInput,
+  CallbackDestination,
+  CreateCallbackDestinationInput,
 } from './models.js';
 import {
   ResourceRepository,
@@ -41,6 +43,7 @@ import {
   Repositories,
   CredentialRepository,
   ApprovalGrantRepository,
+  CallbackDestinationRepository,
 } from './repositories.js';
 import crypto from 'node:crypto';
 
@@ -580,7 +583,7 @@ export class InMemoryOutboxRepository implements OutboxRepository {
 
   async create(input: CreateOutboxEventInput, _tx?: any): Promise<OutboxEvent> {
     const event: OutboxEvent = {
-      id: crypto.randomUUID(),
+      id: input.id || crypto.randomUUID(),
       eventType: input.eventType,
       payload: input.payload,
       status: 'PENDING',
@@ -810,7 +813,10 @@ export class InMemoryProjectRepository implements ProjectRepository {
     return Array.from(this.members.values()).filter((m) => m.projectId === projectId);
   }
 
-  async createEnvironment(input: CreateEnvironmentInput): Promise<Environment> {
+  async createEnvironment(
+    input: CreateEnvironmentInput,
+    _tx?: Prisma.TransactionClient
+  ): Promise<Environment> {
     // Check uniqueness of slug within project for safety, though mock
     const existing = await this.findEnvironment(input.projectId, input.slug);
     if (existing) throw new Error('Slug already exists');
@@ -1003,6 +1009,53 @@ export class InMemoryApprovalGrantRepository implements ApprovalGrantRepository 
   }
 }
 
+export class InMemoryCallbackDestinationRepository implements CallbackDestinationRepository {
+  private destinations: Map<string, CallbackDestination> = new Map();
+
+  async create(
+    input: CreateCallbackDestinationInput,
+    _tx?: Prisma.TransactionClient
+  ): Promise<CallbackDestination> {
+    const dest: CallbackDestination = {
+      id: crypto.randomUUID(),
+      resourceId: input.resourceId,
+      url: input.url,
+      secret: input.secret,
+      enabled: true,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    };
+    this.destinations.set(dest.id, dest);
+    return dest;
+  }
+
+  async findById(id: string): Promise<CallbackDestination | null> {
+    return this.destinations.get(id) ?? null;
+  }
+
+  async findByResourceId(resourceId: string): Promise<CallbackDestination[]> {
+    const results: CallbackDestination[] = [];
+    for (const dest of this.destinations.values()) {
+      if (dest.resourceId === resourceId) {
+        results.push(dest);
+      }
+    }
+    return results;
+  }
+
+  async updateEnabled(id: string, enabled: boolean, _tx?: Prisma.TransactionClient): Promise<void> {
+    const dest = this.destinations.get(id);
+    if (dest) {
+      dest.enabled = enabled;
+      dest.updatedAt = new Date();
+    }
+  }
+
+  async delete(id: string, _tx?: Prisma.TransactionClient): Promise<void> {
+    this.destinations.delete(id);
+  }
+}
+
 /**
  * Create in-memory repositories for tests.
  */
@@ -1020,5 +1073,6 @@ export function createInMemoryRepositories(): Repositories {
     outbox: new InMemoryOutboxRepository(),
     credentials: new InMemoryCredentialRepository(),
     approvalGrants: new InMemoryApprovalGrantRepository(),
+    callbackDestinations: new InMemoryCallbackDestinationRepository(),
   };
 }

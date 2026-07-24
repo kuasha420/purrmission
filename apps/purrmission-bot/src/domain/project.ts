@@ -8,14 +8,29 @@ import {
   ProjectMember,
   ProjectMemberRole,
 } from './models.js';
+import { getPrismaClient } from '../infra/prismaClient.js';
+import { type Prisma } from '@prisma/client';
 
 export class ProjectService {
   constructor(
     private readonly projectRepo: ProjectRepository,
     private readonly resourceService: {
-      createResource: (name: string, ownerId: string) => Promise<{ resource: { id: string } }>;
+      createResource: (
+        name: string,
+        ownerId: string,
+        tx?: Prisma.TransactionClient
+      ) => Promise<{ resource: { id: string } }>;
     }
   ) {}
+
+  private async runTransaction<T>(callback: (tx: any) => Promise<T>): Promise<T> {
+    const isMock = this.projectRepo.constructor.name.includes('InMemory');
+    if (isMock) {
+      return callback(undefined);
+    }
+    const prisma = getPrismaClient();
+    return prisma.$transaction(callback);
+  }
 
   async createProject(input: CreateProjectInput): Promise<Project> {
     return this.projectRepo.createProject(input);
@@ -51,14 +66,23 @@ export class ProjectService {
     const project = await this.getProject(input.projectId);
     if (!project) throw new ResourceNotFoundError('Project not found');
 
-    // 2. Create Resource for this environment
-    const resourceName = `${project.name}:${input.name}`; // e.g., web-app:dev
-    const { resource } = await this.resourceService.createResource(resourceName, project.ownerId);
+    return this.runTransaction(async (tx) => {
+      // 2. Create Resource for this environment inside the transaction
+      const resourceName = `${project.name}:${input.name}`; // e.g., web-app:dev
+      const { resource } = await this.resourceService.createResource(
+        resourceName,
+        project.ownerId,
+        tx
+      );
 
-    // 3. Create Environment linked to Resource
-    return this.projectRepo.createEnvironment({
-      ...input,
-      resourceId: resource.id,
+      // 3. Create Environment linked to Resource inside the transaction
+      return this.projectRepo.createEnvironment(
+        {
+          ...input,
+          resourceId: resource.id,
+        },
+        tx
+      );
     });
   }
 

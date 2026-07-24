@@ -28,7 +28,7 @@ import { logger } from '../logging/logger.js';
 import { AuditService } from './audit.js';
 import { AuthService, AccessDeniedError } from './auth.js';
 import { ProjectService } from './project.js';
-import { ResourceNotFoundError, DuplicateError } from './errors.js';
+import { ResourceNotFoundError, DuplicateError, ValidationError } from './errors.js';
 import {
   getEffectiveGuardians,
   isEffectiveGuardian,
@@ -38,7 +38,7 @@ import {
 } from './policy.js';
 import { getPrismaClient } from '../infra/prismaClient.js';
 import { generateTOTPCode } from './totp.js';
-import { computeKeyedDigest } from './crypto.js';
+import { computeKeyedDigest, deterministicUUID } from './crypto.js';
 
 /**
  * Service dependencies.
@@ -216,9 +216,10 @@ export class ApprovalService {
           );
         }
 
-        // Enqueue Outbox event to notify guardians
+        // Enqueue Outbox event to notify guardians deterministically
         await repositories.outbox.create(
           {
+            id: deterministicUUID(req.id + '_REQUEST_CREATED'),
             eventType: 'REQUEST_CREATED',
             payload: {
               requestId: req.id,
@@ -387,19 +388,18 @@ export class ApprovalService {
           );
         }
 
-        if (request.callbackUrl) {
-          await repositories.outbox.create(
-            {
-              eventType: 'APPROVAL_CALLBACK',
-              payload: {
-                requestId: request.id,
-                callbackUrl: request.callbackUrl,
-                status: newStatus,
-              },
+        // Always enqueue a callback delivery event deterministically
+        await repositories.outbox.create(
+          {
+            id: deterministicUUID(request.id + '_APPROVAL_CALLBACK'),
+            eventType: 'APPROVAL_CALLBACK',
+            payload: {
+              requestId: request.id,
+              status: newStatus,
             },
-            tx
-          );
-        }
+          },
+          tx
+        );
       });
 
       const updatedRequest: ApprovalRequest = {
@@ -612,7 +612,8 @@ export class ResourceService {
    */
   async createResource(
     name: string,
-    ownerDiscordId: string
+    ownerDiscordId: string,
+    tx?: Prisma.TransactionClient
   ): Promise<{ resource: Resource; guardian: Guardian }> {
     const { repositories } = this.deps;
 
@@ -620,20 +621,26 @@ export class ResourceService {
     const apiKey = crypto.randomBytes(32).toString('hex');
 
     // Create the resource
-    const resource = await repositories.resources.create({
-      id: crypto.randomUUID(),
-      name,
-      mode: 'ONE_OF_N',
-      apiKey,
-    });
+    const resource = await repositories.resources.create(
+      {
+        id: crypto.randomUUID(),
+        name,
+        mode: 'ONE_OF_N',
+        apiKey,
+      },
+      tx
+    );
 
     // Add the creator as owner
-    const guardian = await repositories.guardians.add({
-      id: crypto.randomUUID(),
-      resourceId: resource.id,
-      discordUserId: ownerDiscordId,
-      role: 'OWNER',
-    });
+    const guardian = await repositories.guardians.add(
+      {
+        id: crypto.randomUUID(),
+        resourceId: resource.id,
+        discordUserId: ownerDiscordId,
+        role: 'OWNER',
+      },
+      tx
+    );
 
     logger.info('Created resource', {
       resourceId: resource.id,
@@ -1557,6 +1564,88 @@ export class ResourceService {
    * @returns A promise that resolves to the created or updated {@link ResourceField}.
    * @throws ResourceNotFoundError If the specified resource does not exist.
    */
+  /**
+   * Set secrets in batch with strict validation constraints and transactional execution.
+   */
+  async setSecrets(
+    resourceId: string,
+    secrets: Record<string, string>,
+    actorPrincipal: Principal
+  ): Promise<void> {
+    const { repositories } = this.deps;
+
+    // 1. Verify resource exists
+    const resource = await repositories.resources.findById(resourceId);
+    if (!resource) {
+      throw new ResourceNotFoundError(`Resource not found: ${resourceId}`);
+    }
+
+    // 2. Validate batch constraints
+    const entries = Object.entries(secrets);
+    if (entries.length > 100) {
+      throw new ValidationError('Secret batch count exceeds maximum of 100.');
+    }
+
+    let totalSize = 0;
+    const keyPattern = /^[a-zA-Z0-9_-]+$/;
+
+    for (const [key, value] of entries) {
+      if (!keyPattern.test(key)) {
+        throw new ValidationError(
+          `Invalid secret key format: "${key}". Only alphanumeric, underscores, and hyphens are allowed.`
+        );
+      }
+      if (key.length > 250) {
+        throw new ValidationError(`Secret key "${key}" exceeds maximum length of 250 characters.`);
+      }
+      if (value.length > 65536) {
+        throw new ValidationError(`Secret value for "${key}" exceeds maximum size of 64KB.`);
+      }
+      totalSize += key.length + value.length;
+    }
+
+    if (totalSize > 524288) {
+      throw new ValidationError('Total secret batch size exceeds maximum of 512KB.');
+    }
+
+    // 3. Perform batch mutation inside a single database transaction
+    await this.runTransaction(async (tx) => {
+      for (const [key, value] of entries) {
+        const existing = await repositories.resourceFields.findByResourceAndName(resourceId, key);
+        let eventType = 'SECRET_CREATE';
+
+        if (existing) {
+          await repositories.resourceFields.update(existing.id, value, tx);
+          eventType = 'SECRET_UPDATE';
+        } else {
+          await repositories.resourceFields.create(
+            {
+              resourceId,
+              name: key,
+              value,
+            },
+            tx
+          );
+        }
+
+        if (this.deps.audit) {
+          await this.deps.audit.log(
+            {
+              eventType,
+              outcomeCode: 'SUCCESS',
+              actorType: actorPrincipal.type === 'SERVICE' ? 'SERVICE' : 'DISCORD_USER',
+              actorId: actorPrincipal.id,
+              authKind: actorPrincipal.authKind,
+              resourceId,
+              payload: { fieldName: key },
+            },
+            tx
+          );
+        }
+      }
+    });
+  }
+
   async upsertField(resourceId: string, name: string, value: string): Promise<ResourceField> {
     const { repositories } = this.deps;
 

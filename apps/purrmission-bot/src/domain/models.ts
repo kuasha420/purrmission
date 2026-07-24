@@ -366,8 +366,8 @@ export interface OutboxEvent {
 
 export type CreateOutboxEventInput = Omit<
   OutboxEvent,
-  'id' | 'attempts' | 'status' | 'createdAt' | 'updatedAt'
->;
+  'attempts' | 'status' | 'createdAt' | 'updatedAt'
+> & { id?: string };
 
 /**
  * Represents a device login session (OAuth Device Flow).
@@ -598,4 +598,20 @@ export interface EvaluationResult {
   decisionCode: DecisionCode;
   reasonCode: ReasonCode;
   reason: string;
+}
+
+export interface CallbackDestination {
+  id: string;
+  resourceId: string;
+  url: string;
+  secret: string;
+  enabled: boolean;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+export interface CreateCallbackDestinationInput {
+  resourceId: string;
+  url: string;
+  secret: string;
 }

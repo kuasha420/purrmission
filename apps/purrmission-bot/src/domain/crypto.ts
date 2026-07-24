@@ -74,3 +74,16 @@ export function computeAllKeyedDigests(plaintext: string, purpose: string): stri
   const derivedKeys = KeyManager.getAllKeys(purpose);
   return derivedKeys.map((key) => crypto.createHmac('sha256', key).update(plaintext).digest('hex'));
 }
+
+/**
+ * Generates a deterministic UUID v5 structure using SHA-256.
+ */
+export function deterministicUUID(value: string): string {
+  const hash = crypto.createHash('sha256').update(value).digest('hex');
+  const p1 = hash.substring(0, 8);
+  const p2 = hash.substring(8, 12);
+  const p3 = '5' + hash.substring(13, 16);
+  const p4 = '8' + hash.substring(17, 20);
+  const p5 = hash.substring(20, 32);
+  return `${p1}-${p2}-${p3}-${p4}-${p5}`;
+}
