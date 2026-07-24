@@ -51,7 +51,6 @@ describe('twoFa command module', () => {
   let mockTotpRepository: {
     create: ReturnType<typeof mock.fn>;
     findByOwnerDiscordUserId: ReturnType<typeof mock.fn>;
-    findSharedVisibleTo: ReturnType<typeof mock.fn>;
     findByOwnerAndName: ReturnType<typeof mock.fn>;
     update: ReturnType<typeof mock.fn>;
   };
@@ -72,21 +71,19 @@ describe('twoFa command module', () => {
           accountName: string;
           secret: string;
           issuer?: string;
-          shared?: boolean;
         }) => ({
           id: 'totp-1',
           ownerDiscordUserId: accountData.ownerDiscordUserId,
           accountName: accountData.accountName,
           secret: accountData.secret,
           issuer: accountData.issuer,
-          shared: accountData.shared ?? false,
           backupKey: undefined,
           createdAt: new Date(),
           updatedAt: new Date(),
         })
       ),
       findByOwnerDiscordUserId: mock.fn(async (_userId: string) => []),
-      findSharedVisibleTo: mock.fn(async (_userId: string) => []),
+      findMetadataByOwnerDiscordUserId: mock.fn(async (_userId: string) => []),
       findByOwnerAndName: mock.fn(async (_userId: string, _name: string) => null),
       update: mock.fn(async (account: TOTPAccount) => account),
     };
@@ -225,7 +222,7 @@ describe('twoFa command module', () => {
       );
     });
 
-    it('should add account via Secret mode with optional issuer and shared', async () => {
+    it('should add account via Secret mode with optional issuer', async () => {
       mockInteraction.options.getString = mock.fn((name: string) => {
         if (name === 'account') return 'AWS';
         if (name === 'mode') return 'secret';
@@ -233,16 +230,13 @@ describe('twoFa command module', () => {
         if (name === 'issuer') return 'Amazon';
         return null;
       });
-      mockInteraction.options.getBoolean = mock.fn((name: string) =>
-        name === 'shared' ? true : null
-      );
 
       await handleAdd2FA(
         mockInteraction as unknown as Parameters<typeof handleAdd2FA>[0],
         mockContext
       );
       assert.equal(mockTotpRepository.create.mock.callCount(), 1);
-      assert.match(replyCalls[0].content, /marked as \*\*shared\*\*/);
+      assert.match(replyCalls[0].content, /This account is \*\*personal\*\*/);
     });
 
     it('should fail secret mode if secret missing', async () => {
@@ -312,10 +306,9 @@ describe('twoFa command module', () => {
 
   describe('handleList2FA', () => {
     it('should list personal accounts', async () => {
-      mockTotpRepository.findByOwnerDiscordUserId = mock.fn(async () => [
-        { accountName: 'Google', shared: false },
-        { accountName: 'AWS', shared: true },
-      ]);
+      mockTotpRepository.findMetadataByOwnerDiscordUserId = mock.fn(
+        async () => [{ accountName: 'Google' }, { accountName: 'AWS' }] as any
+      );
 
       await handleList2FA(
         mockInteraction as unknown as Parameters<typeof handleList2FA>[0],
@@ -323,29 +316,7 @@ describe('twoFa command module', () => {
       );
       assert.match(replyCalls[0].content, /Your 2FA accounts/);
       assert.match(replyCalls[0].content, /Google/);
-      assert.match(replyCalls[0].content, /AWS \(shared\)/);
-    });
-
-    it('should list shared accounts visible to user', async () => {
-      mockTotpRepository.findByOwnerDiscordUserId = mock.fn(async () => [
-        { ownerDiscordUserId: 'user-123', accountName: 'Google', shared: false },
-      ]);
-      mockTotpRepository.findSharedVisibleTo = mock.fn(async () => [
-        { ownerDiscordUserId: 'user-999', accountName: 'Team-VPN', shared: true },
-        { ownerDiscordUserId: 'user-123', accountName: 'Google', shared: false },
-      ]);
-
-      mockInteraction.options.getBoolean = mock.fn((name: string) =>
-        name === 'shared' ? true : null
-      );
-
-      await handleList2FA(
-        mockInteraction as unknown as Parameters<typeof handleList2FA>[0],
-        mockContext
-      );
-      assert.match(replyCalls[0].content, /Your 2FA accounts/);
-      assert.match(replyCalls[0].content, /Shared accounts visible to you/);
-      assert.match(replyCalls[0].content, /Team-VPN/);
+      assert.match(replyCalls[0].content, /AWS/);
     });
 
     it('should handle zero accounts', async () => {
@@ -497,23 +468,11 @@ describe('twoFa command module', () => {
         return null;
       });
 
-      const fakeAccount: TOTPAccount = {
-        id: 'totp-1',
-        ownerDiscordUserId: 'other-user',
-        accountName: 'TeamAccount',
-        secret: 'JBSWY3DPEHPK3PXP',
-        shared: true,
-        createdAt: new Date(),
-        updatedAt: new Date(),
-      };
-
-      mockTotpRepository.findSharedVisibleTo = mock.fn(async () => [fakeAccount]);
-
       await handleUpdate2FA(
         mockInteraction as unknown as Parameters<typeof handleUpdate2FA>[0],
         mockContext
       );
-      assert.match(replyCalls[0].content, /not the owner/);
+      assert.match(replyCalls[0].content, /not found/);
     });
 
     it('should update backup key successfully if requester is owner', async () => {
@@ -567,17 +526,13 @@ describe('twoFa command module', () => {
       assert.equal(mockInteraction.respond.mock.callCount(), 0);
     });
 
-    it('should respond with matching account choices deduplicated (personal first)', async () => {
+    it('should respond with matching account choices (personal only)', async () => {
       mockInteraction.options.getSubcommand = mock.fn(() => 'get');
       mockInteraction.options.getFocused = mock.fn(() => ({ name: 'account', value: 'goog' }));
 
-      mockTotpRepository.findByOwnerDiscordUserId = mock.fn(async () => [
-        { accountName: 'Google-Personal' },
-      ]);
-      mockTotpRepository.findSharedVisibleTo = mock.fn(async () => [
-        { accountName: 'Google-Shared' },
-        { accountName: 'AWS' },
-      ]);
+      mockTotpRepository.findMetadataByOwnerDiscordUserId = mock.fn(
+        async () => [{ accountName: 'Google-Personal' }, { accountName: 'AWS' }] as any
+      );
 
       await handleTwoFaAutocomplete(
         mockInteraction as unknown as Parameters<typeof handleTwoFaAutocomplete>[0],
@@ -586,9 +541,8 @@ describe('twoFa command module', () => {
       assert.equal(mockInteraction.respond.mock.callCount(), 1);
 
       const choices = mockInteraction.respond.mock.calls[0].arguments[0] as ChoiceOption[];
-      assert.equal(choices.length, 2);
+      assert.equal(choices.length, 1);
       assert.equal(choices[0].name, 'Google-Personal');
-      assert.equal(choices[1].name, 'Google-Shared');
     });
 
     it('should test autocomplete alias function exports', async () => {

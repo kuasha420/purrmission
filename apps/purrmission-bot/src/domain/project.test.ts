@@ -12,6 +12,7 @@ type MockedProjectRepository = {
   createEnvironment: Mock<ProjectRepository['createEnvironment']>;
   listEnvironments: Mock<ProjectRepository['listEnvironments']>;
   findEnvironment: Mock<ProjectRepository['findEnvironment']>;
+  listMembershipsByUser: Mock<ProjectRepository['listMembershipsByUser']>;
 };
 
 describe('ProjectService', () => {
@@ -28,6 +29,7 @@ describe('ProjectService', () => {
       createEnvironment: mock.fn<ProjectRepository['createEnvironment']>(),
       listEnvironments: mock.fn<ProjectRepository['listEnvironments']>(),
       findEnvironment: mock.fn<ProjectRepository['findEnvironment']>(),
+      listMembershipsByUser: mock.fn<ProjectRepository['listMembershipsByUser']>(async () => []),
     };
 
     createResourceMock = mock.fn<ResourceServiceDependency['createResource']>(async () => ({

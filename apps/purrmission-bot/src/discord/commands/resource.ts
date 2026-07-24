@@ -894,7 +894,7 @@ async function handleUnlink2FA(
   }
 
   try {
-    await context.services.resource.unlinkTOTPAccount(resourceId);
+    await context.services.resource.unlinkTOTPAccount(resourceId, userId);
 
     logger.info('Unlinked 2FA account from resource', {
       resourceId,

@@ -28,12 +28,14 @@ model Resource {
   id        String       @id @default(uuid())
   name      String
   mode      ResourceMode @default(ONE_OF_N)
-  apiKey    String
+  apiKey    String?
   createdAt DateTime     @default(now())
 
   // Optional linked 2FA account (one-to-one)
-  totpAccountId String?      @unique
-  totpAccount   TOTPAccount? @relation(fields: [totpAccountId], references: [id], onDelete: SetNull)
+  totpAccountId          String?      @unique
+  totpAccount            TOTPAccount? @relation(fields: [totpAccountId], references: [id], onDelete: SetNull)
+  totpDelegationEnvelope Json?
+  version                String       @default(uuid())
 
   guardians        Guardian[]
   approvalRequests ApprovalRequest[]
@@ -71,18 +73,27 @@ model Guardian {
 
   resource Resource @relation(fields: [resourceId], references: [id], onDelete: Cascade)
 
+  @@unique([resourceId, discordUserId])
   @@index([resourceId])
   @@index([discordUserId])
 }
 
 model ApprovalRequest {
-  id          String                @id @default(uuid())
-  resourceId  String
-  status      ApprovalRequestStatus @default(PENDING)
-  context     Json
-  callbackUrl String? // nullable
+  id               String                @id @default(uuid())
+  resourceId       String
+  status           ApprovalRequestStatus @default(PENDING)
+  context          Json?                 // Nullable legacy context
+  requesterId      String                @default("legacy")
+  requesterType    String                @default("DISCORD_USER")
+  authKind         String                @default("DISCORD")
+  action           String                @default("resource.view")
+  targetKey        String?
+  targetVersion    String                @default("legacy")
+  policyVersion    String                @default("legacy")
+  constraints      String?               // JSON serialized constraints
+  callbackUrl      String?               // nullable
   createdAt        DateTime              @default(now())
-  expiresAt        DateTime?
+  expiresAt        DateTime              @default(now())
   resolvedBy       String?
   resolvedAt       DateTime?
   discordMessageId String?
@@ -92,6 +103,29 @@ model ApprovalRequest {
 
   @@index([resourceId])
   @@index([status])
+  @@index([requesterId])
+}
+
+model ApprovalGrant {
+  id            String    @id @default(uuid())
+  requestId     String    @unique
+  resourceId    String
+  requesterId   String
+  requesterType String
+  authKind      String
+  action        String
+  targetKey     String?
+  targetVersion String
+  policyVersion String
+  constraints   String?
+  createdAt     DateTime  @default(now())
+  expiresAt     DateTime
+  consumedAt    DateTime?
+  revokedAt     DateTime?
+
+  @@index([resourceId])
+  @@index([requesterId])
+  @@index([expiresAt])
 }
 
 model TOTPAccount {
@@ -101,8 +135,8 @@ model TOTPAccount {
   /// TOTP secret - encrypted at rest using AES-256-GCM in the application layer
   secret             String
   issuer             String?
-  shared             Boolean  @default(false)
   backupKey          String?
+  version            String   @default(uuid())
   createdAt          DateTime @default(now())
   updatedAt          DateTime @updatedAt
 
@@ -111,21 +145,75 @@ model TOTPAccount {
 
   @@unique([ownerDiscordUserId, accountName])
   @@index([ownerDiscordUserId])
-  @@index([shared])
+}
+
+model TOTPLinkConsent {
+  id                 String    @id @default(uuid())
+  accountId          String
+  resourceId         String
+  ownerDiscordUserId String
+  delegationPolicy   Json
+  expiresAt          DateTime
+  usedAt             DateTime?
+  createdAt          DateTime  @default(now())
+
+  @@index([accountId])
+  @@index([resourceId])
+}
+
+model TOTPDelegationConsent {
+  id             String    @id @default(uuid())
+  resourceId     String
+  totpAccountId  String
+  operation      String
+  requesterId    String
+  authFamily     String
+  accountVersion String
+  linkVersion    String
+  expiresAt      DateTime
+  usedAt             DateTime?
+  createdAt          DateTime  @default(now())
+
+  @@index([resourceId])
+  @@index([totpAccountId])
 }
 
 model AuditLog {
-  id          String   @id @default(uuid())
-  action      String
-  resourceId  String?
-  actorId     String?
-  resolverId  String?
-  status      String
-  context     String?
-  createdAt   DateTime @default(now())
+  id             String   @id @default(uuid())
+  schemaVersion  Int      @default(1)
+  eventType      String
+  outcomeCode    String
+  actorType      String
+  actorId        String?
+  authKind       String?
+  resourceId     String?
+  projectId      String?
+  environmentId  String?
+  requestId      String?
+  grantId        String?
+  correlationId  String?
+  causationId    String?
+  payload        Json?    // Redacted metadata and non-sensitive context
+  createdAt      DateTime @default(now())
 
   @@index([resourceId])
-  @@index([actorId])
+  @@index([projectId])
+  @@index([eventType])
+  @@index([correlationId])
+  @@index([createdAt])
+}
+
+model OutboxEvent {
+  id          String   @id @default(uuid())
+  eventType   String
+  payload     Json     // Webhook context / notifications
+  status      String   @default("PENDING") // PENDING, PROCESSED, FAILED
+  attempts    Int      @default(0)
+  lastError   String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([status])
   @@index([createdAt])
 }
 
@@ -169,9 +257,10 @@ model Project {
   id          String   @id @default(uuid())
   name        String
   description String?
-  ownerId     String   // Discord User ID
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  ownerId       String   // Discord User ID
+  policyVersion String   @default(uuid())
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
 
   environments Environment[]
   members      ProjectMember[]
@@ -215,4 +304,29 @@ model ProjectMember {
 
   @@unique([projectId, userId])
   @@index([userId])
+}
+
+enum CredentialType {
+  RESOURCE_API_KEY
+  PAWTHY_TOKEN
+  SERVICE_CREDENTIAL
+}
+
+model Credential {
+  id          String         @id @default(uuid())
+  type        CredentialType
+  subjectId   String
+  name        String
+  digest      String         @unique
+  prefix      String
+  scopes      String
+  audience    String
+  createdAt   DateTime       @default(now())
+  expiresAt   DateTime?
+  revokedAt   DateTime?
+  lastUsedAt  DateTime?
+  version     String         @default(uuid())
+
+  @@index([subjectId])
+  @@index([digest])
 }

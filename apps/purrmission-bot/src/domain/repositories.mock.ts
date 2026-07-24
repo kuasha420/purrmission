@@ -12,6 +12,7 @@ import type {
   AuditLog,
   CreateAuditLogInput,
   AuthSession,
+  AuthSessionStatus,
   ApiToken,
   CreateApiTokenInput,
   Project,
@@ -21,6 +22,12 @@ import type {
   ProjectMember,
   CreateProjectMemberInput,
   ProjectMemberRole,
+  TOTPAccountMetadata,
+  ResourceFieldMetadata,
+  Credential,
+  CreateCredentialInput,
+  ApprovalGrant,
+  CreateApprovalGrantInput,
 } from './models.js';
 import {
   ResourceRepository,
@@ -32,6 +39,8 @@ import {
   AuthRepository,
   ProjectRepository,
   Repositories,
+  CredentialRepository,
+  ApprovalGrantRepository,
 } from './repositories.js';
 import crypto from 'node:crypto';
 
@@ -40,11 +49,12 @@ import crypto from 'node:crypto';
  * Useful for tests.
  */
 export class InMemoryResourceRepository implements ResourceRepository {
-  private resources: Map<string, Resource> = new Map();
+  public resources: Map<string, Resource> = new Map();
 
   async create(input: CreateResourceInput): Promise<Resource> {
     const resource: Resource = {
       ...input,
+      version: input.version || crypto.randomUUID(),
       createdAt: new Date(),
     };
     this.resources.set(resource.id, resource);
@@ -64,7 +74,14 @@ export class InMemoryResourceRepository implements ResourceRepository {
     return null;
   }
 
-  async update(id: string, data: { totpAccountId?: string | null }): Promise<Resource> {
+  async update(
+    id: string,
+    data: {
+      totpAccountId?: string | null;
+      totpDelegationEnvelope?: TOTPLinkEnvelope | null;
+      version?: string;
+    }
+  ): Promise<Resource> {
     const resource = this.resources.get(id);
     if (!resource) {
       throw new Error(`Resource not found: ${id}`);
@@ -73,6 +90,11 @@ export class InMemoryResourceRepository implements ResourceRepository {
       ...resource,
       totpAccountId:
         data.totpAccountId === null ? undefined : (data.totpAccountId ?? resource.totpAccountId),
+      totpDelegationEnvelope:
+        data.totpDelegationEnvelope === null
+          ? undefined
+          : (data.totpDelegationEnvelope ?? resource.totpDelegationEnvelope),
+      version: data.version || crypto.randomUUID(),
     };
     this.resources.set(id, updated);
     return updated;
@@ -89,6 +111,13 @@ export class InMemoryResourceRepository implements ResourceRepository {
     }
     return result;
   }
+
+  rotateVersion(id: string): void {
+    const resource = this.resources.get(id);
+    if (resource) {
+      resource.version = crypto.randomUUID();
+    }
+  }
 }
 
 /**
@@ -98,12 +127,15 @@ export class InMemoryResourceRepository implements ResourceRepository {
 export class InMemoryGuardianRepository implements GuardianRepository {
   private guardians: Map<string, Guardian> = new Map();
 
+  constructor(private resources?: InMemoryResourceRepository) {}
+
   async add(input: AddGuardianInput): Promise<Guardian> {
     const guardian: Guardian = {
       ...input,
       createdAt: new Date(),
     };
     this.guardians.set(guardian.id, guardian);
+    this.resources?.rotateVersion(input.resourceId);
     return guardian;
   }
 
@@ -140,6 +172,7 @@ export class InMemoryGuardianRepository implements GuardianRepository {
         this.guardians.delete(id);
       }
     }
+    this.resources?.rotateVersion(resourceId);
   }
 }
 
@@ -190,16 +223,40 @@ export class InMemoryApprovalRequestRepository implements ApprovalRequestReposit
 
   async findActiveByRequester(
     resourceId: string,
-    requesterId: string
+    requesterId: string,
+    action: string,
+    targetKey: string | null
   ): Promise<ApprovalRequest | null> {
     const now = new Date();
     return (
       Array.from(this.requests.values()).find(
         (request) =>
           request.resourceId === resourceId &&
+          request.requesterId === requesterId &&
+          request.action === action &&
+          request.targetKey === targetKey &&
           ['PENDING', 'APPROVED'].includes(request.status) &&
-          (!request.expiresAt || request.expiresAt > now) &&
-          (request.context as Record<string, unknown>)['requesterId'] === requesterId
+          request.expiresAt > now
+      ) || null
+    );
+  }
+
+  async findPending(
+    resourceId: string,
+    requesterId: string,
+    action: string,
+    targetKey: string | null
+  ): Promise<ApprovalRequest | null> {
+    const now = new Date();
+    return (
+      Array.from(this.requests.values()).find(
+        (request) =>
+          request.resourceId === resourceId &&
+          request.requesterId === requesterId &&
+          request.action === action &&
+          request.targetKey === targetKey &&
+          request.status === 'PENDING' &&
+          request.expiresAt > now
       ) || null
     );
   }
@@ -208,7 +265,7 @@ export class InMemoryApprovalRequestRepository implements ApprovalRequestReposit
     const now = new Date();
     let count = 0;
     for (const request of this.requests.values()) {
-      if (request.status === 'PENDING' && request.expiresAt && request.expiresAt < now) {
+      if (request.status === 'PENDING' && request.expiresAt < now) {
         request.status = 'EXPIRED';
         count++;
       }
@@ -223,12 +280,19 @@ export class InMemoryApprovalRequestRepository implements ApprovalRequestReposit
  */
 export class InMemoryTOTPRepository implements TOTPRepository {
   private accounts: Map<string, TOTPAccount> = new Map();
+  public linkConsents: Map<string, TOTPLinkConsent> = new Map();
+  public delegationConsents: Map<string, TOTPDelegationConsent> = new Map();
 
-  async create(account: Omit<TOTPAccount, 'id' | 'createdAt' | 'updatedAt'>): Promise<TOTPAccount> {
+  constructor(private resources?: InMemoryResourceRepository) {}
+
+  async create(
+    account: Omit<TOTPAccount, 'id' | 'createdAt' | 'updatedAt' | 'version'>
+  ): Promise<TOTPAccount> {
     const newAccount: TOTPAccount = {
       ...account,
       id: crypto.randomUUID(),
-      backupKey: account.backupKey,
+      backupKey: account.backupKey ?? undefined,
+      version: crypto.randomUUID(),
       createdAt: new Date(),
       updatedAt: new Date(),
     };
@@ -244,14 +308,30 @@ export class InMemoryTOTPRepository implements TOTPRepository {
     const updated: TOTPAccount = {
       ...account,
       backupKey: account.backupKey,
+      version: crypto.randomUUID(),
       updatedAt: new Date(),
     };
     this.accounts.set(updated.id, updated);
+    if (this.resources) {
+      for (const res of this.resources.resources.values()) {
+        if (res.totpAccountId === account.id) {
+          this.resources.rotateVersion(res.id);
+        }
+      }
+    }
     return updated;
   }
 
   async deleteById(id: string): Promise<void> {
     this.accounts.delete(id);
+    if (this.resources) {
+      for (const res of this.resources.resources.values()) {
+        if (res.totpAccountId === id) {
+          res.totpAccountId = undefined;
+          this.resources.rotateVersion(res.id);
+        }
+      }
+    }
   }
 
   async findById(id: string): Promise<TOTPAccount | null> {
@@ -283,14 +363,88 @@ export class InMemoryTOTPRepository implements TOTPRepository {
     return null;
   }
 
-  async findSharedVisibleTo(_discordUserId: string): Promise<TOTPAccount[]> {
-    const results: TOTPAccount[] = [];
-    for (const account of this.accounts.values()) {
-      if (account.shared) {
-        results.push(account);
+  async findMetadataByOwnerDiscordUserId(
+    ownerDiscordUserId: string
+  ): Promise<TOTPAccountMetadata[]> {
+    return Array.from(this.accounts.values())
+      .filter((a) => a.ownerDiscordUserId === ownerDiscordUserId)
+      .map((a) => ({
+        id: a.id,
+        ownerDiscordUserId: a.ownerDiscordUserId,
+        accountName: a.accountName,
+        issuer: a.issuer,
+        version: a.version,
+        createdAt: a.createdAt,
+        updatedAt: a.updatedAt,
+      }));
+  }
+
+  async createLinkConsent(
+    input: Omit<TOTPLinkConsent, 'id' | 'createdAt' | 'usedAt'>
+  ): Promise<TOTPLinkConsent> {
+    const consent: TOTPLinkConsent = {
+      ...input,
+      id: crypto.randomUUID(),
+      usedAt: null,
+      createdAt: new Date(),
+    };
+    this.linkConsents.set(consent.id, consent);
+    return consent;
+  }
+
+  async findLinkConsentById(id: string): Promise<TOTPLinkConsent | null> {
+    return this.linkConsents.get(id) ?? null;
+  }
+
+  async useLinkConsent(id: string): Promise<void> {
+    const found = this.linkConsents.get(id);
+    if (found) {
+      found.usedAt = new Date();
+    }
+  }
+
+  async createDelegationConsent(
+    input: Omit<TOTPDelegationConsent, 'id' | 'createdAt' | 'usedAt'>
+  ): Promise<TOTPDelegationConsent> {
+    const consent: TOTPDelegationConsent = {
+      ...input,
+      id: crypto.randomUUID(),
+      usedAt: null,
+      createdAt: new Date(),
+    };
+    this.delegationConsents.set(consent.id, consent);
+    return consent;
+  }
+
+  async findDelegationConsentById(id: string): Promise<TOTPDelegationConsent | null> {
+    return this.delegationConsents.get(id) ?? null;
+  }
+
+  async findActiveDelegationConsent(
+    resourceId: string,
+    requesterId: string,
+    operation: string
+  ): Promise<TOTPDelegationConsent | null> {
+    const now = new Date();
+    for (const consent of this.delegationConsents.values()) {
+      if (
+        consent.resourceId === resourceId &&
+        consent.requesterId === requesterId &&
+        consent.operation === operation &&
+        consent.usedAt === null &&
+        consent.expiresAt > now
+      ) {
+        return consent;
       }
     }
-    return results;
+    return null;
+  }
+
+  async useDelegationConsent(id: string): Promise<void> {
+    const found = this.delegationConsents.get(id);
+    if (found) {
+      found.usedAt = new Date();
+    }
   }
 }
 
@@ -301,6 +455,8 @@ export class InMemoryTOTPRepository implements TOTPRepository {
 export class InMemoryResourceFieldRepository implements ResourceFieldRepository {
   private fields: Map<string, ResourceField> = new Map();
 
+  constructor(private resources?: InMemoryResourceRepository) {}
+
   async create(input: CreateResourceFieldInput): Promise<ResourceField> {
     const field: ResourceField = {
       ...input,
@@ -309,6 +465,7 @@ export class InMemoryResourceFieldRepository implements ResourceFieldRepository 
       updatedAt: new Date(),
     };
     this.fields.set(field.id, field);
+    this.resources?.rotateVersion(input.resourceId);
     return field;
   }
 
@@ -346,11 +503,45 @@ export class InMemoryResourceFieldRepository implements ResourceFieldRepository 
       updatedAt: new Date(),
     };
     this.fields.set(id, updated);
+    this.resources?.rotateVersion(field.resourceId);
     return updated;
   }
 
   async delete(id: string): Promise<void> {
-    this.fields.delete(id);
+    const field = this.fields.get(id);
+    if (field) {
+      this.fields.delete(id);
+      this.resources?.rotateVersion(field.resourceId);
+    }
+  }
+
+  async findMetadataByResourceId(resourceId: string): Promise<ResourceFieldMetadata[]> {
+    return Array.from(this.fields.values())
+      .filter((f) => f.resourceId === resourceId)
+      .map((f) => ({
+        id: f.id,
+        resourceId: f.resourceId,
+        name: f.name,
+        createdAt: f.createdAt,
+        updatedAt: f.updatedAt,
+      }));
+  }
+
+  async findMetadataByResourceAndName(
+    resourceId: string,
+    name: string
+  ): Promise<ResourceFieldMetadata | null> {
+    const field = Array.from(this.fields.values()).find(
+      (f) => f.resourceId === resourceId && f.name === name
+    );
+    if (!field) return null;
+    return {
+      id: field.id,
+      resourceId: field.resourceId,
+      name: field.name,
+      createdAt: field.createdAt,
+      updatedAt: field.updatedAt,
+    };
   }
 }
 
@@ -361,7 +552,7 @@ export class InMemoryResourceFieldRepository implements ResourceFieldRepository 
 export class InMemoryAuditRepository implements AuditRepository {
   private logs: AuditLog[] = [];
 
-  async create(input: CreateAuditLogInput): Promise<AuditLog> {
+  async create(input: CreateAuditLogInput, _tx?: any): Promise<AuditLog> {
     const log: AuditLog = {
       id: crypto.randomUUID(),
       ...input,
@@ -373,6 +564,52 @@ export class InMemoryAuditRepository implements AuditRepository {
 
   async findByResourceId(resourceId: string): Promise<AuditLog[]> {
     return this.logs.filter((log) => log.resourceId === resourceId);
+  }
+
+  async findByProjectId(projectId: string): Promise<AuditLog[]> {
+    return this.logs.filter((log) => log.projectId === projectId);
+  }
+}
+
+/**
+ * In-memory implementation of OutboxRepository.
+ * Useful for tests.
+ */
+export class InMemoryOutboxRepository implements OutboxRepository {
+  private events: OutboxEvent[] = [];
+
+  async create(input: CreateOutboxEventInput, _tx?: any): Promise<OutboxEvent> {
+    const event: OutboxEvent = {
+      id: crypto.randomUUID(),
+      eventType: input.eventType,
+      payload: input.payload,
+      status: 'PENDING',
+      attempts: 0,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    };
+    this.events.push(event);
+    return event;
+  }
+
+  async findPending(): Promise<OutboxEvent[]> {
+    return this.events.filter((e) => e.status === 'PENDING');
+  }
+
+  async updateStatus(
+    id: string,
+    status: 'PENDING' | 'PROCESSED' | 'FAILED',
+    attempts: number,
+    lastError?: string,
+    _tx?: any
+  ): Promise<void> {
+    const event = this.events.find((e) => e.id === id);
+    if (event) {
+      event.status = status;
+      event.attempts = attempts;
+      event.lastError = lastError ?? null;
+      event.updatedAt = new Date();
+    }
   }
 }
 
@@ -438,6 +675,24 @@ export class InMemoryAuthRepository implements AuthRepository {
     }
   }
 
+  async transitionSessionStatus(
+    id: string,
+    fromStatus: AuthSessionStatus,
+    toStatus: AuthSessionStatus,
+    userId?: string
+  ): Promise<boolean> {
+    const session = this.sessions.get(id);
+    if (!session || session.status !== fromStatus) {
+      return false;
+    }
+    session.status = toStatus;
+    if (userId !== undefined) {
+      session.userId = userId;
+    }
+    session.updatedAt = new Date();
+    return true;
+  }
+
   async createApiToken(input: CreateApiTokenInput): Promise<ApiToken> {
     const token: ApiToken = {
       id: crypto.randomUUID(),
@@ -496,6 +751,7 @@ export class InMemoryProjectRepository implements ProjectRepository {
       name: input.name,
       description: input.description ?? null,
       ownerId: input.ownerId,
+      policyVersion: crypto.randomUUID(),
       createdAt: new Date(),
       updatedAt: new Date(),
     };
@@ -530,11 +786,19 @@ export class InMemoryProjectRepository implements ProjectRepository {
       updatedAt: new Date(),
     };
     this.members.set(`${input.projectId}::${input.userId}`, member);
+    const p = this.projects.get(input.projectId);
+    if (p) {
+      p.policyVersion = crypto.randomUUID();
+    }
     return member;
   }
 
   async removeMember(projectId: string, userId: string): Promise<void> {
     this.members.delete(`${projectId}::${userId}`);
+    const p = this.projects.get(projectId);
+    if (p) {
+      p.policyVersion = crypto.randomUUID();
+    }
   }
 
   async getMemberRole(projectId: string, userId: string): Promise<ProjectMemberRole | null> {
@@ -591,18 +855,170 @@ export class InMemoryProjectRepository implements ProjectRepository {
   }
 }
 
+export class InMemoryCredentialRepository implements CredentialRepository {
+  private credentials: Map<string, Credential> = new Map();
+
+  async create(input: CreateCredentialInput): Promise<Credential> {
+    const cred: Credential = {
+      id: crypto.randomUUID(),
+      type: input.type,
+      subjectId: input.subjectId,
+      name: input.name,
+      digest: input.digest,
+      prefix: input.prefix,
+      scopes: input.scopes,
+      audience: input.audience,
+      createdAt: new Date(),
+      expiresAt: input.expiresAt,
+      revokedAt: input.revokedAt,
+      lastUsedAt: null,
+      version: crypto.randomUUID(),
+    };
+    this.credentials.set(cred.id, cred);
+    return cred;
+  }
+
+  async findById(id: string): Promise<Credential | null> {
+    return this.credentials.get(id) ?? null;
+  }
+
+  async findByDigest(digest: string): Promise<Credential | null> {
+    for (const cred of this.credentials.values()) {
+      if (cred.digest === digest) {
+        return cred;
+      }
+    }
+    return null;
+  }
+
+  async findBySubject(subjectId: string): Promise<Credential[]> {
+    const result: Credential[] = [];
+    for (const cred of this.credentials.values()) {
+      if (cred.subjectId === subjectId) {
+        result.push(cred);
+      }
+    }
+    return result;
+  }
+
+  async revoke(id: string): Promise<void> {
+    const cred = this.credentials.get(id);
+    if (cred) {
+      cred.revokedAt = new Date();
+      cred.version = crypto.randomUUID();
+    }
+  }
+
+  async updateLastUsed(id: string): Promise<void> {
+    const cred = this.credentials.get(id);
+    if (cred) {
+      cred.lastUsedAt = new Date();
+    }
+  }
+}
+
+export class InMemoryApprovalGrantRepository implements ApprovalGrantRepository {
+  private grants: Map<string, ApprovalGrant> = new Map();
+
+  async create(
+    input: CreateApprovalGrantInput,
+    _tx?: Prisma.TransactionClient
+  ): Promise<ApprovalGrant> {
+    const grant: ApprovalGrant = {
+      id: crypto.randomUUID(),
+      requestId: input.requestId,
+      resourceId: input.resourceId,
+      requesterId: input.requesterId,
+      requesterType: input.requesterType,
+      authKind: input.authKind,
+      action: input.action,
+      targetKey: input.targetKey,
+      targetVersion: input.targetVersion,
+      policyVersion: input.policyVersion,
+      constraints: input.constraints ?? null,
+      createdAt: new Date(),
+      expiresAt: input.expiresAt,
+      consumedAt: null,
+      revokedAt: null,
+    };
+    this.grants.set(grant.id, grant);
+    return grant;
+  }
+
+  async findById(id: string): Promise<ApprovalGrant | null> {
+    return this.grants.get(id) ?? null;
+  }
+
+  async findByRequestId(requestId: string): Promise<ApprovalGrant | null> {
+    for (const grant of this.grants.values()) {
+      if (grant.requestId === requestId) {
+        return grant;
+      }
+    }
+    return null;
+  }
+
+  async findActiveUnconsumed(
+    resourceId: string,
+    requesterId: string,
+    action: string,
+    targetKey: string | null
+  ): Promise<ApprovalGrant | null> {
+    const now = new Date();
+    for (const grant of this.grants.values()) {
+      if (
+        grant.resourceId === resourceId &&
+        grant.requesterId === requesterId &&
+        grant.action === action &&
+        grant.targetKey === targetKey &&
+        grant.consumedAt === null &&
+        grant.revokedAt === null &&
+        grant.expiresAt > now
+      ) {
+        return grant;
+      }
+    }
+    return null;
+  }
+
+  async consume(id: string, _tx?: Prisma.TransactionClient): Promise<boolean> {
+    const grant = this.grants.get(id);
+    if (
+      grant &&
+      grant.consumedAt === null &&
+      grant.revokedAt === null &&
+      grant.expiresAt > new Date()
+    ) {
+      grant.consumedAt = new Date();
+      return true;
+    }
+    return false;
+  }
+
+  async revoke(id: string, _tx?: Prisma.TransactionClient): Promise<void> {
+    const grant = this.grants.get(id);
+    if (grant) {
+      grant.revokedAt = new Date();
+    }
+  }
+}
+
 /**
  * Create in-memory repositories for tests.
  */
 export function createInMemoryRepositories(): Repositories {
+  const resources = new InMemoryResourceRepository();
   return {
-    resources: new InMemoryResourceRepository(),
-    guardians: new InMemoryGuardianRepository(),
+    resources,
+    guardians: new InMemoryGuardianRepository(resources),
     approvalRequests: new InMemoryApprovalRequestRepository(),
-    totp: new InMemoryTOTPRepository(),
-    resourceFields: new InMemoryResourceFieldRepository(),
+    totp: new InMemoryTOTPRepository(resources),
+    resourceFields: new InMemoryResourceFieldRepository(resources),
     audit: new InMemoryAuditRepository(),
     auth: new InMemoryAuthRepository(),
     projects: new InMemoryProjectRepository(),
+    outbox: new InMemoryOutboxRepository(),
+    credentials: new InMemoryCredentialRepository(),
+    approvalGrants: new InMemoryApprovalGrantRepository(),
   };
 }

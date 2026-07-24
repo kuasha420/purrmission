@@ -19,16 +19,19 @@ import {
   ExpiredTokenError,
   ForbiddenError,
   InvalidGrantError,
+  SlowDownError,
 } from '../domain/auth.js';
 import { ResourceNotFoundError } from '../domain/errors.js';
 import type { ApprovalRequest, ResourceField } from '../domain/models.js';
 import type { Services } from '../domain/services.js';
-import { generateTOTPCode } from '../domain/totp.js';
 import { logger } from '../logging/logger.js';
+import crypto from 'node:crypto';
+import { correlationStorage } from '../logging/correlationContext.js';
 
 declare module 'fastify' {
   interface FastifyRequest {
     user: { id: string };
+    correlationId?: string;
   }
 }
 
@@ -54,6 +57,31 @@ const createRequestSchema = z.object({
 
 type CreateRequestBody = z.infer<typeof createRequestSchema>;
 
+function redactBody(body: unknown): unknown {
+  if (!body || typeof body !== 'object') {
+    return body;
+  }
+  const sensitiveKeys = ['value', 'secret', 'apiKey', 'token', 'access_token', 'device_code'];
+  const redact = (obj: unknown): unknown => {
+    if (Array.isArray(obj)) {
+      return obj.map(redact);
+    }
+    if (obj && typeof obj === 'object') {
+      const copy: Record<string, unknown> = {};
+      for (const [key, val] of Object.entries(obj as Record<string, unknown>)) {
+        if (sensitiveKeys.some((sk) => key.toLowerCase().includes(sk.toLowerCase()))) {
+          copy[key] = '[REDACTED]';
+        } else {
+          copy[key] = redact(val);
+        }
+      }
+      return copy;
+    }
+    return obj;
+  };
+  return redact(body);
+}
+
 /**
  * Create and configure the Fastify server.
  */
@@ -62,6 +90,39 @@ export function createHttpServer(deps: HttpServerDeps): FastifyInstance {
 
   const server = Fastify({
     logger: false, // We use our own logger
+  });
+
+  // Generate and attach correlation ID
+  server.addHook('onRequest', (request, reply, done) => {
+    const correlationId = (request.headers['x-correlation-id'] as string) || crypto.randomUUID();
+    request.headers['x-correlation-id'] = correlationId;
+    request.correlationId = correlationId;
+    reply.header('x-correlation-id', correlationId);
+
+    correlationStorage.run({ correlationId }, () => {
+      done();
+    });
+  });
+
+  // Log incoming requests inside correlation storage context
+  server.addHook('preHandler', async (request) => {
+    const redactedBody = redactBody(request.body);
+    logger.info('HTTP Request received', {
+      method: request.method,
+      url: request.url,
+      body: redactedBody,
+    });
+  });
+
+  // Log response completion
+  server.addHook('onResponse', async (request, reply) => {
+    logger.info('HTTP Response sent', {
+      method: request.method,
+      url: request.url,
+      correlationId: request.correlationId,
+      statusCode: reply.statusCode,
+      responseTimeMs: reply.elapsedTime,
+    });
   });
 
   // Register formbody to support application/x-www-form-urlencoded (OAuth2 standard)
@@ -118,6 +179,12 @@ export function createHttpServer(deps: HttpServerDeps): FastifyInstance {
       context: body.context,
       callbackUrl: body.callbackUrl,
       expiresInMs: body.expiresInMs,
+      requesterId: resource.id,
+      requesterType: 'SERVICE',
+      authKind: 'API_KEY',
+      action: 'resource.view',
+      targetVersion: resource.version,
+      policyVersion: resource.version,
     });
 
     if (!result.success) {
@@ -155,43 +222,68 @@ export function createHttpServer(deps: HttpServerDeps): FastifyInstance {
       status: approvalRequest.status,
       resourceId: resource.id,
       resourceName: resource.name,
-      expiresAt: approvalRequest.expiresAt?.toISOString() ?? null,
+      expiresAt: approvalRequest.expiresAt.toISOString(),
     });
   });
 
   // Get request status endpoint
-  server.get<{ Params: { id: string } }>('/api/requests/:id', async (request, reply) => {
-    const { id } = request.params;
+  server.get<{ Params: { id: string } }>(
+    '/api/requests/:id',
+    {
+      preHandler: [authenticate],
+    },
+    async (request, reply) => {
+      const { id } = request.params;
+      const userId = request.user.id;
 
-    const approvalRequest = await services.approval.getApprovalRequest(id);
-    if (!approvalRequest) {
-      return reply.status(404).send({
-        error: 'Request not found',
-      });
+      const approvalRequest = await services.approval.getApprovalRequest(id);
+      if (!approvalRequest) {
+        return reply.status(404).send({
+          error: 'Request not found',
+        });
+      }
+
+      // Exact-object authorization
+      const isRequester = approvalRequest.requesterId === userId;
+      const isGuardian = await services.resource.isGuardian(approvalRequest.resourceId, userId);
+
+      if (!isRequester && !isGuardian) {
+        throw new AccessDeniedError(
+          'Access denied: You do not have permission to view this request.'
+        );
+      }
+
+      return {
+        requestId: approvalRequest.id,
+        resourceId: approvalRequest.resourceId,
+        status: approvalRequest.status,
+        createdAt: approvalRequest.createdAt.toISOString(),
+        expiresAt: approvalRequest.expiresAt.toISOString(),
+        resolvedBy: approvalRequest.resolvedBy ?? null,
+        resolvedAt: approvalRequest.resolvedAt?.toISOString() ?? null,
+      };
     }
-
-    return {
-      requestId: approvalRequest.id,
-      resourceId: approvalRequest.resourceId,
-      status: approvalRequest.status,
-      context: approvalRequest.context,
-      createdAt: approvalRequest.createdAt.toISOString(),
-      expiresAt: approvalRequest.expiresAt?.toISOString() ?? null,
-      resolvedBy: approvalRequest.resolvedBy ?? null,
-      resolvedAt: approvalRequest.resolvedAt?.toISOString() ?? null,
-    };
-  });
+  );
 
   // Device Auth Flow: Initiate
-  server.post('/api/auth/device/code', async (_request, _reply) => {
-    const result = await services.auth.initiateDeviceFlow();
-    return {
-      device_code: result.deviceCode,
-      user_code: result.userCode,
-      verification_uri: result.verificationUri,
-      expires_in: result.expiresIn,
-      interval: result.interval,
-    };
+  server.post('/api/auth/device/code', async (request, reply) => {
+    try {
+      const result = await services.auth.initiateDeviceFlow(request.ip);
+      return {
+        device_code: result.deviceCode,
+        user_code: result.userCode,
+        verification_uri: result.verificationUri,
+        expires_in: result.expiresIn,
+        interval: result.interval,
+      };
+    } catch (e: unknown) {
+      if (e instanceof Error && e.message.includes('Rate limit exceeded')) {
+        return reply
+          .status(429)
+          .send({ error: 'slow_down', error_description: 'Rate limit exceeded' });
+      }
+      throw e;
+    }
   });
 
   // Device Auth Flow: Exchange Token
@@ -220,6 +312,9 @@ export function createHttpServer(deps: HttpServerDeps): FastifyInstance {
           expires_in: Math.round((result.apiToken.expiresAt.getTime() - Date.now()) / 1000),
         };
       } catch (e: unknown) {
+        if (e instanceof SlowDownError) {
+          return reply.status(400).send({ error: 'slow_down' });
+        }
         if (e instanceof ExpiredTokenError) {
           return reply.status(400).send({ error: 'expired_token' });
         }
@@ -273,23 +368,24 @@ export function createHttpServer(deps: HttpServerDeps): FastifyInstance {
 
   const LinkTotpSchema = z.object({
     totpAccountId: z.string().uuid(),
+    consentId: z.string().uuid(),
   });
 
   // Authentication Hook
-  const authenticate = async (req: FastifyRequest, _rep: FastifyReply) => {
+  async function authenticate(req: FastifyRequest, _rep: FastifyReply) {
     const authHeader = req.headers.authorization;
     if (!authHeader || !authHeader.startsWith('Bearer ')) {
       throw new AccessDeniedError('Missing Bearer token');
     }
     const token = authHeader.substring(7);
-    const apiToken = await services.auth.validateToken(token);
-    if (!apiToken) {
+    const principal = await services.auth.validateToken(token, req.ip);
+    if (!principal) {
       throw new AccessDeniedError('Invalid token');
     }
-    // Attach user to request
-    // Attach user to request
-    req.user = { id: apiToken.userId };
-  };
+    // Attach user and principal to request
+    req.user = { id: principal.subjectId || (principal as any).userId };
+    (req as any).principal = principal;
+  }
 
   // Authorization Hook: Verify Guardian/Owner Access
   const verifyIsGuardian = async (req: FastifyRequest<{ Params: { id: string } }>) => {
@@ -339,7 +435,9 @@ export function createHttpServer(deps: HttpServerDeps): FastifyInstance {
     }
 
     // Default handler
-    logger.error('Unhandled API error', { error });
+    logger.error('Unhandled API error', {
+      error: err instanceof Error ? { message: err.message, stack: err.stack } : err,
+    });
     return reply.status(500).send({ error: 'internal_server_error' });
   });
   server.post(
@@ -391,8 +489,8 @@ export function createHttpServer(deps: HttpServerDeps): FastifyInstance {
       const project = await services.project.getProject(projectId);
       if (!project) throw new ResourceNotFoundError('Project not found');
 
-      // Basic ACL: only owner can view (for now)
-      if (project.ownerId !== userId) throw new AccessDeniedError('Access denied');
+      const role = await services.project.getMemberRole(projectId, userId);
+      if (project.ownerId !== userId && !role) throw new AccessDeniedError('Access denied');
 
       return project;
     }
@@ -439,7 +537,9 @@ export function createHttpServer(deps: HttpServerDeps): FastifyInstance {
 
       const project = await services.project.getProject(projectId);
       if (!project) throw new ResourceNotFoundError('Project not found');
-      if (project.ownerId !== userId) throw new AccessDeniedError('Access denied');
+
+      const role = await services.project.getMemberRole(projectId, userId);
+      if (project.ownerId !== userId && !role) throw new AccessDeniedError('Access denied');
 
       const envs = await services.project.listEnvironments(projectId);
       return envs;
@@ -485,16 +585,30 @@ export function createHttpServer(deps: HttpServerDeps): FastifyInstance {
         return { secrets: fieldsToSecrets(fields) };
       }
 
+      // Fetch the current resource version for V2 state tracking
+      let targetVersion = 'v1';
+      if (typeof services.resource.getResource === 'function') {
+        const resourceObj = await services.resource.getResource(resourceId);
+        targetVersion = resourceObj?.version || 'v1';
+      }
+
       // Non-owner/non-guardian: Check for active approval or create one
       let approval: ApprovalRequest | null = await services.approval.findActiveApproval(
         resourceId,
-        userId
+        userId,
+        'secrets.read'
       );
 
       if (!approval) {
         // Create a new approval request
         const result = await services.approval.createApprovalRequest({
           resourceId,
+          requesterId: userId,
+          requesterType: (req as any).principal?.type || 'DISCORD_USER',
+          authKind: (req as any).principal?.authKind || 'DISCORD',
+          action: 'secrets.read',
+          targetVersion,
+          policyVersion: targetVersion,
           context: {
             requesterId: userId,
             type: 'SECRET_ACCESS',
@@ -533,6 +647,53 @@ export function createHttpServer(deps: HttpServerDeps): FastifyInstance {
       }
 
       if (approval.status === 'APPROVED') {
+        // Find active unconsumed grant
+        let activeGrant = null;
+        if (typeof services.approval.findActiveUnconsumedGrant === 'function') {
+          activeGrant = await services.approval.findActiveUnconsumedGrant(
+            resourceId,
+            userId,
+            'secrets.read',
+            null
+          );
+        }
+
+        if (activeGrant) {
+          // Atomically consume the grant
+          const prisma = getPrismaClient();
+          try {
+            await prisma.$transaction(async (tx) => {
+              await services.approval.consumeGrant(
+                activeGrant.id,
+                (req as any).principal || {
+                  type: 'DISCORD_USER',
+                  id: userId,
+                  authKind: 'DISCORD',
+                  actorDiscordId: userId,
+                },
+                'secrets.read',
+                targetVersion,
+                targetVersion,
+                tx
+              );
+            });
+          } catch (consumeErr) {
+            logger.error('Failed to consume approval grant for secrets access', {
+              resourceId,
+              userId,
+              error: consumeErr instanceof Error ? consumeErr.message : String(consumeErr),
+            });
+            throw consumeErr;
+          }
+        } else {
+          const hasGrantRepo = !!(services.approval as any).deps?.repositories?.approvalGrants;
+          if (hasGrantRepo) {
+            throw new AccessDeniedError(
+              'Access denied: No active unconsumed approval grant found. Please request approval again.'
+            );
+          }
+        }
+
         const fields = await services.resource.listFields(resourceId);
         return { secrets: fieldsToSecrets(fields) };
       }
@@ -597,7 +758,7 @@ export function createHttpServer(deps: HttpServerDeps): FastifyInstance {
     },
     async (req) => {
       const { id } = req.params;
-      const fields = await services.resource.listFields(id);
+      const fields = await services.resource.listFieldsMetadata(id);
       return fields.map((f) => f.name);
     }
   );
@@ -663,23 +824,20 @@ export function createHttpServer(deps: HttpServerDeps): FastifyInstance {
   // Resource 2FA Endpoints
   // ---------------------------------------------------------------------------
 
-  server.get<{ Params: z.infer<typeof ResourceParamsSchema> }>(
-    '/api/resources/:id/2fa',
+  server.post<{ Params: z.infer<typeof ResourceParamsSchema> }>(
+    '/api/resources/:id/2fa/code',
     {
       preHandler: [authenticate, verifyIsGuardian],
       schema: {
         params: ResourceParamsSchema,
       },
     },
-    async (req) => {
+    async (req, rep) => {
       const { id } = req.params;
+      const userId = req.user.id;
 
-      const account = await services.resource.getLinkedTOTPAccount(id);
-      if (!account) {
-        throw new ResourceNotFoundError('No 2FA account linked to this resource');
-      }
-
-      const code = generateTOTPCode(account);
+      const code = await services.resource.revealTOTPCode(id, userId);
+      rep.header('Cache-Control', 'no-store');
       return { code };
     }
   );
@@ -698,10 +856,10 @@ export function createHttpServer(deps: HttpServerDeps): FastifyInstance {
     },
     async (req, rep) => {
       const { id } = req.params;
-      const { totpAccountId } = req.body;
+      const { totpAccountId, consentId } = req.body;
       const userId = req.user.id; // Actor ID
 
-      await services.resource.linkTOTPAccount(id, totpAccountId, userId);
+      await services.resource.linkTOTPAccount(id, totpAccountId, userId, consentId);
       return rep.status(200).send({ success: true });
     }
   );
@@ -716,9 +874,28 @@ export function createHttpServer(deps: HttpServerDeps): FastifyInstance {
     },
     async (req, rep) => {
       const { id } = req.params;
+      const userId = req.user.id;
 
-      await services.resource.unlinkTOTPAccount(id);
+      await services.resource.unlinkTOTPAccount(id, userId);
       return rep.status(204).send();
+    }
+  );
+
+  server.post<{ Params: z.infer<typeof ResourceParamsSchema> }>(
+    '/api/totp/:id/recovery',
+    {
+      preHandler: [authenticate],
+      schema: {
+        params: ResourceParamsSchema,
+      },
+    },
+    async (req, rep) => {
+      const { id } = req.params; // TOTP Account ID
+      const userId = req.user.id;
+
+      const recoveryKey = await services.resource.revealTOTPRecoveryKey(id, userId);
+      rep.header('Cache-Control', 'no-store');
+      return { recoveryKey };
     }
   );
 

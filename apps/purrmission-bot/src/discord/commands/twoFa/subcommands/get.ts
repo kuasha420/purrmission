@@ -22,11 +22,12 @@ export async function handleGet2FA(
     });
 
     await context.services.audit.log({
-      action: 'TOTP_ACCESS_THROTTLED',
-      resourceId: null, // No resource ID for direct TOTP access
+      eventType: 'TOTP_ACCESS_THROTTLED',
+      outcomeCode: 'DENIED',
+      actorType: 'DISCORD_USER',
       actorId: requesterId,
-      status: 'DENIED',
-      context: JSON.stringify({ reason: 'Rate limit exceeded', accountName }),
+      authKind: 'DISCORD',
+      payload: { reason: 'Rate limit exceeded', accountName },
     });
     return;
   }
@@ -51,6 +52,15 @@ export async function handleGet2FA(
       return;
     }
 
+    await context.services.audit.log({
+      eventType: 'TOTP_RECOVERY_REVEAL',
+      outcomeCode: 'SUCCESS',
+      actorType: 'DISCORD_USER',
+      actorId: requesterId,
+      authKind: 'DISCORD',
+      payload: { totpAccountId: account.id },
+    });
+
     await sendDmOrFallback(
       interaction,
       [
@@ -68,6 +78,15 @@ export async function handleGet2FA(
 
   // Generate TOTP code
   const code = generateTOTPCode(account);
+
+  await context.services.audit.log({
+    eventType: 'TOTP_CODE_REVEAL',
+    outcomeCode: 'SUCCESS',
+    actorType: 'DISCORD_USER',
+    actorId: requesterId,
+    authKind: 'DISCORD',
+    payload: { totpAccountId: account.id },
+  });
 
   await sendDmOrFallback(
     interaction,

@@ -8,6 +8,7 @@
  * TODO: Replace in-memory implementations with Postgres/Prisma for production.
  */
 import { type PrismaClient, Prisma } from '@prisma/client';
+import { randomUUID } from 'crypto';
 
 import { decryptValue, encryptValue } from '../infra/crypto.js';
 import { logger } from '../logging/logger.js';
@@ -18,6 +19,8 @@ import type {
   ApprovalMode,
   ApprovalRequest,
   ApprovalStatus,
+  ApprovalGrant,
+  CreateApprovalGrantInput,
   AuditLog,
   AuthSession,
   AuthSessionStatus,
@@ -38,16 +41,31 @@ import type {
   Resource,
   ResourceField,
   TOTPAccount,
+  Credential,
+  CredentialType,
+  CreateCredentialInput,
+  OutboxEvent,
+  CreateOutboxEventInput,
+  TOTPAccountMetadata,
+  ResourceFieldMetadata,
 } from './models.js';
 
 export interface ResourceRepository {
-  create(resource: CreateResourceInput): Promise<Resource>;
+  create(resource: CreateResourceInput, tx?: Prisma.TransactionClient): Promise<Resource>;
 
   findById(id: string): Promise<Resource | null>;
 
   findByApiKey(apiKey: string): Promise<Resource | null>;
 
-  update(id: string, data: { totpAccountId?: string | null }): Promise<Resource>;
+  update(
+    id: string,
+    data: {
+      totpAccountId?: string | null;
+      totpDelegationEnvelope?: TOTPLinkEnvelope | null;
+      version?: string;
+    },
+    tx?: Prisma.TransactionClient
+  ): Promise<Resource>;
 
   findManyByIds(ids: string[], query?: string): Promise<Resource[]>;
 }
@@ -59,7 +77,7 @@ export interface GuardianRepository {
   /**
    * Add a new guardian to a resource.
    */
-  add(guardian: AddGuardianInput): Promise<Guardian>;
+  add(guardian: AddGuardianInput, tx?: Prisma.TransactionClient): Promise<Guardian>;
 
   /**
    * Find all guardians for a specific resource.
@@ -84,7 +102,7 @@ export interface GuardianRepository {
   /**
    * Remove a guardian from a resource.
    */
-  remove(resourceId: string, discordUserId: string): Promise<void>;
+  remove(resourceId: string, discordUserId: string, tx?: Prisma.TransactionClient): Promise<void>;
 }
 
 /**
@@ -94,12 +112,20 @@ export interface ApprovalRequestRepository {
   /**
    * Create a new approval request.
    */
-  create(request: CreateApprovalRequestInput): Promise<ApprovalRequest>;
+  create(
+    request: CreateApprovalRequestInput,
+    tx?: Prisma.TransactionClient
+  ): Promise<ApprovalRequest>;
 
   /**
    * Update the status of an approval request.
    */
-  updateStatus(id: string, status: ApprovalStatus, resolvedBy?: string): Promise<void>;
+  updateStatus(
+    id: string,
+    status: ApprovalStatus,
+    resolvedBy?: string,
+    tx?: Prisma.TransactionClient
+  ): Promise<void>;
 
   /**
    * Find an approval request by its ID.
@@ -117,32 +143,84 @@ export interface ApprovalRequestRepository {
   findByResourceId(resourceId: string): Promise<ApprovalRequest[]>;
 
   /**
-   * Find an active approval request by resource and requester.
+   * Find an active approval request by resource, requester, action and targetKey.
    */
-  findActiveByRequester(resourceId: string, requesterId: string): Promise<ApprovalRequest | null>;
+  findActiveByRequester(
+    resourceId: string,
+    requesterId: string,
+    action: string,
+    targetKey: string | null
+  ): Promise<ApprovalRequest | null>;
+
+  /**
+   * Find a pending request by resource, requester, action, and targetKey.
+   */
+  findPending(
+    resourceId: string,
+    requesterId: string,
+    action: string,
+    targetKey: string | null
+  ): Promise<ApprovalRequest | null>;
 
   /**
    * Mark all pending requests that have passed their expiresAt time as EXPIRED.
    * @returns The number of requests updated.
    */
-  expireRequests(): Promise<number>;
+  expireRequests(tx?: Prisma.TransactionClient): Promise<number>;
+}
+
+export interface ApprovalGrantRepository {
+  create(input: CreateApprovalGrantInput, tx?: Prisma.TransactionClient): Promise<ApprovalGrant>;
+
+  findById(id: string): Promise<ApprovalGrant | null>;
+
+  findByRequestId(requestId: string): Promise<ApprovalGrant | null>;
+
+  findActiveUnconsumed(
+    resourceId: string,
+    requesterId: string,
+    action: string,
+    targetKey: string | null
+  ): Promise<ApprovalGrant | null>;
+
+  consume(id: string, tx?: Prisma.TransactionClient): Promise<boolean>;
+
+  revoke(id: string, tx?: Prisma.TransactionClient): Promise<void>;
 }
 
 /**
  * Repository for managing TOTPAccount entities.
  */
 export interface TOTPRepository {
-  create(account: Omit<TOTPAccount, 'id' | 'createdAt' | 'updatedAt'>): Promise<TOTPAccount>;
-  update(account: TOTPAccount): Promise<TOTPAccount>;
-  deleteById(id: string): Promise<void>;
+  create(
+    account: Omit<TOTPAccount, 'id' | 'createdAt' | 'updatedAt' | 'version'>,
+    tx?: Prisma.TransactionClient
+  ): Promise<TOTPAccount>;
+  update(account: TOTPAccount, tx?: Prisma.TransactionClient): Promise<TOTPAccount>;
+  deleteById(id: string, tx?: Prisma.TransactionClient): Promise<void>;
   findById(id: string): Promise<TOTPAccount | null>;
   findByOwnerDiscordUserId(ownerDiscordUserId: string): Promise<TOTPAccount[]>;
   findByOwnerAndName(ownerDiscordUserId: string, accountName: string): Promise<TOTPAccount | null>;
-  /**
-   * Find all shared accounts visible to the given user.
-   * TODO: Implement fine-grained ACLs. For now, returns all shared accounts.
-   */
-  findSharedVisibleTo(discordUserId: string): Promise<TOTPAccount[]>;
+  findMetadataByOwnerDiscordUserId(ownerDiscordUserId: string): Promise<TOTPAccountMetadata[]>;
+
+  createLinkConsent(
+    input: Omit<TOTPLinkConsent, 'id' | 'createdAt' | 'usedAt'>,
+    tx?: Prisma.TransactionClient
+  ): Promise<TOTPLinkConsent>;
+  findLinkConsentById(id: string): Promise<TOTPLinkConsent | null>;
+  useLinkConsent(id: string, tx?: Prisma.TransactionClient): Promise<void>;
+
+  createDelegationConsent(
+    input: Omit<TOTPDelegationConsent, 'id' | 'createdAt' | 'usedAt'>,
+    tx?: Prisma.TransactionClient
+  ): Promise<TOTPDelegationConsent>;
+  findDelegationConsentById(id: string): Promise<TOTPDelegationConsent | null>;
+  findActiveDelegationConsent(
+    resourceId: string,
+    requesterId: string,
+    operation: string
+  ): Promise<TOTPDelegationConsent | null>;
+  useDelegationConsent(id: string, tx?: Prisma.TransactionClient): Promise<void>;
 }
 
 /**
@@ -154,7 +232,7 @@ export interface ResourceFieldRepository {
    * Create a new field for a resource.
    * The value will be encrypted before storage.
    */
-  create(input: CreateResourceFieldInput): Promise<ResourceField>;
+  create(input: CreateResourceFieldInput, tx?: Prisma.TransactionClient): Promise<ResourceField>;
 
   /**
    * Find a field by its ID.
@@ -175,12 +253,18 @@ export interface ResourceFieldRepository {
    * Update a field's value.
    * The value will be encrypted before storage.
    */
-  update(id: string, value: string): Promise<ResourceField>;
+  update(id: string, value: string, tx?: Prisma.TransactionClient): Promise<ResourceField>;
 
   /**
    * Delete a field by ID.
    */
-  delete(id: string): Promise<void>;
+  delete(id: string, tx?: Prisma.TransactionClient): Promise<void>;
+
+  findMetadataByResourceId(resourceId: string): Promise<ResourceFieldMetadata[]>;
+  findMetadataByResourceAndName(
+    resourceId: string,
+    name: string
+  ): Promise<ResourceFieldMetadata | null>;
 }
 
 /**
@@ -194,14 +278,16 @@ export class PrismaResourceRepository implements ResourceRepository {
     this.prisma = prisma;
   }
 
-  async create(input: CreateResourceInput): Promise<Resource> {
-    const created = await this.prisma.resource.create({
+  async create(input: CreateResourceInput, tx?: Prisma.TransactionClient): Promise<Resource> {
+    const client = tx || this.prisma;
+    const created = await client.resource.create({
       data: {
         id: input.id,
         name: input.name,
         mode: input.mode,
         apiKey: input.apiKey,
         totpAccountId: input.totpAccountId ?? null,
+        version: input.version || randomUUID(),
       },
     });
     return this.mapPrismaToDomain(created);
@@ -221,11 +307,22 @@ export class PrismaResourceRepository implements ResourceRepository {
     return row ? this.mapPrismaToDomain(row) : null;
   }
 
-  async update(id: string, data: { totpAccountId?: string | null }): Promise<Resource> {
-    const updated = await this.prisma.resource.update({
+  async update(
+    id: string,
+    data: {
+      totpAccountId?: string | null;
+      totpDelegationEnvelope?: TOTPLinkEnvelope | null;
+      version?: string;
+    },
+    tx?: Prisma.TransactionClient
+  ): Promise<Resource> {
+    const client = tx || this.prisma;
+    const updated = await client.resource.update({
       where: { id },
       data: {
         totpAccountId: data.totpAccountId,
+        totpDelegationEnvelope: data.totpDelegationEnvelope as any,
+        version: data.version || randomUUID(),
       },
     });
     return this.mapPrismaToDomain(updated);
@@ -251,6 +348,8 @@ export class PrismaResourceRepository implements ResourceRepository {
     mode: string;
     apiKey: string;
     totpAccountId: string | null;
+    totpDelegationEnvelope: any;
+    version: string;
     createdAt: Date;
   }): Resource {
     // Validate mode is a valid ApprovalMode
@@ -264,6 +363,10 @@ export class PrismaResourceRepository implements ResourceRepository {
       mode: row.mode as ApprovalMode,
       apiKey: row.apiKey,
       totpAccountId: row.totpAccountId ?? undefined,
+      totpDelegationEnvelope: row.totpDelegationEnvelope
+        ? (row.totpDelegationEnvelope as unknown as TOTPLinkEnvelope)
+        : undefined,
+      version: row.version,
       createdAt: row.createdAt,
     };
   }
@@ -327,28 +430,33 @@ export class PrismaTOTPRepository implements TOTPRepository {
     }
   }
 
-  async create(account: Omit<TOTPAccount, 'id' | 'createdAt' | 'updatedAt'>): Promise<TOTPAccount> {
+  async create(
+    account: Omit<TOTPAccount, 'id' | 'createdAt' | 'updatedAt' | 'version'>,
+    tx?: Prisma.TransactionClient
+  ): Promise<TOTPAccount> {
+    const client = tx || this.prisma;
     const { encryptedSecret, encryptedBackupKey } = this.encryptAccountData(
       account.secret,
       account.backupKey,
       'creation'
     );
 
-    const created = await this.prisma.tOTPAccount.create({
+    const created = await client.tOTPAccount.create({
       data: {
         ownerDiscordUserId: account.ownerDiscordUserId,
         accountName: account.accountName,
         secret: encryptedSecret,
         issuer: account.issuer ?? null,
-        shared: account.shared,
         backupKey: encryptedBackupKey,
+        version: randomUUID(),
       },
     });
 
     return this.mapPrismaToDomain(created);
   }
 
-  async update(account: TOTPAccount): Promise<TOTPAccount> {
+  async update(account: TOTPAccount, tx?: Prisma.TransactionClient): Promise<TOTPAccount> {
+    const client = tx || this.prisma;
     const { encryptedSecret, encryptedBackupKey } = this.encryptAccountData(
       account.secret,
       account.backupKey,
@@ -356,36 +464,55 @@ export class PrismaTOTPRepository implements TOTPRepository {
       account.id
     );
 
-    const updated = await this.prisma.tOTPAccount.update({
+    const updated = await client.tOTPAccount.update({
       where: { id: account.id },
       data: {
         ownerDiscordUserId: account.ownerDiscordUserId,
         accountName: account.accountName,
         secret: encryptedSecret,
         issuer: account.issuer ?? null,
-        shared: account.shared,
         backupKey: encryptedBackupKey,
+        version: randomUUID(),
       },
     });
+
+    // Rotate version on parent/linked Resource if exists
+    const linkedResource = await client.resource.findUnique({
+      where: { totpAccountId: account.id },
+    });
+    if (linkedResource) {
+      await client.resource.update({
+        where: { id: linkedResource.id },
+        data: { version: randomUUID() },
+      });
+    }
 
     return this.mapPrismaToDomain(updated);
   }
 
-  async deleteById(id: string): Promise<void> {
-    // If record doesn't exist, Prisma will throw; swallow "not found" errors for idempotency.
+  async deleteById(id: string, tx?: Prisma.TransactionClient): Promise<void> {
+    const client = tx || this.prisma;
+    // Find linked resource first
+    const linkedResource = await client.resource.findUnique({
+      where: { totpAccountId: id },
+    });
+
     try {
-      await this.prisma.tOTPAccount.delete({
+      await client.tOTPAccount.delete({
         where: { id },
       });
     } catch (e) {
-      // Prisma's error code for "record to delete does not exist" is P2025.
-      // We check for this specific error to avoid swallowing other unexpected errors.
       if ((e as { code?: string }).code === 'P2025') {
-        // Record not found, which is fine for an idempotent delete.
         return;
       }
-      // Re-throw any other unexpected errors.
       throw e;
+    }
+
+    if (linkedResource) {
+      await client.resource.update({
+        where: { id: linkedResource.id },
+        data: { version: randomUUID() },
+      });
     }
   }
 
@@ -421,14 +548,155 @@ export class PrismaTOTPRepository implements TOTPRepository {
     return row ? this.mapPrismaToDomain(row) : null;
   }
 
-  async findSharedVisibleTo(_discordUserId: string): Promise<TOTPAccount[]> {
-    // MVP: all shared accounts are visible to everyone.
+  async findMetadataByOwnerDiscordUserId(
+    ownerDiscordUserId: string
+  ): Promise<TOTPAccountMetadata[]> {
     const rows = await this.prisma.tOTPAccount.findMany({
-      where: { shared: true },
+      where: { ownerDiscordUserId },
+      select: {
+        id: true,
+        ownerDiscordUserId: true,
+        accountName: true,
+        issuer: true,
+        version: true,
+        createdAt: true,
+        updatedAt: true,
+      },
       orderBy: { accountName: 'asc' },
     });
+    return rows;
+  }
 
-    return rows.map((row) => this.mapPrismaToDomain(row));
+  async createLinkConsent(
+    input: Omit<TOTPLinkConsent, 'id' | 'createdAt' | 'usedAt'>,
+    tx?: Prisma.TransactionClient
+  ): Promise<TOTPLinkConsent> {
+    const client = tx || this.prisma;
+    const created = await client.tOTPLinkConsent.create({
+      data: {
+        accountId: input.accountId,
+        resourceId: input.resourceId,
+        ownerDiscordUserId: input.ownerDiscordUserId,
+        delegationPolicy: input.delegationPolicy as any,
+        expiresAt: input.expiresAt,
+      },
+    });
+    return {
+      id: created.id,
+      accountId: created.accountId,
+      resourceId: created.resourceId,
+      ownerDiscordUserId: created.ownerDiscordUserId,
+      delegationPolicy: created.delegationPolicy as any,
+      expiresAt: created.expiresAt,
+      usedAt: created.usedAt,
+      createdAt: created.createdAt,
+    };
+  }
+
+  async findLinkConsentById(id: string): Promise<TOTPLinkConsent | null> {
+    const found = await this.prisma.tOTPLinkConsent.findUnique({
+      where: { id },
+    });
+    if (!found) return null;
+    return {
+      id: found.id,
+      accountId: found.accountId,
+      resourceId: found.resourceId,
+      ownerDiscordUserId: found.ownerDiscordUserId,
+      delegationPolicy: found.delegationPolicy as any,
+      expiresAt: found.expiresAt,
+      usedAt: found.usedAt,
+      createdAt: found.createdAt,
+    };
+  }
+
+  async useLinkConsent(id: string, tx?: Prisma.TransactionClient): Promise<void> {
+    const client = tx || this.prisma;
+    await client.tOTPLinkConsent.update({
+      where: { id },
+      data: { usedAt: new Date() },
+    });
+  }
+
+  async createDelegationConsent(
+    input: Omit<TOTPDelegationConsent, 'id' | 'createdAt' | 'usedAt'>,
+    tx?: Prisma.TransactionClient
+  ): Promise<TOTPDelegationConsent> {
+    const client = tx || this.prisma;
+    const created = await client.tOTPDelegationConsent.create({
+      data: {
+        resourceId: input.resourceId,
+        totpAccountId: input.totpAccountId,
+        operation: input.operation,
+        requesterId: input.requesterId,
+        authFamily: input.authFamily,
+        accountVersion: input.accountVersion,
+        linkVersion: input.linkVersion,
+        expiresAt: input.expiresAt,
+      },
+    });
+    return {
+      id: created.id,
+      resourceId: created.resourceId,
+      totpAccountId: created.totpAccountId,
+      operation: created.operation,
+      requesterId: created.requesterId,
+      authFamily: created.authFamily,
+      accountVersion: created.accountVersion,
+      linkVersion: created.linkVersion,
+      expiresAt: created.expiresAt,
+      usedAt: created.usedAt,
+      createdAt: created.createdAt,
+    };
+  }
+
+  async findDelegationConsentById(id: string): Promise<TOTPDelegationConsent | null> {
+    const found = await this.prisma.tOTPDelegationConsent.findUnique({
+      where: { id },
+    });
+    if (!found) return null;
+    return {
+      id: found.id,
+      resourceId: found.resourceId,
+      totpAccountId: found.totpAccountId,
+      operation: found.operation,
+      requesterId: found.requesterId,
+      authFamily: found.authFamily,
+      accountVersion: found.accountVersion,
+      linkVersion: found.linkVersion,
+      expiresAt: found.expiresAt,
+      usedAt: found.usedAt,
+      createdAt: found.createdAt,
+    };
+  }
+
+  async findActiveDelegationConsent(
+    resourceId: string,
+    requesterId: string,
+    operation: string
+  ): Promise<TOTPDelegationConsent | null> {
+    const now = new Date();
+    const found = await this.prisma.tOTPDelegationConsent.findFirst({
+      where: {
+        resourceId,
+        requesterId,
+        operation,
+        usedAt: null,
+        expiresAt: { gt: now },
+      },
+      orderBy: {
+        createdAt: 'desc',
+      },
+    });
+    return found ? this.mapDelegationConsent(found) : null;
+  }
+
+  async useDelegationConsent(id: string, tx?: Prisma.TransactionClient): Promise<void> {
+    const client = tx || this.prisma;
+    await client.tOTPDelegationConsent.update({
+      where: { id },
+      data: { usedAt: new Date() },
+    });
   }
 
   private mapPrismaToDomain(row: {
@@ -437,8 +705,8 @@ export class PrismaTOTPRepository implements TOTPRepository {
     accountName: string;
     secret: string;
     issuer: string | null;
-    shared: boolean;
     backupKey?: string | null;
+    version: string;
     createdAt: Date;
     updatedAt: Date;
   }): TOTPAccount {
@@ -453,8 +721,8 @@ export class PrismaTOTPRepository implements TOTPRepository {
       accountName: row.accountName,
       secret: decryptedSecret,
       issuer: row.issuer ?? undefined,
-      shared: row.shared,
       backupKey: decryptedBackupKey,
+      version: row.version,
       createdAt: row.createdAt,
       updatedAt: row.updatedAt,
     };
@@ -472,14 +740,23 @@ export class PrismaResourceFieldRepository implements ResourceFieldRepository {
     this.prisma = prisma;
   }
 
-  async create(input: CreateResourceFieldInput): Promise<ResourceField> {
+  async create(
+    input: CreateResourceFieldInput,
+    tx?: Prisma.TransactionClient
+  ): Promise<ResourceField> {
+    const client = tx || this.prisma;
     const encryptedValue = encryptValue(input.value);
-    const created = await this.prisma.resourceField.create({
+    const created = await client.resourceField.create({
       data: {
         resourceId: input.resourceId,
         name: input.name,
         value: encryptedValue,
       },
+    });
+    // Rotate version on parent Resource
+    await client.resource.update({
+      where: { id: input.resourceId },
+      data: { version: randomUUID() },
     });
     return this.mapPrismaToDomain(created);
   }
@@ -511,18 +788,31 @@ export class PrismaResourceFieldRepository implements ResourceFieldRepository {
     return row ? this.mapPrismaToDomain(row) : null;
   }
 
-  async update(id: string, value: string): Promise<ResourceField> {
+  async update(id: string, value: string, tx?: Prisma.TransactionClient): Promise<ResourceField> {
+    const client = tx || this.prisma;
     const encryptedValue = encryptValue(value);
-    const updated = await this.prisma.resourceField.update({
+    const updated = await client.resourceField.update({
       where: { id },
       data: { value: encryptedValue },
+    });
+    // Rotate version on parent Resource
+    await client.resource.update({
+      where: { id: updated.resourceId },
+      data: { version: randomUUID() },
     });
     return this.mapPrismaToDomain(updated);
   }
 
-  async delete(id: string): Promise<void> {
+  async delete(id: string, tx?: Prisma.TransactionClient): Promise<void> {
+    const client = tx || this.prisma;
+    // Find record first
+    const field = await client.resourceField.findUnique({
+      where: { id },
+    });
+    if (!field) return;
+
     try {
-      await this.prisma.resourceField.delete({
+      await client.resourceField.delete({
         where: { id },
       });
     } catch (e) {
@@ -531,6 +821,49 @@ export class PrismaResourceFieldRepository implements ResourceFieldRepository {
       }
       throw e;
     }
+
+    // Rotate version on parent Resource
+    await client.resource.update({
+      where: { id: field.resourceId },
+      data: { version: randomUUID() },
+    });
+  }
+
+  async findMetadataByResourceId(resourceId: string): Promise<ResourceFieldMetadata[]> {
+    const rows = await this.prisma.resourceField.findMany({
+      where: { resourceId },
+      select: {
+        id: true,
+        resourceId: true,
+        name: true,
+        createdAt: true,
+        updatedAt: true,
+      },
+      orderBy: { name: 'asc' },
+    });
+    return rows;
+  }
+
+  async findMetadataByResourceAndName(
+    resourceId: string,
+    name: string
+  ): Promise<ResourceFieldMetadata | null> {
+    const row = await this.prisma.resourceField.findUnique({
+      where: {
+        resourceId_name: {
+          resourceId,
+          name,
+        },
+      },
+      select: {
+        id: true,
+        resourceId: true,
+        name: true,
+        createdAt: true,
+        updatedAt: true,
+      },
+    });
+    return row;
   }
 
   private mapPrismaToDomain(row: {
@@ -574,14 +907,33 @@ export interface Repositories {
   audit: AuditRepository;
   auth: AuthRepository;
   projects: ProjectRepository;
+  outbox: OutboxRepository;
+  credentials: CredentialRepository;
+  approvalGrants: ApprovalGrantRepository;
 }
 
 /**
  * Repository for logging audit events.
  */
 export interface AuditRepository {
-  create(input: CreateAuditLogInput): Promise<AuditLog>;
+  create(input: CreateAuditLogInput, tx?: Prisma.TransactionClient): Promise<AuditLog>;
   findByResourceId(resourceId: string): Promise<AuditLog[]>;
+  findByProjectId(projectId: string): Promise<AuditLog[]>;
+}
+
+/**
+ * Repository for transactional outbox.
+ */
+export interface OutboxRepository {
+  create(input: CreateOutboxEventInput, tx?: Prisma.TransactionClient): Promise<OutboxEvent>;
+  findPending(): Promise<OutboxEvent[]>;
+  updateStatus(
+    id: string,
+    status: 'PENDING' | 'PROCESSED' | 'FAILED',
+    attempts: number,
+    lastError?: string,
+    tx?: Prisma.TransactionClient
+  ): Promise<void>;
 }
 
 /**
@@ -594,18 +946,27 @@ export class PrismaAuditRepository implements AuditRepository {
     this.prisma = prisma;
   }
 
-  async create(input: CreateAuditLogInput): Promise<AuditLog> {
-    const created = await this.prisma.auditLog.create({
+  async create(input: CreateAuditLogInput, tx?: Prisma.TransactionClient): Promise<AuditLog> {
+    const client = tx || this.prisma;
+    const created = await client.auditLog.create({
       data: {
-        action: input.action,
-        resourceId: input.resourceId,
-        actorId: input.actorId,
-        resolverId: input.resolverId,
-        status: input.status,
-        context: input.context,
+        schemaVersion: input.schemaVersion,
+        eventType: input.eventType,
+        outcomeCode: input.outcomeCode,
+        actorType: input.actorType,
+        actorId: input.actorId ?? null,
+        authKind: input.authKind ?? null,
+        resourceId: input.resourceId ?? null,
+        projectId: input.projectId ?? null,
+        environmentId: input.environmentId ?? null,
+        requestId: input.requestId ?? null,
+        grantId: input.grantId ?? null,
+        correlationId: input.correlationId ?? null,
+        causationId: input.causationId ?? null,
+        payload: input.payload ? (input.payload as Prisma.InputJsonValue) : null,
       },
     });
-    return created;
+    return this.mapPrismaToDomain(created);
   }
 
   async findByResourceId(resourceId: string): Promise<AuditLog[]> {
@@ -613,7 +974,123 @@ export class PrismaAuditRepository implements AuditRepository {
       where: { resourceId },
       orderBy: { createdAt: 'desc' },
     });
-    return rows;
+    return rows.map((row) => this.mapPrismaToDomain(row));
+  }
+
+  async findByProjectId(projectId: string): Promise<AuditLog[]> {
+    const rows = await this.prisma.auditLog.findMany({
+      where: { projectId },
+      orderBy: { createdAt: 'desc' },
+    });
+    return rows.map((row) => this.mapPrismaToDomain(row));
+  }
+
+  private mapPrismaToDomain(row: {
+    id: string;
+    schemaVersion: number;
+    eventType: string;
+    outcomeCode: string;
+    actorType: string;
+    actorId: string | null;
+    authKind: string | null;
+    resourceId: string | null;
+    projectId: string | null;
+    environmentId: string | null;
+    requestId: string | null;
+    grantId: string | null;
+    correlationId: string | null;
+    causationId: string | null;
+    payload: Prisma.JsonValue;
+    createdAt: Date;
+  }): AuditLog {
+    return {
+      id: row.id,
+      schemaVersion: row.schemaVersion,
+      eventType: row.eventType,
+      outcomeCode: row.outcomeCode,
+      actorType: row.actorType,
+      actorId: row.actorId,
+      authKind: row.authKind,
+      resourceId: row.resourceId,
+      projectId: row.projectId,
+      environmentId: row.environmentId,
+      requestId: row.requestId,
+      grantId: row.grantId,
+      correlationId: row.correlationId,
+      causationId: row.causationId,
+      payload: row.payload as Record<string, unknown> | null,
+      createdAt: row.createdAt,
+    };
+  }
+}
+
+/**
+ * Prisma implementation of OutboxRepository.
+ */
+export class PrismaOutboxRepository implements OutboxRepository {
+  private readonly prisma: PrismaClient;
+
+  constructor(prisma: PrismaClient) {
+    this.prisma = prisma;
+  }
+
+  async create(input: CreateOutboxEventInput, tx?: Prisma.TransactionClient): Promise<OutboxEvent> {
+    const client = tx || this.prisma;
+    const created = await client.outboxEvent.create({
+      data: {
+        eventType: input.eventType,
+        payload: input.payload as Prisma.InputJsonValue,
+      },
+    });
+    return this.mapPrismaToDomain(created);
+  }
+
+  async findPending(): Promise<OutboxEvent[]> {
+    const rows = await this.prisma.outboxEvent.findMany({
+      where: { status: 'PENDING' },
+      orderBy: { createdAt: 'asc' },
+    });
+    return rows.map((row) => this.mapPrismaToDomain(row));
+  }
+
+  async updateStatus(
+    id: string,
+    status: 'PENDING' | 'PROCESSED' | 'FAILED',
+    attempts: number,
+    lastError?: string,
+    tx?: Prisma.TransactionClient
+  ): Promise<void> {
+    const client = tx || this.prisma;
+    await client.outboxEvent.update({
+      where: { id },
+      data: {
+        status,
+        attempts,
+        lastError: lastError ?? null,
+      },
+    });
+  }
+
+  private mapPrismaToDomain(row: {
+    id: string;
+    eventType: string;
+    payload: Prisma.JsonValue;
+    status: string;
+    attempts: number;
+    lastError: string | null;
+    createdAt: Date;
+    updatedAt: Date;
+  }): OutboxEvent {
+    return {
+      id: row.id,
+      eventType: row.eventType,
+      payload: row.payload as Record<string, unknown>,
+      status: row.status as 'PENDING' | 'PROCESSED' | 'FAILED',
+      attempts: row.attempts,
+      lastError: row.lastError,
+      createdAt: row.createdAt,
+      updatedAt: row.updatedAt,
+    };
   }
 }
 
@@ -627,14 +1104,20 @@ export class PrismaGuardianRepository implements GuardianRepository {
     this.prisma = prisma;
   }
 
-  async add(input: AddGuardianInput): Promise<Guardian> {
-    const created = await this.prisma.guardian.create({
+  async add(input: AddGuardianInput, tx?: Prisma.TransactionClient): Promise<Guardian> {
+    const client = tx || this.prisma;
+    const created = await client.guardian.create({
       data: {
         id: input.id,
         resourceId: input.resourceId,
         discordUserId: input.discordUserId,
         role: input.role,
       },
+    });
+    // Rotate version on parent Resource
+    await client.resource.update({
+      where: { id: input.resourceId },
+      data: { version: randomUUID() },
     });
     return this.mapPrismaToDomain(created);
   }
@@ -667,13 +1150,23 @@ export class PrismaGuardianRepository implements GuardianRepository {
     return rows.map((row) => this.mapPrismaToDomain(row));
   }
 
-  async remove(resourceId: string, discordUserId: string): Promise<void> {
+  async remove(
+    resourceId: string,
+    discordUserId: string,
+    tx?: Prisma.TransactionClient
+  ): Promise<void> {
+    const client = tx || this.prisma;
     // Using deleteMany is safe and idempotent-ish (won't fail if not found).
-    await this.prisma.guardian.deleteMany({
+    await client.guardian.deleteMany({
       where: {
         resourceId,
         discordUserId,
       },
+    });
+    // Rotate version on parent Resource
+    await client.resource.update({
+      where: { id: resourceId },
+      data: { version: randomUUID() },
     });
   }
 
@@ -704,13 +1197,25 @@ export class PrismaApprovalRequestRepository implements ApprovalRequestRepositor
     this.prisma = prisma;
   }
 
-  async create(input: CreateApprovalRequestInput): Promise<ApprovalRequest> {
-    const created = await this.prisma.approvalRequest.create({
+  async create(
+    input: CreateApprovalRequestInput,
+    tx?: Prisma.TransactionClient
+  ): Promise<ApprovalRequest> {
+    const client = tx || this.prisma;
+    const created = await client.approvalRequest.create({
       data: {
         id: input.id,
         resourceId: input.resourceId,
         status: input.status,
-        context: input.context as Prisma.InputJsonValue,
+        context: input.context ? (input.context as Prisma.InputJsonValue) : null,
+        requesterId: input.requesterId,
+        requesterType: input.requesterType,
+        authKind: input.authKind,
+        action: input.action,
+        targetKey: input.targetKey,
+        targetVersion: input.targetVersion,
+        policyVersion: input.policyVersion,
+        constraints: input.constraints ? JSON.stringify(input.constraints) : null,
         callbackUrl: input.callbackUrl,
         expiresAt: input.expiresAt,
         discordMessageId: input.discordMessageId,
@@ -720,14 +1225,20 @@ export class PrismaApprovalRequestRepository implements ApprovalRequestRepositor
     return this.mapPrismaToDomain(created);
   }
 
-  async updateStatus(id: string, status: ApprovalStatus, resolvedBy?: string): Promise<void> {
+  async updateStatus(
+    id: string,
+    status: ApprovalStatus,
+    resolvedBy?: string,
+    tx?: Prisma.TransactionClient
+  ): Promise<void> {
+    const client = tx || this.prisma;
     const data: Prisma.ApprovalRequestUpdateInput = { status };
     if (resolvedBy) {
       data.resolvedBy = resolvedBy;
       data.resolvedAt = new Date();
     }
 
-    await this.prisma.approvalRequest.update({
+    await client.approvalRequest.update({
       where: { id },
       data,
     });
@@ -761,37 +1272,54 @@ export class PrismaApprovalRequestRepository implements ApprovalRequestRepositor
 
   async findActiveByRequester(
     resourceId: string,
-    requesterId: string
+    requesterId: string,
+    action: string,
+    targetKey: string | null
   ): Promise<ApprovalRequest | null> {
     const now = new Date();
-    const rows = await this.prisma.approvalRequest.findMany({
+    const row = await this.prisma.approvalRequest.findFirst({
       where: {
         resourceId,
+        requesterId,
+        action,
+        targetKey,
         status: { in: ['PENDING', 'APPROVED'] },
-        OR: [{ expiresAt: null }, { expiresAt: { gt: now } }],
+        expiresAt: { gt: now },
       },
       orderBy: {
         createdAt: 'desc',
       },
     });
-
-    // NOTE: In-memory filtering is used here as a workaround for Prisma's SQLite provider,
-    // which has limitations with JSON path queries. This may have performance implications
-    // for resources with a very large number of approval requests.
-    const match = rows.find((row) => {
-      const ctx = row.context;
-      if (ctx && typeof ctx === 'object' && !Array.isArray(ctx)) {
-        return (ctx as Record<string, unknown>)['requesterId'] === requesterId;
-      }
-      return false;
-    });
-
-    return match ? this.mapPrismaToDomain(match) : null;
+    return row ? this.mapPrismaToDomain(row) : null;
   }
 
-  async expireRequests(): Promise<number> {
+  async findPending(
+    resourceId: string,
+    requesterId: string,
+    action: string,
+    targetKey: string | null
+  ): Promise<ApprovalRequest | null> {
     const now = new Date();
-    const result = await this.prisma.approvalRequest.updateMany({
+    const row = await this.prisma.approvalRequest.findFirst({
+      where: {
+        resourceId,
+        requesterId,
+        action,
+        targetKey,
+        status: 'PENDING',
+        expiresAt: { gt: now },
+      },
+      orderBy: {
+        createdAt: 'desc',
+      },
+    });
+    return row ? this.mapPrismaToDomain(row) : null;
+  }
+
+  async expireRequests(tx?: Prisma.TransactionClient): Promise<number> {
+    const client = tx || this.prisma;
+    const now = new Date();
+    const result = await client.approvalRequest.updateMany({
       where: {
         status: 'PENDING',
         expiresAt: { lt: now },
@@ -803,24 +1331,20 @@ export class PrismaApprovalRequestRepository implements ApprovalRequestRepositor
     return result.count;
   }
 
-  private mapPrismaToDomain(row: {
-    id: string;
-    resourceId: string;
-    status: string;
-    context: unknown;
-    callbackUrl: string | null;
-    createdAt: Date;
-    expiresAt: Date | null;
-    resolvedBy: string | null;
-    resolvedAt: Date | null;
-    discordMessageId: string | null;
-    discordChannelId: string | null;
-  }): ApprovalRequest {
+  private mapPrismaToDomain(row: any): ApprovalRequest {
     return {
       id: row.id,
       resourceId: row.resourceId,
       status: row.status as ApprovalStatus,
-      context: (row.context as Record<string, unknown>) ?? {},
+      context: row.context as Record<string, unknown> | null,
+      requesterId: row.requesterId,
+      requesterType: row.requesterType,
+      authKind: row.authKind,
+      action: row.action,
+      targetKey: row.targetKey,
+      targetVersion: row.targetVersion,
+      policyVersion: row.policyVersion,
+      constraints: row.constraints ? JSON.parse(row.constraints) : null,
       callbackUrl: row.callbackUrl ?? undefined,
       createdAt: row.createdAt,
       expiresAt: row.expiresAt,
@@ -828,6 +1352,111 @@ export class PrismaApprovalRequestRepository implements ApprovalRequestRepositor
       resolvedAt: row.resolvedAt ?? undefined,
       discordMessageId: row.discordMessageId ?? undefined,
       discordChannelId: row.discordChannelId ?? undefined,
+    };
+  }
+}
+
+export class PrismaApprovalGrantRepository implements ApprovalGrantRepository {
+  constructor(private readonly prisma: PrismaClient) {}
+
+  async create(
+    input: CreateApprovalGrantInput,
+    tx?: Prisma.TransactionClient
+  ): Promise<ApprovalGrant> {
+    const client = tx || this.prisma;
+    const row = await client.approvalGrant.create({
+      data: {
+        requestId: input.requestId,
+        resourceId: input.resourceId,
+        requesterId: input.requesterId,
+        requesterType: input.requesterType,
+        authKind: input.authKind,
+        action: input.action,
+        targetKey: input.targetKey,
+        targetVersion: input.targetVersion,
+        policyVersion: input.policyVersion,
+        constraints: input.constraints ? JSON.stringify(input.constraints) : null,
+        expiresAt: input.expiresAt,
+      },
+    });
+    return this.mapRow(row);
+  }
+
+  async findById(id: string): Promise<ApprovalGrant | null> {
+    const row = await this.prisma.approvalGrant.findUnique({ where: { id } });
+    return row ? this.mapRow(row) : null;
+  }
+
+  async findByRequestId(requestId: string): Promise<ApprovalGrant | null> {
+    const row = await this.prisma.approvalGrant.findUnique({ where: { requestId } });
+    return row ? this.mapRow(row) : null;
+  }
+
+  async findActiveUnconsumed(
+    resourceId: string,
+    requesterId: string,
+    action: string,
+    targetKey: string | null
+  ): Promise<ApprovalGrant | null> {
+    const now = new Date();
+    const row = await this.prisma.approvalGrant.findFirst({
+      where: {
+        resourceId,
+        requesterId,
+        action,
+        targetKey,
+        consumedAt: null,
+        revokedAt: null,
+        expiresAt: { gt: now },
+      },
+      orderBy: {
+        createdAt: 'desc',
+      },
+    });
+    return row ? this.mapRow(row) : null;
+  }
+
+  async consume(id: string, tx?: Prisma.TransactionClient): Promise<boolean> {
+    const client = tx || this.prisma;
+    const result = await client.approvalGrant.updateMany({
+      where: {
+        id,
+        consumedAt: null,
+        revokedAt: null,
+        expiresAt: { gt: new Date() },
+      },
+      data: {
+        consumedAt: new Date(),
+      },
+    });
+    return result.count === 1;
+  }
+
+  async revoke(id: string, tx?: Prisma.TransactionClient): Promise<void> {
+    const client = tx || this.prisma;
+    await client.approvalGrant.update({
+      where: { id },
+      data: { revokedAt: new Date() },
+    });
+  }
+
+  private mapRow(row: any): ApprovalGrant {
+    return {
+      id: row.id,
+      requestId: row.requestId,
+      resourceId: row.resourceId,
+      requesterId: row.requesterId,
+      requesterType: row.requesterType,
+      authKind: row.authKind,
+      action: row.action,
+      targetKey: row.targetKey,
+      targetVersion: row.targetVersion,
+      policyVersion: row.policyVersion,
+      constraints: row.constraints ? JSON.parse(row.constraints) : null,
+      createdAt: row.createdAt,
+      expiresAt: row.expiresAt,
+      consumedAt: row.consumedAt,
+      revokedAt: row.revokedAt,
     };
   }
 }
@@ -841,10 +1470,25 @@ export interface AuthRepository {
   findSessionByDeviceCode(deviceCode: string): Promise<AuthSession | null>;
   findSessionByUserCode(userCode: string): Promise<AuthSession | null>;
   updateSessionStatus(id: string, status: AuthSessionStatus, userId?: string): Promise<void>;
+  transitionSessionStatus(
+    id: string,
+    fromStatus: AuthSessionStatus,
+    toStatus: AuthSessionStatus,
+    userId?: string
+  ): Promise<boolean>;
   createApiToken(input: CreateApiTokenInput): Promise<ApiToken>;
   findApiToken(token: string): Promise<ApiToken | null>;
   updateApiTokenLastUsed(id: string): Promise<void>;
   deleteExpiredSessions(): Promise<number>;
+}
+
+export interface CredentialRepository {
+  create(input: CreateCredentialInput, tx?: Prisma.TransactionClient): Promise<Credential>;
+  findById(id: string): Promise<Credential | null>;
+  findByDigest(digest: string): Promise<Credential | null>;
+  findBySubject(subjectId: string): Promise<Credential[]>;
+  revoke(id: string, tx?: Prisma.TransactionClient): Promise<void>;
+  updateLastUsed(id: string, tx?: Prisma.TransactionClient): Promise<void>;
 }
 
 export interface ProjectRepository {
@@ -907,6 +1551,26 @@ export class PrismaAuthRepository implements AuthRepository {
       where: { id },
       data: { status, userId: userId || null },
     });
+  }
+
+  async transitionSessionStatus(
+    id: string,
+    fromStatus: AuthSessionStatus,
+    toStatus: AuthSessionStatus,
+    userId?: string
+  ): Promise<boolean> {
+    const data: Prisma.AuthSessionUpdateInput = { status: toStatus };
+    if (userId !== undefined) {
+      data.userId = userId;
+    }
+    const result = await this.prisma.authSession.updateMany({
+      where: {
+        id,
+        status: fromStatus,
+      },
+      data,
+    });
+    return result.count === 1;
   }
 
   async createApiToken(input: CreateApiTokenInput): Promise<ApiToken> {
@@ -1014,11 +1678,13 @@ export class PrismaProjectRepository implements ProjectRepository {
         name: input.name,
         description: input.description ?? null,
         ownerId: input.ownerId,
+        policyVersion: randomUUID(),
       },
     });
     return {
       ...project,
       description: project.description ?? null,
+      policyVersion: project.policyVersion,
     };
   }
 
@@ -1028,6 +1694,7 @@ export class PrismaProjectRepository implements ProjectRepository {
     return {
       ...row,
       description: row.description ?? null,
+      policyVersion: row.policyVersion,
     };
   }
 
@@ -1039,6 +1706,7 @@ export class PrismaProjectRepository implements ProjectRepository {
     return rows.map((row) => ({
       ...row,
       description: row.description ?? null,
+      policyVersion: row.policyVersion,
     }));
   }
 
@@ -1119,6 +1787,11 @@ export class PrismaProjectRepository implements ProjectRepository {
           addedBy: input.addedBy,
         },
       });
+      // Rotate project policyVersion
+      await this.prisma.project.update({
+        where: { id: input.projectId },
+        data: { policyVersion: randomUUID() },
+      });
       return {
         ...member,
         role: member.role as ProjectMemberRole,
@@ -1136,6 +1809,11 @@ export class PrismaProjectRepository implements ProjectRepository {
           where: { projectId_userId: { projectId: input.projectId, userId: input.userId } },
           data: { role: input.role ?? 'READER' },
         });
+        // Rotate project policyVersion
+        await this.prisma.project.update({
+          where: { id: input.projectId },
+          data: { policyVersion: randomUUID() },
+        });
         return { ...member, role: member.role as ProjectMemberRole };
       }
       throw error;
@@ -1146,6 +1824,11 @@ export class PrismaProjectRepository implements ProjectRepository {
     try {
       await this.prisma.projectMember.delete({
         where: { projectId_userId: { projectId, userId } },
+      });
+      // Rotate project policyVersion
+      await this.prisma.project.update({
+        where: { id: projectId },
+        data: { policyVersion: randomUUID() },
       });
     } catch (e: unknown) {
       if (e && typeof e === 'object' && 'code' in e && (e as { code: string }).code === 'P2025')
@@ -1192,5 +1875,76 @@ export class PrismaProjectRepository implements ProjectRepository {
       ...m,
       role: m.role as ProjectMemberRole,
     }));
+  }
+}
+
+export class PrismaCredentialRepository implements CredentialRepository {
+  constructor(private readonly prisma: PrismaClient) {}
+
+  async create(input: CreateCredentialInput, tx?: Prisma.TransactionClient): Promise<Credential> {
+    const client = tx || this.prisma;
+    const row = await client.credential.create({
+      data: {
+        type: input.type,
+        subjectId: input.subjectId,
+        name: input.name,
+        digest: input.digest,
+        prefix: input.prefix,
+        scopes: input.scopes,
+        audience: input.audience,
+        expiresAt: input.expiresAt,
+        revokedAt: input.revokedAt,
+      },
+    });
+    return this.mapRow(row);
+  }
+
+  async findById(id: string): Promise<Credential | null> {
+    const row = await this.prisma.credential.findUnique({ where: { id } });
+    return row ? this.mapRow(row) : null;
+  }
+
+  async findByDigest(digest: string): Promise<Credential | null> {
+    const row = await this.prisma.credential.findUnique({ where: { digest } });
+    return row ? this.mapRow(row) : null;
+  }
+
+  async findBySubject(subjectId: string): Promise<Credential[]> {
+    const rows = await this.prisma.credential.findMany({ where: { subjectId } });
+    return rows.map((r) => this.mapRow(r));
+  }
+
+  async revoke(id: string, tx?: Prisma.TransactionClient): Promise<void> {
+    const client = tx || this.prisma;
+    await client.credential.update({
+      where: { id },
+      data: { revokedAt: new Date() },
+    });
+  }
+
+  async updateLastUsed(id: string, tx?: Prisma.TransactionClient): Promise<void> {
+    const client = tx || this.prisma;
+    await client.credential.update({
+      where: { id },
+      data: { lastUsedAt: new Date() },
+    });
+  }
+
+  private mapRow(row: any): Credential {
+    return {
+      id: row.id,
+      type: row.type as CredentialType,
+      subjectId: row.subjectId,
+      name: row.name,
+      digest: row.digest,
+      prefix: row.prefix,
+      scopes: row.scopes,
+      audience: row.audience,
+      createdAt: row.createdAt,
+      expiresAt: row.expiresAt,
+      revokedAt: row.revokedAt,
+      lastUsedAt: row.lastUsedAt,
+      version: row.version,
+    };
   }
 }

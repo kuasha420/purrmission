@@ -258,7 +258,11 @@ describe('AuthService', () => {
 
       const result = await authService.validateToken(plainToken);
 
-      assert.deepStrictEqual(result, apiToken);
+      assert.ok(result);
+      assert.strictEqual(result.id, apiToken.id);
+      assert.strictEqual(result.subjectId, apiToken.userId);
+      assert.strictEqual(result.userId, apiToken.userId);
+      assert.strictEqual(result.type, 'PAWTHY_TOKEN');
       assert.strictEqual(mockRepo.findApiToken.mock.calls[0].arguments[0], hashedToken);
     });
 

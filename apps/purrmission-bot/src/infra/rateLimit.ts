@@ -60,6 +60,21 @@ export class RateLimiter {
     return false;
   }
 
+  /**
+   * Probe if a key is rate limited without consuming a token.
+   * Returns true if limited, false if allowed.
+   */
+  isLimited(key: RateLimitKey): boolean {
+    const now = Date.now();
+    const bucket = this.buckets.get(key);
+    if (!bucket) {
+      return false;
+    }
+    const tempBucket = { ...bucket };
+    this.refill(tempBucket, now);
+    return tempBucket.tokens < 1;
+  }
+
   private refill(bucket: TokenBucket, now: number): void {
     const elapsed = now - bucket.lastRefill;
     if (elapsed > this.config.windowMs) {

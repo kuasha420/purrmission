@@ -42,12 +42,6 @@ export const twoFaCommand = new SlashCommandBuilder()
           .setDescription('Issuer name (optional, overrides URI/default)')
           .setRequired(false)
       )
-      .addBooleanOption((option) =>
-        option
-          .setName('shared')
-          .setDescription('Whether this code is shared with the team')
-          .setRequired(false)
-      )
       .addAttachmentOption((option) =>
         option
           .setName('qr')
@@ -56,15 +50,7 @@ export const twoFaCommand = new SlashCommandBuilder()
       )
   )
   .addSubcommand((subcommand) =>
-    subcommand
-      .setName('list')
-      .setDescription('List your TOTP 2FA accounts')
-      .addBooleanOption((option) =>
-        option
-          .setName('shared')
-          .setDescription('Include shared accounts visible to you')
-          .setRequired(false)
-      )
+    subcommand.setName('list').setDescription('List your TOTP 2FA accounts')
   )
   .addSubcommand((subcommand) =>
     subcommand

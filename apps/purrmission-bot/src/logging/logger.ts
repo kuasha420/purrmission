@@ -9,6 +9,8 @@
  * - Log rotation and file output
  */
 
+import { correlationStorage } from './correlationContext.js';
+
 type LogLevel = 'DEBUG' | 'INFO' | 'WARN' | 'ERROR';
 
 function formatTimestamp(): string {
@@ -17,7 +19,19 @@ function formatTimestamp(): string {
 
 function formatMessage(level: LogLevel, message: string, meta?: unknown): string {
   const timestamp = formatTimestamp();
-  const metaStr = meta !== undefined ? ` ${JSON.stringify(meta)}` : '';
+
+  // Inject correlationId if active in context
+  const store = correlationStorage.getStore();
+  let finalMeta = meta;
+  if (store?.correlationId) {
+    if (meta && typeof meta === 'object') {
+      finalMeta = { correlationId: store.correlationId, ...meta };
+    } else {
+      finalMeta = { correlationId: store.correlationId };
+    }
+  }
+
+  const metaStr = finalMeta !== undefined ? ` ${JSON.stringify(finalMeta)}` : '';
   return `[${timestamp}] [${level}] ${message}${metaStr}`;
 }
 

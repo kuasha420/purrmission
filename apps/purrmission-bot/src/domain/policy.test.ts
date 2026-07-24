@@ -7,8 +7,16 @@ import {
   isEffectiveGuardian,
   getGuardedResourcesForUser,
   isEffectiveOwner,
+  hasCapability,
 } from './policy.js';
-import type { Resource, Guardian, ApprovalRequest } from './models.js';
+import type {
+  Resource,
+  Guardian,
+  ApprovalRequest,
+  Principal,
+  CapabilityContext,
+  TOTPAccount,
+} from './models.js';
 import type { Repositories, ApprovalRequestRepository } from './repositories.js';
 
 describe('Access Policy', () => {
@@ -383,6 +391,286 @@ describe('Access Policy', () => {
       assert.equal(await isEffectiveOwner(mockRepos, 'env-res-1', explicitGuardianId), false); // explicit but role is GUARDIAN
       assert.equal(await isEffectiveOwner(mockRepos, 'env-res-1', writerMemberId), false);
       assert.equal(await isEffectiveOwner(mockRepos, 'env-res-1', readerMemberId), false);
+    });
+  });
+
+  describe('hasCapability Evaluator', () => {
+    const projectOwnerId = 'user-project-owner';
+    const writerMemberId = 'user-project-writer';
+    const readerMemberId = 'user-project-reader';
+    const explicitGuardianId = 'user-explicit-guardian';
+    const randomUserId = 'user-random';
+
+    const mockProject = {
+      id: 'project-1',
+      name: 'Project 1',
+      ownerId: projectOwnerId,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    };
+
+    const mockEnv = {
+      id: 'env-1',
+      name: 'Dev',
+      slug: 'dev',
+      projectId: 'project-1',
+      resourceId: 'env-res-1',
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    };
+
+    const mockExplicitGuardian: Guardian = {
+      id: 'g-explicit',
+      resourceId: 'env-res-1',
+      discordUserId: explicitGuardianId,
+      role: 'GUARDIAN',
+      createdAt: new Date(),
+    };
+
+    const mockTotpAccount: TOTPAccount = {
+      id: 'totp-1',
+      ownerDiscordUserId: projectOwnerId,
+      accountName: 'Test Account',
+      secret: 'SECRET',
+      shared: false,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    };
+
+    const mockActiveRequest: ApprovalRequest = {
+      id: 'req-active',
+      resourceId: 'env-res-1',
+      status: 'APPROVED',
+      context: { requesterId: randomUserId },
+      createdAt: new Date(),
+      expiresAt: new Date(Date.now() + 10000),
+    };
+
+    const mockReposForEval = {
+      guardians: {
+        findByResourceAndUser: async (resId: string, userId: string) => {
+          if (resId === 'env-res-1' && userId === explicitGuardianId) return mockExplicitGuardian;
+          return null;
+        },
+      },
+      projects: {
+        findEnvironmentByResourceId: async (resId: string) => {
+          if (resId === 'env-res-1') return mockEnv;
+          return null;
+        },
+        findEnvironmentById: async (envId: string) => {
+          if (envId === 'env-1') return mockEnv;
+          return null;
+        },
+        findById: async (projId: string) => {
+          if (projId === 'project-1') return mockProject;
+          return null;
+        },
+        getMemberRole: async (projId: string, userId: string) => {
+          if (projId === 'project-1') {
+            if (userId === writerMemberId) return 'WRITER';
+            if (userId === readerMemberId) return 'READER';
+          }
+          return null;
+        },
+      },
+      totp: {
+        findById: async (id: string) => {
+          if (id === 'totp-1') return mockTotpAccount;
+          return null;
+        },
+      },
+      approvalRequests: {
+        findById: async (id: string) => {
+          if (id === 'req-active') return mockActiveRequest;
+          return null;
+        },
+        findActiveByRequester: async (resId: string, reqId: string) => {
+          if (resId === 'env-res-1' && reqId === randomUserId) return mockActiveRequest;
+          return null;
+        },
+      },
+    } as unknown as Repositories;
+
+    it('should allow project creation for human principals and deny for API keys', async () => {
+      const human: Principal = { type: 'DISCORD_USER', id: randomUserId, authKind: 'DISCORD' };
+      const apiKey: Principal = { type: 'RESOURCE_API_KEY', id: 'key', authKind: 'API_KEY' };
+
+      const resHuman = await hasCapability(mockReposForEval, human, 'project.create', {});
+      assert.equal(resHuman.allowed, true);
+
+      const resKey = await hasCapability(mockReposForEval, apiKey, 'project.create', {});
+      assert.equal(resKey.allowed, false);
+      assert.equal(resKey.reasonCode, 'INVALID_AUTH');
+    });
+
+    it('should correctly authorize Project Owner', async () => {
+      const principal: Principal = {
+        type: 'DISCORD_USER',
+        id: projectOwnerId,
+        authKind: 'DISCORD',
+      };
+      const ctx: CapabilityContext = { projectId: 'project-1', resourceId: 'env-res-1' };
+
+      // Project Owner has full project capabilities
+      const resView = await hasCapability(mockReposForEval, principal, 'project.view', ctx);
+      assert.equal(resView.allowed, true);
+      assert.equal(resView.reasonCode, 'OWNER');
+
+      const resDelete = await hasCapability(mockReposForEval, principal, 'project.delete', ctx);
+      assert.equal(resDelete.allowed, true);
+
+      // Project Owner has full resource/secret capabilities on linked resources
+      const resSecretWrite = await hasCapability(mockReposForEval, principal, 'secret.write', ctx);
+      assert.equal(resSecretWrite.allowed, true);
+
+      const resSecretRead = await hasCapability(
+        mockReposForEval,
+        principal,
+        'secret.value.read',
+        ctx
+      );
+      assert.equal(resSecretRead.allowed, true);
+    });
+
+    it('should correctly authorize Project Writer', async () => {
+      const principal: Principal = {
+        type: 'DISCORD_USER',
+        id: writerMemberId,
+        authKind: 'DISCORD',
+      };
+      const ctx: CapabilityContext = { projectId: 'project-1', resourceId: 'env-res-1' };
+
+      // Project Writer can view project and environments
+      const resView = await hasCapability(mockReposForEval, principal, 'project.view', ctx);
+      assert.equal(resView.allowed, true);
+      assert.equal(resView.reasonCode, 'WRITER');
+
+      // Project Writer can write secrets
+      const resSecretWrite = await hasCapability(mockReposForEval, principal, 'secret.write', ctx);
+      assert.equal(resSecretWrite.allowed, true);
+
+      // Project Writer CANNOT delete project
+      const resDelete = await hasCapability(mockReposForEval, principal, 'project.delete', ctx);
+      assert.equal(resDelete.allowed, false);
+      assert.equal(resDelete.reasonCode, 'NO_ROLE');
+
+      // Project Writer CANNOT decide approvals
+      const resDecide = await hasCapability(mockReposForEval, principal, 'request.decide', ctx);
+      assert.equal(resDecide.allowed, false);
+    });
+
+    it('should correctly authorize Project Reader', async () => {
+      const principal: Principal = {
+        type: 'DISCORD_USER',
+        id: readerMemberId,
+        authKind: 'DISCORD',
+      };
+      const ctx: CapabilityContext = { projectId: 'project-1', resourceId: 'env-res-1' };
+
+      // Project Reader can view project
+      const resView = await hasCapability(mockReposForEval, principal, 'project.view', ctx);
+      assert.equal(resView.allowed, true);
+      assert.equal(resView.reasonCode, 'READER');
+
+      // Project Reader can read secrets
+      const resSecretRead = await hasCapability(
+        mockReposForEval,
+        principal,
+        'secret.value.read',
+        ctx
+      );
+      assert.equal(resSecretRead.allowed, true);
+
+      // Project Reader CANNOT write secrets
+      const resSecretWrite = await hasCapability(mockReposForEval, principal, 'secret.write', ctx);
+      assert.equal(resSecretWrite.allowed, false);
+    });
+
+    it('should correctly authorize explicit Guardian and enforce self-approval prevention', async () => {
+      const principal: Principal = {
+        type: 'DISCORD_USER',
+        id: explicitGuardianId,
+        authKind: 'DISCORD',
+      };
+      const ctx: CapabilityContext = { resourceId: 'env-res-1', requestId: 'req-active' };
+
+      // Guardian can view approval queue
+      const resQueue = await hasCapability(mockReposForEval, principal, 'request.queue.view', ctx);
+      assert.equal(resQueue.allowed, true);
+      assert.equal(resQueue.reasonCode, 'GUARDIAN');
+
+      // Guardian can decide requests
+      const resDecide = await hasCapability(mockReposForEval, principal, 'request.decide', ctx);
+      assert.equal(resDecide.allowed, true);
+
+      // Guardian CANNOT decide request if they are the requester (self-approval)
+      const selfPrincipal: Principal = {
+        type: 'DISCORD_USER',
+        id: randomUserId,
+        authKind: 'DISCORD',
+      };
+      const selfApprovalRepo = {
+        ...mockReposForEval,
+        guardians: {
+          findByResourceAndUser: async () => mockExplicitGuardian,
+        },
+      } as unknown as Repositories;
+
+      const resSelfDecide = await hasCapability(
+        selfApprovalRepo,
+        selfPrincipal,
+        'request.decide',
+        ctx
+      );
+      assert.equal(resSelfDecide.allowed, false);
+      assert.equal(resSelfDecide.reasonCode, 'SELF_APPROVAL_FORBIDDEN');
+    });
+
+    it('should authorize personal TOTP Owner and deny others for recovery keys', async () => {
+      const ownerPrincipal: Principal = {
+        type: 'DISCORD_USER',
+        id: projectOwnerId,
+        authKind: 'DISCORD',
+      };
+      const otherPrincipal: Principal = {
+        type: 'DISCORD_USER',
+        id: randomUserId,
+        authKind: 'DISCORD',
+      };
+      const ctx: CapabilityContext = { totpAccountId: 'totp-1' };
+
+      // Owner of the TOTP account can read recovery key
+      const resOwner = await hasCapability(
+        mockReposForEval,
+        ownerPrincipal,
+        'totp.recovery.read',
+        ctx
+      );
+      assert.equal(resOwner.allowed, true);
+
+      // Another user cannot read recovery key
+      const resOther = await hasCapability(
+        mockReposForEval,
+        otherPrincipal,
+        'totp.recovery.read',
+        ctx
+      );
+      assert.equal(resOther.allowed, false);
+      assert.equal(resOther.reasonCode, 'RECOVERY_KEY_OWNER_REQUIRED');
+    });
+
+    it('should authorize grant consumption if approved grant exists', async () => {
+      const requesterPrincipal: Principal = {
+        type: 'DISCORD_USER',
+        id: randomUserId,
+        authKind: 'DISCORD',
+      };
+      const ctx: CapabilityContext = { resourceId: 'env-res-1' };
+
+      const res = await hasCapability(mockReposForEval, requesterPrincipal, 'grant.consume', ctx);
+      assert.equal(res.allowed, true);
+      assert.equal(res.reasonCode, 'GRANT');
     });
   });
 });

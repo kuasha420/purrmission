@@ -20,6 +20,18 @@ export type ApprovalMode = 'ONE_OF_N';
 /**
  * A protected resource that requires guardian approval for access.
  */
+export interface TOTPLinkEnvelope {
+  consentId: string;
+  delegationPolicy: Record<string, unknown>;
+  accountOwnerDiscordUserId: string;
+  accountVersion: string;
+  linkVersion: string;
+  createdAt: Date;
+}
+
+/**
+ * A protected resource that requires guardian approval for access.
+ */
 export interface Resource {
   /** Unique identifier for the resource */
   id: string;
@@ -34,10 +46,16 @@ export interface Resource {
    * API key for authenticating external requests.
    * TODO: In production, this should be hashed. For MVP, stored as plaintext.
    */
-  apiKey: string;
+  apiKey?: string | null;
 
   /** Optional linked TOTP account ID (one-to-one) */
   totpAccountId?: string | null;
+
+  /** Versioned delegation envelope for linked TOTP account */
+  totpDelegationEnvelope?: TOTPLinkEnvelope | null;
+
+  /** Stable version identifier of the resource state */
+  version: string;
 
   /** Timestamp when the resource was created */
   createdAt: Date;
@@ -79,38 +97,43 @@ export type ApprovalStatus = 'PENDING' | 'APPROVED' | 'DENIED' | 'EXPIRED';
  * An approval request for access to a protected resource.
  */
 export interface ApprovalRequest {
-  /** Unique identifier for the request */
   id: string;
-
-  /** The resource being requested */
   resourceId: string;
-
-  /** Current status of the request */
   status: ApprovalStatus;
-
-  /** Additional context provided with the request (e.g., reason, requester info) */
-  context: Record<string, unknown>;
-
-  /** Optional URL to call when the request is resolved */
+  context?: Record<string, unknown> | null; // Legacy metadata/telemetry compatibility
+  requesterId: string;
+  requesterType: string;
+  authKind: string;
+  action: string;
+  targetKey: string | null;
+  targetVersion: string;
+  policyVersion: string;
+  constraints: Record<string, unknown> | null;
   callbackUrl?: string;
-
-  /** ID of the Discord message showing the approval buttons */
   discordMessageId?: string;
-
-  /** ID of the Discord channel where the approval message was sent */
   discordChannelId?: string;
-
-  /** Timestamp when the request was created */
   createdAt: Date;
-
-  /** Timestamp when the request expires (null = no expiration) */
-  expiresAt: Date | null;
-
-  /** Discord user ID of the guardian who resolved the request */
+  expiresAt: Date;
   resolvedBy?: string;
-
-  /** Timestamp when the request was resolved */
   resolvedAt?: Date;
+}
+
+export interface ApprovalGrant {
+  id: string;
+  requestId: string;
+  resourceId: string;
+  requesterId: string;
+  requesterType: string;
+  authKind: string;
+  action: string;
+  targetKey: string | null;
+  targetVersion: string;
+  policyVersion: string;
+  constraints: Record<string, unknown> | null;
+  createdAt: Date;
+  expiresAt: Date;
+  consumedAt: Date | null;
+  revokedAt: Date | null;
 }
 
 /**
@@ -142,7 +165,7 @@ export interface DecisionResult {
 /**
  * Input for creating a new resource.
  */
-export type CreateResourceInput = Omit<Resource, 'createdAt'>;
+export type CreateResourceInput = Omit<Resource, 'createdAt' | 'version'> & { version?: string };
 
 /**
  * Input for adding a new guardian.
@@ -152,7 +175,15 @@ export type AddGuardianInput = Omit<Guardian, 'createdAt'>;
 /**
  * Input for creating a new approval request.
  */
-export type CreateApprovalRequestInput = Omit<ApprovalRequest, 'createdAt'>;
+export type CreateApprovalRequestInput = Omit<
+  ApprovalRequest,
+  'createdAt' | 'resolvedBy' | 'resolvedAt'
+>;
+
+export type CreateApprovalGrantInput = Omit<
+  ApprovalGrant,
+  'id' | 'createdAt' | 'consumedAt' | 'revokedAt'
+>;
 
 /**
  * Type of access being requested via approval flow.
@@ -204,17 +235,55 @@ export interface TOTPAccount {
   /** Optional issuer from otpauth URI */
   issuer?: string;
 
-  /** True if this account is intended to be shared */
-  shared: boolean;
-
   /** Optional backup key / recovery code */
   backupKey?: string;
+
+  /** Stable version identifier of the TOTP state */
+  version: string;
 
   /** Timestamp when the account was created */
   createdAt: Date;
 
   /** Timestamp when the account was last updated */
   updatedAt: Date;
+}
+
+/**
+ * Metadata projection of a TOTP account (excludes sensitive secrets).
+ */
+export interface TOTPAccountMetadata {
+  id: string;
+  ownerDiscordUserId: string;
+  accountName: string;
+  issuer?: string | null;
+  version: string;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+export interface TOTPLinkConsent {
+  id: string;
+  accountId: string;
+  resourceId: string;
+  ownerDiscordUserId: string;
+  delegationPolicy: Record<string, unknown>;
+  expiresAt: Date;
+  usedAt: Date | null;
+  createdAt: Date;
+}
+
+export interface TOTPDelegationConsent {
+  id: string;
+  resourceId: string;
+  totpAccountId: string;
+  operation: string;
+  requesterId: string;
+  authFamily: string;
+  accountVersion: string;
+  linkVersion: string;
+  expiresAt: Date;
+  usedAt: Date | null;
+  createdAt: Date;
 }
 
 /**
@@ -242,6 +311,17 @@ export interface ResourceField {
 }
 
 /**
+ * Metadata projection of a resource field (excludes sensitive value).
+ */
+export interface ResourceFieldMetadata {
+  id: string;
+  resourceId: string;
+  name: string;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+/**
  * Input for creating a new resource field.
  */
 export type CreateResourceFieldInput = Omit<ResourceField, 'id' | 'createdAt' | 'updatedAt'>;
@@ -251,16 +331,43 @@ export type CreateResourceFieldInput = Omit<ResourceField, 'id' | 'createdAt' | 
  */
 export interface AuditLog {
   id: string;
-  action: string;
-  resourceId?: string | null;
+  schemaVersion: number;
+  eventType: string;
+  outcomeCode: string;
+  actorType: string;
   actorId?: string | null;
-  resolverId?: string | null;
-  status: string;
-  context?: string | null; // JSON string
+  authKind?: string | null;
+  resourceId?: string | null;
+  projectId?: string | null;
+  environmentId?: string | null;
+  requestId?: string | null;
+  grantId?: string | null;
+  correlationId?: string | null;
+  causationId?: string | null;
+  payload?: Record<string, unknown> | null; // Redacted JSON context
   createdAt: Date;
 }
 
 export type CreateAuditLogInput = Omit<AuditLog, 'id' | 'createdAt'>;
+
+/**
+ * OutboxEvent for transactional outbox side-effects.
+ */
+export interface OutboxEvent {
+  id: string;
+  eventType: string;
+  payload: Record<string, unknown>;
+  status: 'PENDING' | 'PROCESSED' | 'FAILED';
+  attempts: number;
+  lastError?: string | null;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+export type CreateOutboxEventInput = Omit<
+  OutboxEvent,
+  'id' | 'attempts' | 'status' | 'createdAt' | 'updatedAt'
+>;
 
 /**
  * Represents a device login session (OAuth Device Flow).
@@ -303,6 +410,7 @@ export interface Project {
   name: string;
   description: string | null;
   ownerId: string;
+  policyVersion: string;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -358,4 +466,136 @@ export interface CreateProjectMemberInput {
   userId: string;
   role?: ProjectMemberRole;
   addedBy: string;
+}
+
+// ----------------------------------------------------
+// RBAC & Capabilities (Prerequisite 1/8)
+// ----------------------------------------------------
+
+export type PrincipalType = 'DISCORD_USER' | 'PAWTHY_TOKEN' | 'RESOURCE_API_KEY' | 'SERVICE';
+export type AuthKind = 'DISCORD' | 'PAWTHY' | 'API_KEY' | 'SERVICE';
+
+export interface Principal {
+  type: PrincipalType;
+  id: string; // Stable Credential / Principal ID
+  subjectId: string; // Resource ID, User ID, or Service Name
+  authKind: AuthKind;
+  actorDiscordId?: string; // Optional human Discord User ID association
+  correlationId?: string;
+  scopes?: string[];
+  audience?: string;
+  expiresAt?: Date | null;
+  createdAt?: Date;
+  lastUsedAt?: Date | null;
+}
+
+export type CredentialType = 'RESOURCE_API_KEY' | 'PAWTHY_TOKEN' | 'SERVICE_CREDENTIAL';
+
+export interface Credential {
+  id: string;
+  type: CredentialType;
+  subjectId: string;
+  name: string;
+  digest: string;
+  prefix: string;
+  scopes: string; // Comma-separated or JSON list
+  audience: string;
+  createdAt: Date;
+  expiresAt: Date | null;
+  revokedAt: Date | null;
+  lastUsedAt: Date | null;
+  version: string;
+}
+
+export type CreateCredentialInput = Omit<Credential, 'id' | 'createdAt' | 'lastUsedAt' | 'version'>;
+
+export type Capability =
+  // Project capabilities
+  | 'project.create'
+  | 'project.view'
+  | 'project.update'
+  | 'project.delete'
+  | 'project.transfer'
+  | 'project.members.view'
+  | 'project.members.manage'
+  // Environment capabilities
+  | 'environment.view'
+  | 'environment.create'
+  | 'environment.update'
+  | 'environment.delete'
+  // Resource capabilities
+  | 'resource.create'
+  | 'resource.view'
+  | 'resource.policy.manage'
+  | 'resource.delete'
+  | 'resource.api-key.list'
+  | 'resource.api-key.mint'
+  | 'resource.api-key.rotate'
+  | 'resource.api-key.revoke'
+  // Secret capabilities
+  | 'secret.metadata.read'
+  | 'secret.value.read'
+  | 'secret.write'
+  | 'secret.delete'
+  // TOTP capabilities
+  | 'totp.metadata.read'
+  | 'totp.code.read'
+  | 'totp.recovery.read'
+  | 'totp.link.manage'
+  | 'totp.account.manage'
+  // Guardian capabilities
+  | 'guardian.view'
+  | 'guardian.context.read'
+  | 'guardian.manage'
+  // Request capabilities
+  | 'request.create'
+  | 'request.view-own'
+  | 'request.queue.view'
+  | 'request.decide'
+  | 'request.cancel-own'
+  // Grant capabilities
+  | 'grant.consume'
+  // Audit capabilities
+  | 'audit.full.read'
+  | 'audit.operational.read'
+  | 'audit.queue.read'
+  | 'audit.own.read'
+  | 'audit.export';
+
+export interface CapabilityContext {
+  projectId?: string;
+  environmentId?: string;
+  resourceId?: string;
+  totpAccountId?: string;
+  requestId?: string;
+  fieldName?: string; // specific secret/field
+  // For grant consumption validation
+  grantId?: string;
+  targetVersion?: string;
+  currentTimestamp?: Date;
+}
+
+export type DecisionCode = 'ALLOW' | 'DENY' | 'APPROVAL_REQUIRED';
+
+export type ReasonCode =
+  | 'OWNER'
+  | 'WRITER'
+  | 'READER'
+  | 'GUARDIAN'
+  | 'GRANT'
+  | 'SELF_APPROVAL_FORBIDDEN'
+  | 'RECOVERY_KEY_OWNER_REQUIRED'
+  | 'NO_ROLE'
+  | 'INVALID_AUTH'
+  | 'MISSING_CONTEXT'
+  | 'GRANT_EXPIRED'
+  | 'GRANT_SCOPE_MISMATCH'
+  | 'SERVICE'
+  | 'INSUFFICIENT_SCOPES';
+
+export interface EvaluationResult {
+  allowed: boolean;
+  decisionCode: DecisionCode;
+  reasonCode: ReasonCode;
+  reason: string;
 }
