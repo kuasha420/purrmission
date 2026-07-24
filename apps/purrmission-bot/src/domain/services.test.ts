@@ -201,16 +201,34 @@ describe('ResourceService', () => {
   describe('linkTOTPAccount', () => {
     it('should fail and roll back if audit logging throws an error', async () => {
       const mockResource = { id: resourceId, totpAccountId: null };
-      const mockTotpAccount = { id: 'totp-1' };
+      const mockTotpAccount = { id: 'totp-1', version: 1 };
+      const mockConsent = {
+        id: 'consent-1',
+        accountId: 'totp-1',
+        resourceId,
+        ownerDiscordUserId: ownerId,
+        delegationPolicy: {},
+        expiresAt: new Date(Date.now() + 60000),
+        usedAt: null,
+      };
+
       const mockTotpRepo = {
         findById: mock.fn(async () => mockTotpAccount),
+        findLinkConsentById: mock.fn(async () => mockConsent),
+        useLinkConsent: mock.fn(async () => {}),
       };
+
       mockResourceRepo.findById = mock.fn(
         async () => mockResource
       ) as unknown as ResourceRepository['findById'];
       mockResourceRepo.update = mock.fn(
         async () => mockResource
       ) as unknown as ResourceRepository['update'];
+
+      mockGuardianRepo.findByResourceAndUser = mock.fn(async (_rid, uid) => {
+        if (uid === ownerId) return { id: 'g1', role: 'OWNER', discordUserId: ownerId } as any;
+        return null;
+      }) as any;
 
       const failingAuditService = {
         log: mock.fn(async () => {
@@ -229,7 +247,7 @@ describe('ResourceService', () => {
 
       // Should throw due to audit service failure
       await assert.rejects(async () => {
-        await svc.linkTOTPAccount(resourceId, 'totp-1', ownerId);
+        await svc.linkTOTPAccount(resourceId, 'totp-1', ownerId, 'consent-1');
       }, /Audit service unavailable/);
     });
   });

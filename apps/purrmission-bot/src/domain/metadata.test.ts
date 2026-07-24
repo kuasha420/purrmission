@@ -25,7 +25,6 @@ describe('Metadata Projections, Visibility Discovery and Version Rotations', () 
         issuer: 'BankCo',
         secret: 'SUPER_SECRET_DECRYPTED_VAL',
         backupKey: 'BACKUP_KEY_DECRYPTED_VAL',
-        shared: true,
       });
 
       // Verify direct retrieval from findById has secret
@@ -40,11 +39,6 @@ describe('Metadata Projections, Visibility Discovery and Version Rotations', () 
       assert.strictEqual(meta.accountName, 'my-bank');
       assert.strictEqual((meta as any).secret, undefined);
       assert.strictEqual((meta as any).backupKey, undefined);
-
-      // Verify shared metadata query returns metadata without secret or backupKey
-      const sharedMeta = await repos.totp.findSharedMetadataVisibleTo('other-user');
-      assert.strictEqual(sharedMeta.length, 1);
-      assert.strictEqual((sharedMeta[0] as any).secret, undefined);
     });
 
     it('should query ResourceField metadata without returning value', async () => {
@@ -213,7 +207,6 @@ describe('Metadata Projections, Visibility Discovery and Version Rotations', () 
         accountName: 'google-auth',
         issuer: 'Google',
         secret: 'SECRET',
-        shared: true,
       });
 
       const res = await repos.resources.create({

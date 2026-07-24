@@ -131,22 +131,28 @@ describe('Resource API', () => {
       ownerDiscordUserId: userId,
       accountName: 'Google',
       secret: 'JBSWY3DPEHPK3PXP', // Valid base32
-      shared: false,
     });
+
+    const consent = await services.resource.createTOTPLinkConsent(
+      account.id,
+      resourceId,
+      userId,
+      {}
+    );
 
     // Link
     const linkRes = await server.inject({
       method: 'POST',
       url: `/api/resources/${resourceId}/2fa/link`,
       headers: { Authorization: `Bearer ${validToken}` },
-      payload: { totpAccountId: account.id },
+      payload: { totpAccountId: account.id, consentId: consent.id },
     });
     assert.strictEqual(linkRes.statusCode, 200);
 
     // Get Code
     const codeRes = await server.inject({
-      method: 'GET',
-      url: `/api/resources/${resourceId}/2fa`,
+      method: 'POST',
+      url: `/api/resources/${resourceId}/2fa/code`,
       headers: { Authorization: `Bearer ${validToken}` },
     });
     assert.strictEqual(codeRes.statusCode, 200);
@@ -161,9 +167,14 @@ describe('Resource API', () => {
       ownerDiscordUserId: userId,
       accountName: 'Google',
       secret: 'JBSWY3DPEHPK3PXP',
-      shared: false,
     });
-    await services.resource.linkTOTPAccount(resourceId, account.id, userId);
+    const consent = await services.resource.createTOTPLinkConsent(
+      account.id,
+      resourceId,
+      userId,
+      {}
+    );
+    await services.resource.linkTOTPAccount(resourceId, account.id, userId, consent.id);
 
     // Unlink
     const unlinkRes = await server.inject({

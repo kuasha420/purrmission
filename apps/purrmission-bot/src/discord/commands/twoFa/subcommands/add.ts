@@ -12,7 +12,6 @@ export async function handleAdd2FA(
   const uri = interaction.options.getString('uri', false) ?? undefined;
   const secret = interaction.options.getString('secret', false) ?? undefined;
   const issuer = interaction.options.getString('issuer', false) ?? undefined;
-  const shared = interaction.options.getBoolean('shared', false) ?? false;
   // const qrAttachment = interaction.options.getAttachment('qr', false) ?? undefined;
 
   const ownerDiscordUserId = interaction.user.id;
@@ -30,7 +29,7 @@ export async function handleAdd2FA(
         return;
       }
 
-      const accountData = createTOTPAccountFromUri(ownerDiscordUserId, uri, shared);
+      const accountData = createTOTPAccountFromUri(ownerDiscordUserId, uri);
       // Override account name if provided manually
       accountData.accountName = account;
 
@@ -49,13 +48,7 @@ export async function handleAdd2FA(
         return;
       }
 
-      const accountData = createTOTPAccountFromSecret(
-        ownerDiscordUserId,
-        account,
-        secret,
-        issuer,
-        shared
-      );
+      const accountData = createTOTPAccountFromSecret(ownerDiscordUserId, account, secret, issuer);
       const created = await totpRepository.create(accountData);
       createdAccountSummary = `Account **${created.accountName}** added via Secret mode.`;
     } else if (mode === 'qr') {
@@ -78,7 +71,7 @@ export async function handleAdd2FA(
         '✅ 2FA account added successfully.',
         '',
         createdAccountSummary,
-        shared ? '🔓 This account is marked as **shared**.' : '🔒 This account is **personal**.',
+        '🔒 This account is **personal**.',
         '',
         '_Note: You can now retrieve codes using `/2fa get`._',
       ].join('\n'),

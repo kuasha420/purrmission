@@ -23,7 +23,6 @@ import {
 import { ResourceNotFoundError } from '../domain/errors.js';
 import type { ApprovalRequest, ResourceField } from '../domain/models.js';
 import type { Services } from '../domain/services.js';
-import { generateTOTPCode } from '../domain/totp.js';
 import { logger } from '../logging/logger.js';
 import crypto from 'node:crypto';
 import { correlationStorage } from '../logging/correlationContext.js';
@@ -334,6 +333,7 @@ export function createHttpServer(deps: HttpServerDeps): FastifyInstance {
 
   const LinkTotpSchema = z.object({
     totpAccountId: z.string().uuid(),
+    consentId: z.string().uuid(),
   });
 
   // Authentication Hook
@@ -726,23 +726,20 @@ export function createHttpServer(deps: HttpServerDeps): FastifyInstance {
   // Resource 2FA Endpoints
   // ---------------------------------------------------------------------------
 
-  server.get<{ Params: z.infer<typeof ResourceParamsSchema> }>(
-    '/api/resources/:id/2fa',
+  server.post<{ Params: z.infer<typeof ResourceParamsSchema> }>(
+    '/api/resources/:id/2fa/code',
     {
       preHandler: [authenticate, verifyIsGuardian],
       schema: {
         params: ResourceParamsSchema,
       },
     },
-    async (req) => {
+    async (req, rep) => {
       const { id } = req.params;
+      const userId = req.user.id;
 
-      const account = await services.resource.getLinkedTOTPAccount(id);
-      if (!account) {
-        throw new ResourceNotFoundError('No 2FA account linked to this resource');
-      }
-
-      const code = generateTOTPCode(account);
+      const code = await services.resource.revealTOTPCode(id, userId);
+      rep.header('Cache-Control', 'no-store');
       return { code };
     }
   );
@@ -761,10 +758,10 @@ export function createHttpServer(deps: HttpServerDeps): FastifyInstance {
     },
     async (req, rep) => {
       const { id } = req.params;
-      const { totpAccountId } = req.body;
+      const { totpAccountId, consentId } = req.body;
       const userId = req.user.id; // Actor ID
 
-      await services.resource.linkTOTPAccount(id, totpAccountId, userId);
+      await services.resource.linkTOTPAccount(id, totpAccountId, userId, consentId);
       return rep.status(200).send({ success: true });
     }
   );
@@ -779,9 +776,28 @@ export function createHttpServer(deps: HttpServerDeps): FastifyInstance {
     },
     async (req, rep) => {
       const { id } = req.params;
+      const userId = req.user.id;
 
-      await services.resource.unlinkTOTPAccount(id);
+      await services.resource.unlinkTOTPAccount(id, userId);
       return rep.status(204).send();
+    }
+  );
+
+  server.post<{ Params: z.infer<typeof ResourceParamsSchema> }>(
+    '/api/totp/:id/recovery',
+    {
+      preHandler: [authenticate],
+      schema: {
+        params: ResourceParamsSchema,
+      },
+    },
+    async (req, rep) => {
+      const { id } = req.params; // TOTP Account ID
+      const userId = req.user.id;
+
+      const recoveryKey = await services.resource.revealTOTPRecoveryKey(id, userId);
+      rep.header('Cache-Control', 'no-store');
+      return { recoveryKey };
     }
   );
 

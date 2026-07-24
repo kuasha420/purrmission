@@ -17,6 +17,9 @@ import type {
   TOTPAccount,
   ResourceField,
   ResourceFieldMetadata,
+  TOTPLinkConsent,
+  TOTPDelegationConsent,
+  TOTPLinkEnvelope,
 } from './models.js';
 import type { Repositories } from './repositories.js';
 import { logger } from '../logging/logger.js';
@@ -24,8 +27,15 @@ import { AuditService } from './audit.js';
 import { AuthService } from './auth.js';
 import { ProjectService } from './project.js';
 import { ResourceNotFoundError, DuplicateError } from './errors.js';
-import { getEffectiveGuardians, isEffectiveGuardian, isEffectiveOwner } from './policy.js';
+import {
+  getEffectiveGuardians,
+  isEffectiveGuardian,
+  isEffectiveOwner,
+  hasCapability,
+  Principal,
+} from './policy.js';
 import { getPrismaClient } from '../infra/prismaClient.js';
+import { generateTOTPCode } from './totp.js';
 
 /**
  * Service dependencies.
@@ -585,11 +595,21 @@ export class ResourceService {
   }
 
   /**
-   * Link a TOTP account to a resource.
-   * Note: Uses repository methods that may need Prisma for persistence.
+   * Link a TOTP account to a resource using a one-time consent token.
    */
-  async linkTOTPAccount(resourceId: string, totpAccountId: string, actorId: string): Promise<void> {
+  async linkTOTPAccount(
+    resourceId: string,
+    totpAccountId: string,
+    actorId: string,
+    consentId: string
+  ): Promise<void> {
     const { repositories } = this.deps;
+
+    // Verify Resource Authority (actor must be resource owner)
+    const hasOwnerAccess = await isEffectiveOwner(repositories, resourceId, actorId);
+    if (!hasOwnerAccess) {
+      throw new Error('Only the resource owner can link a TOTP account.');
+    }
 
     // Verify resource exists
     const resource = await repositories.resources.findById(resourceId);
@@ -603,18 +623,45 @@ export class ResourceService {
       throw new Error(`TOTP account not found: ${totpAccountId}`);
     }
 
+    // Retrieve and validate consent
+    const consent = await repositories.totp.findLinkConsentById(consentId);
+    if (!consent) {
+      throw new Error(`Link consent not found: ${consentId}`);
+    }
+    if (consent.accountId !== totpAccountId || consent.resourceId !== resourceId) {
+      throw new Error('Link consent parameters mismatch.');
+    }
+    if (consent.expiresAt < new Date()) {
+      throw new Error('Link consent has expired.');
+    }
+    if (consent.usedAt) {
+      throw new Error('Link consent has already been used.');
+    }
+
     // Check if TOTP account is already linked to another resource
-    // Since totpAccountId is unique in schema, attempting to link will fail with DB error
-    // But we provide a better error message by checking first if resource already has one
     if (resource.totpAccountId && resource.totpAccountId !== totpAccountId) {
       throw new Error('Resource already has a linked 2FA account. Unlink it first.');
     }
+
+    const delegationEnvelope: TOTPLinkEnvelope = {
+      consentId: consent.id,
+      delegationPolicy: consent.delegationPolicy,
+      accountOwnerDiscordUserId: consent.ownerDiscordUserId,
+      accountVersion: totpAccount.version,
+      linkVersion: crypto.randomUUID(),
+      createdAt: new Date(),
+    };
 
     // Update the resource with the linked TOTP account ID
     const prisma = getPrismaClient();
     try {
       await prisma.$transaction(async (tx) => {
-        await repositories.resources.update(resourceId, { totpAccountId }, tx);
+        await repositories.totp.useLinkConsent(consentId, tx);
+        await repositories.resources.update(
+          resourceId,
+          { totpAccountId, totpDelegationEnvelope: delegationEnvelope },
+          tx
+        );
 
         if (this.deps.audit) {
           await this.deps.audit.log(
@@ -625,7 +672,7 @@ export class ResourceService {
               actorId,
               authKind: 'DISCORD',
               resourceId,
-              payload: { totpAccountId },
+              payload: { totpAccountId, consentId },
             },
             tx
           );
@@ -649,7 +696,7 @@ export class ResourceService {
   /**
    * Unlink TOTP account from a resource.
    */
-  async unlinkTOTPAccount(resourceId: string, actorId?: string): Promise<void> {
+  async unlinkTOTPAccount(resourceId: string, actorId: string): Promise<void> {
     const { repositories } = this.deps;
 
     // Verify resource exists
@@ -658,20 +705,44 @@ export class ResourceService {
       throw new Error(`Resource not found: ${resourceId}`);
     }
 
+    if (!resource.totpAccountId) {
+      throw new Error('Resource is not linked to any TOTP account.');
+    }
+
+    // Verify Actor is Resource Owner or TOTP Account Custody Owner
+    const isResourceOwner = await isEffectiveOwner(repositories, resourceId, actorId);
+    let isTotpOwner = false;
+    if (resource.totpAccountId) {
+      const totpAcc = await repositories.totp.findById(resource.totpAccountId);
+      if (totpAcc && totpAcc.ownerDiscordUserId === actorId) {
+        isTotpOwner = true;
+      }
+    }
+
+    if (!isResourceOwner && !isTotpOwner) {
+      throw new Error(
+        'Access denied. Only the resource owner or the TOTP account owner can unlink.'
+      );
+    }
+
     // Update the resource to remove the linked TOTP account
     const prisma = getPrismaClient();
     try {
       await prisma.$transaction(async (tx) => {
-        await repositories.resources.update(resourceId, { totpAccountId: null }, tx);
+        await repositories.resources.update(
+          resourceId,
+          { totpAccountId: null, totpDelegationEnvelope: null },
+          tx
+        );
 
         if (this.deps.audit) {
           await this.deps.audit.log(
             {
               eventType: 'TOTP_UNLINK',
               outcomeCode: 'SUCCESS',
-              actorType: actorId ? 'DISCORD_USER' : 'SERVICE',
-              actorId: actorId ?? 'system',
-              authKind: actorId ? 'DISCORD' : 'SERVICE',
+              actorType: 'DISCORD_USER',
+              actorId,
+              authKind: 'DISCORD',
               resourceId,
               payload: {},
             },
@@ -704,6 +775,192 @@ export class ResourceService {
     }
 
     return repositories.totp.findById(resource.totpAccountId);
+  }
+
+  /**
+   * Create a link consent for a TOTP account.
+   */
+  async createTOTPLinkConsent(
+    accountId: string,
+    resourceId: string,
+    ownerDiscordUserId: string,
+    delegationPolicy: Record<string, unknown>
+  ): Promise<TOTPLinkConsent> {
+    const { repositories } = this.deps;
+    const acc = await repositories.totp.findById(accountId);
+    if (!acc || acc.ownerDiscordUserId !== ownerDiscordUserId) {
+      throw new Error('Only the TOTP account owner can create link consent.');
+    }
+    const expiresAt = new Date(Date.now() + 10 * 60 * 1000); // 10 minutes expiry
+    return repositories.totp.createLinkConsent({
+      accountId,
+      resourceId,
+      ownerDiscordUserId,
+      delegationPolicy,
+      expiresAt,
+    });
+  }
+
+  /**
+   * Create a delegation consent token.
+   */
+  async createTOTPDelegationConsent(
+    resourceId: string,
+    totpAccountId: string,
+    requesterId: string,
+    operation: string,
+    authFamily: string
+  ): Promise<TOTPDelegationConsent> {
+    const { repositories } = this.deps;
+
+    const resource = await repositories.resources.findById(resourceId);
+    if (!resource || resource.totpAccountId !== totpAccountId) {
+      throw new Error('Invalid resource or linked TOTP account.');
+    }
+
+    const envelope = resource.totpDelegationEnvelope;
+    if (!envelope) {
+      throw new Error('No delegation policy found on this link.');
+    }
+
+    const totpAccount = await repositories.totp.findById(totpAccountId);
+    if (!totpAccount || totpAccount.version !== envelope.accountVersion) {
+      throw new Error('Stale link delegation envelope. Seed has rotated.');
+    }
+
+    const policy = envelope.delegationPolicy;
+    if (policy.allowedOperations && Array.isArray(policy.allowedOperations)) {
+      if (!policy.allowedOperations.includes(operation)) {
+        throw new Error(`Operation ${operation} is not permitted by the delegation policy.`);
+      }
+    }
+    if (policy.allowedRequesters && Array.isArray(policy.allowedRequesters)) {
+      if (!policy.allowedRequesters.includes(requesterId)) {
+        throw new Error(`Requester ${requesterId} is not permitted by the delegation policy.`);
+      }
+    }
+
+    const expiresAt = new Date(Date.now() + 5 * 60 * 1000); // 5 minutes short-lived
+    return repositories.totp.createDelegationConsent({
+      resourceId,
+      totpAccountId,
+      operation,
+      requesterId,
+      authFamily,
+      accountVersion: totpAccount.version,
+      linkVersion: envelope.linkVersion,
+      expiresAt,
+    });
+  }
+
+  /**
+   * Generate and reveal a TOTP code if authorized.
+   */
+  async revealTOTPCode(resourceId: string, actorId: string): Promise<string> {
+    const { repositories } = this.deps;
+
+    // Check capability 'totp.code.read'
+    const principal: Principal = {
+      type: 'DISCORD_USER',
+      id: actorId,
+      authKind: 'DISCORD',
+      actorDiscordId: actorId,
+    };
+    const evalResult = await hasCapability(repositories, principal, 'totp.code.read', {
+      resourceId,
+    });
+
+    let authorized = evalResult.allowed;
+
+    if (!authorized) {
+      const activeRequest = await repositories.approvalRequests.findActiveByRequester(
+        resourceId,
+        actorId
+      );
+      if (activeRequest && activeRequest.status === 'APPROVED') {
+        if (!activeRequest.expiresAt || activeRequest.expiresAt > new Date()) {
+          authorized = true;
+        }
+      }
+    }
+
+    if (!authorized) {
+      throw new Error('Access denied. You do not have permission to view this TOTP code.');
+    }
+
+    const resource = await repositories.resources.findById(resourceId);
+    if (!resource || !resource.totpAccountId) {
+      throw new Error('No 2FA account linked to this resource.');
+    }
+
+    const account = await repositories.totp.findById(resource.totpAccountId);
+    if (!account) {
+      throw new Error('TOTP account not found.');
+    }
+
+    const code = generateTOTPCode(account);
+
+    // Audit Log reveal event
+    if (this.deps.audit) {
+      await this.deps.audit.log({
+        eventType: 'TOTP_CODE_REVEAL',
+        outcomeCode: 'SUCCESS',
+        actorType: 'DISCORD_USER',
+        actorId,
+        authKind: 'DISCORD',
+        resourceId,
+        payload: { totpAccountId: account.id },
+      });
+    }
+
+    return code;
+  }
+
+  /**
+   * Reveal recovery key if authorized.
+   */
+  async revealTOTPRecoveryKey(totpAccountId: string, actorId: string): Promise<string> {
+    const { repositories } = this.deps;
+
+    // Check capability 'totp.recovery.read'
+    const principal: Principal = {
+      type: 'DISCORD_USER',
+      id: actorId,
+      authKind: 'DISCORD',
+      actorDiscordId: actorId,
+    };
+    const evalResult = await hasCapability(repositories, principal, 'totp.recovery.read', {
+      totpAccountId,
+    });
+
+    if (!evalResult.allowed) {
+      throw new Error(
+        'Access denied. Only the personal owner of the TOTP account can view the recovery key.'
+      );
+    }
+
+    const account = await repositories.totp.findById(totpAccountId);
+    if (!account) {
+      throw new Error('TOTP account not found.');
+    }
+
+    if (!account.backupKey) {
+      throw new Error('No recovery key/backup key configured for this account.');
+    }
+
+    // Audit Log reveal event
+    if (this.deps.audit) {
+      await this.deps.audit.log({
+        eventType: 'TOTP_RECOVERY_REVEAL',
+        outcomeCode: 'SUCCESS',
+        actorType: 'DISCORD_USER',
+        actorId,
+        authKind: 'DISCORD',
+        payload: { totpAccountId },
+      });
+    }
+
+    return account.backupKey;
   }
 
   /**

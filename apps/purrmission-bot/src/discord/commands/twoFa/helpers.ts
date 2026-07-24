@@ -3,21 +3,12 @@ import type { TOTPAccount } from '../../../domain/models.js';
 import type { TOTPRepository } from '../../../domain/repositories.js';
 import { logger } from '../../../logging/logger.js';
 
-/**
- * Resolve a TOTP account accessible by the user (personal first, then shared).
- */
 export async function resolveUserAccessibleAccount(
   totpRepository: TOTPRepository,
   userId: string,
   accountName: string
 ): Promise<TOTPAccount | null> {
-  const personal = await totpRepository.findByOwnerAndName(userId, accountName);
-  if (personal) {
-    return personal;
-  }
-
-  const sharedAccounts = await totpRepository.findSharedVisibleTo(userId);
-  return sharedAccounts.find((a) => a.accountName === accountName) ?? null;
+  return totpRepository.findByOwnerAndName(userId, accountName);
 }
 
 /**

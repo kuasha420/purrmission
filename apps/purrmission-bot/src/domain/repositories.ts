@@ -54,7 +54,7 @@ export interface ResourceRepository {
 
   update(
     id: string,
-    data: { totpAccountId?: string | null },
+    data: { totpAccountId?: string | null; totpDelegationEnvelope?: TOTPLinkEnvelope | null },
     tx?: Prisma.TransactionClient
   ): Promise<Resource>;
 
@@ -158,13 +158,21 @@ export interface TOTPRepository {
   findById(id: string): Promise<TOTPAccount | null>;
   findByOwnerDiscordUserId(ownerDiscordUserId: string): Promise<TOTPAccount[]>;
   findByOwnerAndName(ownerDiscordUserId: string, accountName: string): Promise<TOTPAccount | null>;
-  /**
-   * Find all shared accounts visible to the given user.
-   * TODO: Implement fine-grained ACLs. For now, returns all shared accounts.
-   */
-  findSharedVisibleTo(discordUserId: string): Promise<TOTPAccount[]>;
-  findSharedMetadataVisibleTo(discordUserId: string): Promise<TOTPAccountMetadata[]>;
   findMetadataByOwnerDiscordUserId(ownerDiscordUserId: string): Promise<TOTPAccountMetadata[]>;
+
+  createLinkConsent(
+    input: Omit<TOTPLinkConsent, 'id' | 'createdAt' | 'usedAt'>,
+    tx?: Prisma.TransactionClient
+  ): Promise<TOTPLinkConsent>;
+  findLinkConsentById(id: string): Promise<TOTPLinkConsent | null>;
+  useLinkConsent(id: string, tx?: Prisma.TransactionClient): Promise<void>;
+
+  createDelegationConsent(
+    input: Omit<TOTPDelegationConsent, 'id' | 'createdAt' | 'usedAt'>,
+    tx?: Prisma.TransactionClient
+  ): Promise<TOTPDelegationConsent>;
+  findDelegationConsentById(id: string): Promise<TOTPDelegationConsent | null>;
+  useDelegationConsent(id: string, tx?: Prisma.TransactionClient): Promise<void>;
 }
 
 /**
@@ -253,7 +261,7 @@ export class PrismaResourceRepository implements ResourceRepository {
 
   async update(
     id: string,
-    data: { totpAccountId?: string | null },
+    data: { totpAccountId?: string | null; totpDelegationEnvelope?: TOTPLinkEnvelope | null },
     tx?: Prisma.TransactionClient
   ): Promise<Resource> {
     const client = tx || this.prisma;
@@ -261,6 +269,7 @@ export class PrismaResourceRepository implements ResourceRepository {
       where: { id },
       data: {
         totpAccountId: data.totpAccountId,
+        totpDelegationEnvelope: data.totpDelegationEnvelope as any,
         version: randomUUID(),
       },
     });
@@ -287,6 +296,7 @@ export class PrismaResourceRepository implements ResourceRepository {
     mode: string;
     apiKey: string;
     totpAccountId: string | null;
+    totpDelegationEnvelope: any;
     version: string;
     createdAt: Date;
   }): Resource {
@@ -301,6 +311,9 @@ export class PrismaResourceRepository implements ResourceRepository {
       mode: row.mode as ApprovalMode,
       apiKey: row.apiKey,
       totpAccountId: row.totpAccountId ?? undefined,
+      totpDelegationEnvelope: row.totpDelegationEnvelope
+        ? (row.totpDelegationEnvelope as unknown as TOTPLinkEnvelope)
+        : undefined,
       version: row.version,
       createdAt: row.createdAt,
     };
@@ -382,7 +395,6 @@ export class PrismaTOTPRepository implements TOTPRepository {
         accountName: account.accountName,
         secret: encryptedSecret,
         issuer: account.issuer ?? null,
-        shared: account.shared,
         backupKey: encryptedBackupKey,
         version: randomUUID(),
       },
@@ -407,7 +419,6 @@ export class PrismaTOTPRepository implements TOTPRepository {
         accountName: account.accountName,
         secret: encryptedSecret,
         issuer: account.issuer ?? null,
-        shared: account.shared,
         backupKey: encryptedBackupKey,
         version: randomUUID(),
       },
@@ -485,34 +496,6 @@ export class PrismaTOTPRepository implements TOTPRepository {
     return row ? this.mapPrismaToDomain(row) : null;
   }
 
-  async findSharedVisibleTo(_discordUserId: string): Promise<TOTPAccount[]> {
-    // MVP: all shared accounts are visible to everyone.
-    const rows = await this.prisma.tOTPAccount.findMany({
-      where: { shared: true },
-      orderBy: { accountName: 'asc' },
-    });
-
-    return rows.map((row) => this.mapPrismaToDomain(row));
-  }
-
-  async findSharedMetadataVisibleTo(_discordUserId: string): Promise<TOTPAccountMetadata[]> {
-    const rows = await this.prisma.tOTPAccount.findMany({
-      where: { shared: true },
-      select: {
-        id: true,
-        ownerDiscordUserId: true,
-        accountName: true,
-        issuer: true,
-        shared: true,
-        version: true,
-        createdAt: true,
-        updatedAt: true,
-      },
-      orderBy: { accountName: 'asc' },
-    });
-    return rows;
-  }
-
   async findMetadataByOwnerDiscordUserId(
     ownerDiscordUserId: string
   ): Promise<TOTPAccountMetadata[]> {
@@ -523,7 +506,6 @@ export class PrismaTOTPRepository implements TOTPRepository {
         ownerDiscordUserId: true,
         accountName: true,
         issuer: true,
-        shared: true,
         version: true,
         createdAt: true,
         updatedAt: true,
@@ -533,13 +515,123 @@ export class PrismaTOTPRepository implements TOTPRepository {
     return rows;
   }
 
+  async createLinkConsent(
+    input: Omit<TOTPLinkConsent, 'id' | 'createdAt' | 'usedAt'>,
+    tx?: Prisma.TransactionClient
+  ): Promise<TOTPLinkConsent> {
+    const client = tx || this.prisma;
+    const created = await client.tOTPLinkConsent.create({
+      data: {
+        accountId: input.accountId,
+        resourceId: input.resourceId,
+        ownerDiscordUserId: input.ownerDiscordUserId,
+        delegationPolicy: input.delegationPolicy as any,
+        expiresAt: input.expiresAt,
+      },
+    });
+    return {
+      id: created.id,
+      accountId: created.accountId,
+      resourceId: created.resourceId,
+      ownerDiscordUserId: created.ownerDiscordUserId,
+      delegationPolicy: created.delegationPolicy as any,
+      expiresAt: created.expiresAt,
+      usedAt: created.usedAt,
+      createdAt: created.createdAt,
+    };
+  }
+
+  async findLinkConsentById(id: string): Promise<TOTPLinkConsent | null> {
+    const found = await this.prisma.tOTPLinkConsent.findUnique({
+      where: { id },
+    });
+    if (!found) return null;
+    return {
+      id: found.id,
+      accountId: found.accountId,
+      resourceId: found.resourceId,
+      ownerDiscordUserId: found.ownerDiscordUserId,
+      delegationPolicy: found.delegationPolicy as any,
+      expiresAt: found.expiresAt,
+      usedAt: found.usedAt,
+      createdAt: found.createdAt,
+    };
+  }
+
+  async useLinkConsent(id: string, tx?: Prisma.TransactionClient): Promise<void> {
+    const client = tx || this.prisma;
+    await client.tOTPLinkConsent.update({
+      where: { id },
+      data: { usedAt: new Date() },
+    });
+  }
+
+  async createDelegationConsent(
+    input: Omit<TOTPDelegationConsent, 'id' | 'createdAt' | 'usedAt'>,
+    tx?: Prisma.TransactionClient
+  ): Promise<TOTPDelegationConsent> {
+    const client = tx || this.prisma;
+    const created = await client.tOTPDelegationConsent.create({
+      data: {
+        resourceId: input.resourceId,
+        totpAccountId: input.totpAccountId,
+        operation: input.operation,
+        requesterId: input.requesterId,
+        authFamily: input.authFamily,
+        accountVersion: input.accountVersion,
+        linkVersion: input.linkVersion,
+        expiresAt: input.expiresAt,
+      },
+    });
+    return {
+      id: created.id,
+      resourceId: created.resourceId,
+      totpAccountId: created.totpAccountId,
+      operation: created.operation,
+      requesterId: created.requesterId,
+      authFamily: created.authFamily,
+      accountVersion: created.accountVersion,
+      linkVersion: created.linkVersion,
+      expiresAt: created.expiresAt,
+      usedAt: created.usedAt,
+      createdAt: created.createdAt,
+    };
+  }
+
+  async findDelegationConsentById(id: string): Promise<TOTPDelegationConsent | null> {
+    const found = await this.prisma.tOTPDelegationConsent.findUnique({
+      where: { id },
+    });
+    if (!found) return null;
+    return {
+      id: found.id,
+      resourceId: found.resourceId,
+      totpAccountId: found.totpAccountId,
+      operation: found.operation,
+      requesterId: found.requesterId,
+      authFamily: found.authFamily,
+      accountVersion: found.accountVersion,
+      linkVersion: found.linkVersion,
+      expiresAt: found.expiresAt,
+      usedAt: found.usedAt,
+      createdAt: found.createdAt,
+    };
+  }
+
+  async useDelegationConsent(id: string, tx?: Prisma.TransactionClient): Promise<void> {
+    const client = tx || this.prisma;
+    await client.tOTPDelegationConsent.update({
+      where: { id },
+      data: { usedAt: new Date() },
+    });
+  }
+
   private mapPrismaToDomain(row: {
     id: string;
     ownerDiscordUserId: string;
     accountName: string;
     secret: string;
     issuer: string | null;
-    shared: boolean;
     backupKey?: string | null;
     version: string;
     createdAt: Date;
@@ -556,7 +648,6 @@ export class PrismaTOTPRepository implements TOTPRepository {
       accountName: row.accountName,
       secret: decryptedSecret,
       issuer: row.issuer ?? undefined,
-      shared: row.shared,
       backupKey: decryptedBackupKey,
       version: row.version,
       createdAt: row.createdAt,

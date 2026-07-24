@@ -67,7 +67,10 @@ export class InMemoryResourceRepository implements ResourceRepository {
     return null;
   }
 
-  async update(id: string, data: { totpAccountId?: string | null }): Promise<Resource> {
+  async update(
+    id: string,
+    data: { totpAccountId?: string | null; totpDelegationEnvelope?: TOTPLinkEnvelope | null }
+  ): Promise<Resource> {
     const resource = this.resources.get(id);
     if (!resource) {
       throw new Error(`Resource not found: ${id}`);
@@ -76,6 +79,10 @@ export class InMemoryResourceRepository implements ResourceRepository {
       ...resource,
       totpAccountId:
         data.totpAccountId === null ? undefined : (data.totpAccountId ?? resource.totpAccountId),
+      totpDelegationEnvelope:
+        data.totpDelegationEnvelope === null
+          ? undefined
+          : (data.totpDelegationEnvelope ?? resource.totpDelegationEnvelope),
       version: crypto.randomUUID(),
     };
     this.resources.set(id, updated);
@@ -238,6 +245,8 @@ export class InMemoryApprovalRequestRepository implements ApprovalRequestReposit
  */
 export class InMemoryTOTPRepository implements TOTPRepository {
   private accounts: Map<string, TOTPAccount> = new Map();
+  public linkConsents: Map<string, TOTPLinkConsent> = new Map();
+  public delegationConsents: Map<string, TOTPDelegationConsent> = new Map();
 
   constructor(private resources?: InMemoryResourceRepository) {}
 
@@ -319,31 +328,6 @@ export class InMemoryTOTPRepository implements TOTPRepository {
     return null;
   }
 
-  async findSharedVisibleTo(_discordUserId: string): Promise<TOTPAccount[]> {
-    const results: TOTPAccount[] = [];
-    for (const account of this.accounts.values()) {
-      if (account.shared) {
-        results.push(account);
-      }
-    }
-    return results;
-  }
-
-  async findSharedMetadataVisibleTo(_discordUserId: string): Promise<TOTPAccountMetadata[]> {
-    return Array.from(this.accounts.values())
-      .filter((a) => a.shared)
-      .map((a) => ({
-        id: a.id,
-        ownerDiscordUserId: a.ownerDiscordUserId,
-        accountName: a.accountName,
-        issuer: a.issuer,
-        shared: a.shared,
-        version: a.version,
-        createdAt: a.createdAt,
-        updatedAt: a.updatedAt,
-      }));
-  }
-
   async findMetadataByOwnerDiscordUserId(
     ownerDiscordUserId: string
   ): Promise<TOTPAccountMetadata[]> {
@@ -354,11 +338,58 @@ export class InMemoryTOTPRepository implements TOTPRepository {
         ownerDiscordUserId: a.ownerDiscordUserId,
         accountName: a.accountName,
         issuer: a.issuer,
-        shared: a.shared,
         version: a.version,
         createdAt: a.createdAt,
         updatedAt: a.updatedAt,
       }));
+  }
+
+  async createLinkConsent(
+    input: Omit<TOTPLinkConsent, 'id' | 'createdAt' | 'usedAt'>
+  ): Promise<TOTPLinkConsent> {
+    const consent: TOTPLinkConsent = {
+      ...input,
+      id: crypto.randomUUID(),
+      usedAt: null,
+      createdAt: new Date(),
+    };
+    this.linkConsents.set(consent.id, consent);
+    return consent;
+  }
+
+  async findLinkConsentById(id: string): Promise<TOTPLinkConsent | null> {
+    return this.linkConsents.get(id) ?? null;
+  }
+
+  async useLinkConsent(id: string): Promise<void> {
+    const found = this.linkConsents.get(id);
+    if (found) {
+      found.usedAt = new Date();
+    }
+  }
+
+  async createDelegationConsent(
+    input: Omit<TOTPDelegationConsent, 'id' | 'createdAt' | 'usedAt'>
+  ): Promise<TOTPDelegationConsent> {
+    const consent: TOTPDelegationConsent = {
+      ...input,
+      id: crypto.randomUUID(),
+      usedAt: null,
+      createdAt: new Date(),
+    };
+    this.delegationConsents.set(consent.id, consent);
+    return consent;
+  }
+
+  async findDelegationConsentById(id: string): Promise<TOTPDelegationConsent | null> {
+    return this.delegationConsents.get(id) ?? null;
+  }
+
+  async useDelegationConsent(id: string): Promise<void> {
+    const found = this.delegationConsents.get(id);
+    if (found) {
+      found.usedAt = new Date();
+    }
   }
 }
 

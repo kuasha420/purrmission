@@ -20,6 +20,18 @@ export type ApprovalMode = 'ONE_OF_N';
 /**
  * A protected resource that requires guardian approval for access.
  */
+export interface TOTPLinkEnvelope {
+  consentId: string;
+  delegationPolicy: Record<string, unknown>;
+  accountOwnerDiscordUserId: string;
+  accountVersion: string;
+  linkVersion: string;
+  createdAt: Date;
+}
+
+/**
+ * A protected resource that requires guardian approval for access.
+ */
 export interface Resource {
   /** Unique identifier for the resource */
   id: string;
@@ -38,6 +50,9 @@ export interface Resource {
 
   /** Optional linked TOTP account ID (one-to-one) */
   totpAccountId?: string | null;
+
+  /** Versioned delegation envelope for linked TOTP account */
+  totpDelegationEnvelope?: TOTPLinkEnvelope | null;
 
   /** Stable version identifier of the resource state */
   version: string;
@@ -207,9 +222,6 @@ export interface TOTPAccount {
   /** Optional issuer from otpauth URI */
   issuer?: string;
 
-  /** True if this account is intended to be shared */
-  shared: boolean;
-
   /** Optional backup key / recovery code */
   backupKey?: string;
 
@@ -231,10 +243,34 @@ export interface TOTPAccountMetadata {
   ownerDiscordUserId: string;
   accountName: string;
   issuer?: string | null;
-  shared: boolean;
   version: string;
   createdAt: Date;
   updatedAt: Date;
+}
+
+export interface TOTPLinkConsent {
+  id: string;
+  accountId: string;
+  resourceId: string;
+  ownerDiscordUserId: string;
+  delegationPolicy: Record<string, unknown>;
+  expiresAt: Date;
+  usedAt: Date | null;
+  createdAt: Date;
+}
+
+export interface TOTPDelegationConsent {
+  id: string;
+  resourceId: string;
+  totpAccountId: string;
+  operation: string;
+  requesterId: string;
+  authFamily: string;
+  accountVersion: string;
+  linkVersion: string;
+  expiresAt: Date;
+  usedAt: Date | null;
+  createdAt: Date;
 }
 
 /**

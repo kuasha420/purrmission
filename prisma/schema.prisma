@@ -32,9 +32,10 @@ model Resource {
   createdAt DateTime     @default(now())
 
   // Optional linked 2FA account (one-to-one)
-  totpAccountId String?      @unique
-  totpAccount   TOTPAccount? @relation(fields: [totpAccountId], references: [id], onDelete: SetNull)
-  version       String       @default(uuid())
+  totpAccountId          String?      @unique
+  totpAccount            TOTPAccount? @relation(fields: [totpAccountId], references: [id], onDelete: SetNull)
+  totpDelegationEnvelope Json?
+  version                String       @default(uuid())
 
   guardians        Guardian[]
   approvalRequests ApprovalRequest[]
@@ -103,7 +104,6 @@ model TOTPAccount {
   /// TOTP secret - encrypted at rest using AES-256-GCM in the application layer
   secret             String
   issuer             String?
-  shared             Boolean  @default(false)
   backupKey          String?
   version            String   @default(uuid())
   createdAt          DateTime @default(now())
@@ -114,7 +114,37 @@ model TOTPAccount {
 
   @@unique([ownerDiscordUserId, accountName])
   @@index([ownerDiscordUserId])
-  @@index([shared])
+}
+
+model TOTPLinkConsent {
+  id                 String    @id @default(uuid())
+  accountId          String
+  resourceId         String
+  ownerDiscordUserId String
+  delegationPolicy   Json
+  expiresAt          DateTime
+  usedAt             DateTime?
+  createdAt          DateTime  @default(now())
+
+  @@index([accountId])
+  @@index([resourceId])
+}
+
+model TOTPDelegationConsent {
+  id             String    @id @default(uuid())
+  resourceId     String
+  totpAccountId  String
+  operation      String
+  requesterId    String
+  authFamily     String
+  accountVersion String
+  linkVersion    String
+  expiresAt      DateTime
+  usedAt             DateTime?
+  createdAt          DateTime  @default(now())
+
+  @@index([resourceId])
+  @@index([totpAccountId])
 }
 
 model AuditLog {

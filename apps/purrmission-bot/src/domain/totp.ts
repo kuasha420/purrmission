@@ -61,9 +61,8 @@ export function parseOtpauthUri(uri: string): ParsedOtpauthUri {
  */
 export function createTOTPAccountFromUri(
   ownerDiscordUserId: string,
-  uri: string,
-  shared: boolean
-): Omit<TOTPAccount, 'id' | 'createdAt' | 'updatedAt'> {
+  uri: string
+): Omit<TOTPAccount, 'id' | 'createdAt' | 'updatedAt' | 'version'> {
   const { accountName, issuer, secret } = parseOtpauthUri(uri);
 
   return {
@@ -71,7 +70,6 @@ export function createTOTPAccountFromUri(
     accountName,
     issuer,
     secret,
-    shared,
   };
 }
 
@@ -82,9 +80,8 @@ export function createTOTPAccountFromSecret(
   ownerDiscordUserId: string,
   accountName: string,
   secret: string,
-  issuer: string | undefined,
-  shared: boolean
-): Omit<TOTPAccount, 'id' | 'createdAt' | 'updatedAt'> {
+  issuer: string | undefined
+): Omit<TOTPAccount, 'id' | 'createdAt' | 'updatedAt' | 'version'> {
   if (!secret || secret.trim().length === 0) {
     throw new Error('Secret cannot be empty');
   }
@@ -104,7 +101,6 @@ export function createTOTPAccountFromSecret(
     accountName,
     issuer,
     secret: sanitizedSecret,
-    shared,
   };
 }
 
