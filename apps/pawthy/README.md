@@ -86,15 +86,21 @@ pawthy push
 
 **Options:**
 
-| Flag                | Description                               |
-| ------------------- | ----------------------------------------- |
-| `-f, --file <path>` | Source `.env` file path (default: `.env`) |
-| `--force`           | Skip confirmation prompt                  |
+| Flag                      | Description                                                                                  |
+| ------------------------- | -------------------------------------------------------------------------------------------- |
+| `-f, --file <path>`       | Source secret file path (default: `.env`, `secrets.json`, `secrets.yaml`, or `secrets.toml`) |
+| `-F, --format <format>`   | Secret file format (`env`, `json`, `yaml`, `toml`). Auto-detected by extension if omitted.   |
+| `-E, --env <environment>` | Environment variant for cascading resolution (e.g. `development`, `production`, `staging`).  |
+| `--force`                 | Skip confirmation prompt                                                                     |
 
 **Example:**
 
 ```bash
-pawthy push -f .env.production --force
+# Push with force to a specific file format
+pawthy push -f secrets.json --force
+
+# Push for a specific environment variant
+pawthy push -E development --force
 ```
 
 > **Note:** Push updates existing values but does not remove secrets that exist remotely.
@@ -111,16 +117,22 @@ pawthy pull
 
 **Options:**
 
-| Flag                | Description                                                            |
-| ------------------- | ---------------------------------------------------------------------- |
-| `-f, --file <path>` | Output file path (default: `.env`)                                     |
-| `-m, --merge`       | Merge fetched secrets into existing `.env` file instead of overwriting |
+| Flag                      | Description                                                                                |
+| ------------------------- | ------------------------------------------------------------------------------------------ |
+| `-f, --file <path>`       | Output file path (default: `.env`, `secrets.json`, `secrets.yaml`, or `secrets.toml`)      |
+| `-F, --format <format>`   | Secret file format (`env`, `json`, `yaml`, `toml`). Auto-detected by extension if omitted. |
+| `-E, --env <environment>` | Environment variant for target file output (e.g., `development`, `production`).            |
+| `-m, --merge`             | Merge fetched secrets into existing file instead of overwriting                            |
 
 **Examples:**
 
 ```bash
 # Pull and overwrite local .env (default)
 pawthy pull -f .env.local
+
+# Pull in JSON or YAML format
+pawthy pull -f secrets.json
+pawthy pull -F yaml
 
 # Pull and natively merge into existing .env preserving formatting/comments/local variables
 pawthy pull --merge
