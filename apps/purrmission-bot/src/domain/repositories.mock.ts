@@ -12,6 +12,7 @@ import type {
   AuditLog,
   CreateAuditLogInput,
   AuthSession,
+  AuthSessionStatus,
   ApiToken,
   CreateApiTokenInput,
   Project,
@@ -23,6 +24,8 @@ import type {
   ProjectMemberRole,
   TOTPAccountMetadata,
   ResourceFieldMetadata,
+  Credential,
+  CreateCredentialInput,
 } from './models.js';
 import {
   ResourceRepository,
@@ -34,6 +37,7 @@ import {
   AuthRepository,
   ProjectRepository,
   Repositories,
+  CredentialRepository,
 } from './repositories.js';
 import crypto from 'node:crypto';
 
@@ -620,6 +624,24 @@ export class InMemoryAuthRepository implements AuthRepository {
     }
   }
 
+  async transitionSessionStatus(
+    id: string,
+    fromStatus: AuthSessionStatus,
+    toStatus: AuthSessionStatus,
+    userId?: string
+  ): Promise<boolean> {
+    const session = this.sessions.get(id);
+    if (!session || session.status !== fromStatus) {
+      return false;
+    }
+    session.status = toStatus;
+    if (userId !== undefined) {
+      session.userId = userId;
+    }
+    session.updatedAt = new Date();
+    return true;
+  }
+
   async createApiToken(input: CreateApiTokenInput): Promise<ApiToken> {
     const token: ApiToken = {
       id: crypto.randomUUID(),
@@ -782,6 +804,68 @@ export class InMemoryProjectRepository implements ProjectRepository {
   }
 }
 
+export class InMemoryCredentialRepository implements CredentialRepository {
+  private credentials: Map<string, Credential> = new Map();
+
+  async create(input: CreateCredentialInput): Promise<Credential> {
+    const cred: Credential = {
+      id: crypto.randomUUID(),
+      type: input.type,
+      subjectId: input.subjectId,
+      name: input.name,
+      digest: input.digest,
+      prefix: input.prefix,
+      scopes: input.scopes,
+      audience: input.audience,
+      createdAt: new Date(),
+      expiresAt: input.expiresAt,
+      revokedAt: input.revokedAt,
+      lastUsedAt: null,
+      version: crypto.randomUUID(),
+    };
+    this.credentials.set(cred.id, cred);
+    return cred;
+  }
+
+  async findById(id: string): Promise<Credential | null> {
+    return this.credentials.get(id) ?? null;
+  }
+
+  async findByDigest(digest: string): Promise<Credential | null> {
+    for (const cred of this.credentials.values()) {
+      if (cred.digest === digest) {
+        return cred;
+      }
+    }
+    return null;
+  }
+
+  async findBySubject(subjectId: string): Promise<Credential[]> {
+    const result: Credential[] = [];
+    for (const cred of this.credentials.values()) {
+      if (cred.subjectId === subjectId) {
+        result.push(cred);
+      }
+    }
+    return result;
+  }
+
+  async revoke(id: string): Promise<void> {
+    const cred = this.credentials.get(id);
+    if (cred) {
+      cred.revokedAt = new Date();
+      cred.version = crypto.randomUUID();
+    }
+  }
+
+  async updateLastUsed(id: string): Promise<void> {
+    const cred = this.credentials.get(id);
+    if (cred) {
+      cred.lastUsedAt = new Date();
+    }
+  }
+}
+
 /**
  * Create in-memory repositories for tests.
  */
@@ -797,5 +881,6 @@ export function createInMemoryRepositories(): Repositories {
     auth: new InMemoryAuthRepository(),
     projects: new InMemoryProjectRepository(),
     outbox: new InMemoryOutboxRepository(),
+    credentials: new InMemoryCredentialRepository(),
   };
 }

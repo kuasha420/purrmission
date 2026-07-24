@@ -39,6 +39,9 @@ import type {
   Resource,
   ResourceField,
   TOTPAccount,
+  Credential,
+  CredentialType,
+  CreateCredentialInput,
   OutboxEvent,
   CreateOutboxEventInput,
   TOTPAccountMetadata,
@@ -835,6 +838,7 @@ export interface Repositories {
   auth: AuthRepository;
   projects: ProjectRepository;
   outbox: OutboxRepository;
+  credentials: CredentialRepository;
 }
 
 /**
@@ -1270,10 +1274,25 @@ export interface AuthRepository {
   findSessionByDeviceCode(deviceCode: string): Promise<AuthSession | null>;
   findSessionByUserCode(userCode: string): Promise<AuthSession | null>;
   updateSessionStatus(id: string, status: AuthSessionStatus, userId?: string): Promise<void>;
+  transitionSessionStatus(
+    id: string,
+    fromStatus: AuthSessionStatus,
+    toStatus: AuthSessionStatus,
+    userId?: string
+  ): Promise<boolean>;
   createApiToken(input: CreateApiTokenInput): Promise<ApiToken>;
   findApiToken(token: string): Promise<ApiToken | null>;
   updateApiTokenLastUsed(id: string): Promise<void>;
   deleteExpiredSessions(): Promise<number>;
+}
+
+export interface CredentialRepository {
+  create(input: CreateCredentialInput, tx?: Prisma.TransactionClient): Promise<Credential>;
+  findById(id: string): Promise<Credential | null>;
+  findByDigest(digest: string): Promise<Credential | null>;
+  findBySubject(subjectId: string): Promise<Credential[]>;
+  revoke(id: string, tx?: Prisma.TransactionClient): Promise<void>;
+  updateLastUsed(id: string, tx?: Prisma.TransactionClient): Promise<void>;
 }
 
 export interface ProjectRepository {
@@ -1336,6 +1355,26 @@ export class PrismaAuthRepository implements AuthRepository {
       where: { id },
       data: { status, userId: userId || null },
     });
+  }
+
+  async transitionSessionStatus(
+    id: string,
+    fromStatus: AuthSessionStatus,
+    toStatus: AuthSessionStatus,
+    userId?: string
+  ): Promise<boolean> {
+    const data: Prisma.AuthSessionUpdateInput = { status: toStatus };
+    if (userId !== undefined) {
+      data.userId = userId;
+    }
+    const result = await this.prisma.authSession.updateMany({
+      where: {
+        id,
+        status: fromStatus,
+      },
+      data,
+    });
+    return result.count === 1;
   }
 
   async createApiToken(input: CreateApiTokenInput): Promise<ApiToken> {
@@ -1640,5 +1679,76 @@ export class PrismaProjectRepository implements ProjectRepository {
       ...m,
       role: m.role as ProjectMemberRole,
     }));
+  }
+}
+
+export class PrismaCredentialRepository implements CredentialRepository {
+  constructor(private readonly prisma: PrismaClient) {}
+
+  async create(input: CreateCredentialInput, tx?: Prisma.TransactionClient): Promise<Credential> {
+    const client = tx || this.prisma;
+    const row = await client.credential.create({
+      data: {
+        type: input.type,
+        subjectId: input.subjectId,
+        name: input.name,
+        digest: input.digest,
+        prefix: input.prefix,
+        scopes: input.scopes,
+        audience: input.audience,
+        expiresAt: input.expiresAt,
+        revokedAt: input.revokedAt,
+      },
+    });
+    return this.mapRow(row);
+  }
+
+  async findById(id: string): Promise<Credential | null> {
+    const row = await this.prisma.credential.findUnique({ where: { id } });
+    return row ? this.mapRow(row) : null;
+  }
+
+  async findByDigest(digest: string): Promise<Credential | null> {
+    const row = await this.prisma.credential.findUnique({ where: { digest } });
+    return row ? this.mapRow(row) : null;
+  }
+
+  async findBySubject(subjectId: string): Promise<Credential[]> {
+    const rows = await this.prisma.credential.findMany({ where: { subjectId } });
+    return rows.map((r) => this.mapRow(r));
+  }
+
+  async revoke(id: string, tx?: Prisma.TransactionClient): Promise<void> {
+    const client = tx || this.prisma;
+    await client.credential.update({
+      where: { id },
+      data: { revokedAt: new Date() },
+    });
+  }
+
+  async updateLastUsed(id: string, tx?: Prisma.TransactionClient): Promise<void> {
+    const client = tx || this.prisma;
+    await client.credential.update({
+      where: { id },
+      data: { lastUsedAt: new Date() },
+    });
+  }
+
+  private mapRow(row: any): Credential {
+    return {
+      id: row.id,
+      type: row.type as CredentialType,
+      subjectId: row.subjectId,
+      name: row.name,
+      digest: row.digest,
+      prefix: row.prefix,
+      scopes: row.scopes,
+      audience: row.audience,
+      createdAt: row.createdAt,
+      expiresAt: row.expiresAt,
+      revokedAt: row.revokedAt,
+      lastUsedAt: row.lastUsedAt,
+      version: row.version,
+    };
   }
 }

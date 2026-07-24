@@ -14,6 +14,7 @@ import {
   PrismaAuthRepository,
   PrismaProjectRepository,
   PrismaOutboxRepository,
+  PrismaCredentialRepository,
 } from './domain/repositories.js';
 import { createServices } from './domain/services.js';
 import { createDiscordClient } from './discord/client.js';
@@ -51,6 +52,7 @@ async function main(): Promise<void> {
     auth: new PrismaAuthRepository(prisma),
     projects: new PrismaProjectRepository(prisma),
     outbox: new PrismaOutboxRepository(prisma),
+    credentials: new PrismaCredentialRepository(prisma),
   };
 
   logger.info('Initializing services...');

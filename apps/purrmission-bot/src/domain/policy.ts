@@ -292,6 +292,19 @@ export async function hasCapability(
     reason,
   });
 
+  // 1. Scoped Capability / Least Privilege Check
+  if (principal.scopes) {
+    if (!principal.scopes.includes(capability)) {
+      return deny('INSUFFICIENT_SCOPES', `Principal lacks required scope: ${capability}`);
+    }
+    // For SERVICE type, authorization is purely capability-scope based (no human user role)
+    if (principal.type === 'SERVICE') {
+      return allow('SERVICE', `Service principal authorized via scope: ${capability}`);
+    }
+  } else if (principal.type === 'SERVICE') {
+    return deny('INSUFFICIENT_SCOPES', 'Service principal lacks scopes');
+  }
+
   // Resolve roles
   let pOwnerId: string | null = null;
   let pMemberRole: 'WRITER' | 'READER' | null = null;

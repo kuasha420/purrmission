@@ -28,7 +28,7 @@ model Resource {
   id        String       @id @default(uuid())
   name      String
   mode      ResourceMode @default(ONE_OF_N)
-  apiKey    String
+  apiKey    String?
   createdAt DateTime     @default(now())
 
   // Optional linked 2FA account (one-to-one)
@@ -273,4 +273,29 @@ model ProjectMember {
 
   @@unique([projectId, userId])
   @@index([userId])
+}
+
+enum CredentialType {
+  RESOURCE_API_KEY
+  PAWTHY_TOKEN
+  SERVICE_CREDENTIAL
+}
+
+model Credential {
+  id          String         @id @default(uuid())
+  type        CredentialType
+  subjectId   String
+  name        String
+  digest      String         @unique
+  prefix      String
+  scopes      String
+  audience    String
+  createdAt   DateTime       @default(now())
+  expiresAt   DateTime?
+  revokedAt   DateTime?
+  lastUsedAt  DateTime?
+  version     String         @default(uuid())
+
+  @@index([subjectId])
+  @@index([digest])
 }

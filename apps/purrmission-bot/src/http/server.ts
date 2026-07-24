@@ -19,6 +19,7 @@ import {
   ExpiredTokenError,
   ForbiddenError,
   InvalidGrantError,
+  SlowDownError,
 } from '../domain/auth.js';
 import { ResourceNotFoundError } from '../domain/errors.js';
 import type { ApprovalRequest, ResourceField } from '../domain/models.js';
@@ -243,15 +244,24 @@ export function createHttpServer(deps: HttpServerDeps): FastifyInstance {
   });
 
   // Device Auth Flow: Initiate
-  server.post('/api/auth/device/code', async (_request, _reply) => {
-    const result = await services.auth.initiateDeviceFlow();
-    return {
-      device_code: result.deviceCode,
-      user_code: result.userCode,
-      verification_uri: result.verificationUri,
-      expires_in: result.expiresIn,
-      interval: result.interval,
-    };
+  server.post('/api/auth/device/code', async (request, reply) => {
+    try {
+      const result = await services.auth.initiateDeviceFlow(request.ip);
+      return {
+        device_code: result.deviceCode,
+        user_code: result.userCode,
+        verification_uri: result.verificationUri,
+        expires_in: result.expiresIn,
+        interval: result.interval,
+      };
+    } catch (e: unknown) {
+      if (e instanceof Error && e.message.includes('Rate limit exceeded')) {
+        return reply
+          .status(429)
+          .send({ error: 'slow_down', error_description: 'Rate limit exceeded' });
+      }
+      throw e;
+    }
   });
 
   // Device Auth Flow: Exchange Token
@@ -280,6 +290,9 @@ export function createHttpServer(deps: HttpServerDeps): FastifyInstance {
           expires_in: Math.round((result.apiToken.expiresAt.getTime() - Date.now()) / 1000),
         };
       } catch (e: unknown) {
+        if (e instanceof SlowDownError) {
+          return reply.status(400).send({ error: 'slow_down' });
+        }
         if (e instanceof ExpiredTokenError) {
           return reply.status(400).send({ error: 'expired_token' });
         }
@@ -343,13 +356,13 @@ export function createHttpServer(deps: HttpServerDeps): FastifyInstance {
       throw new AccessDeniedError('Missing Bearer token');
     }
     const token = authHeader.substring(7);
-    const apiToken = await services.auth.validateToken(token);
-    if (!apiToken) {
+    const principal = await services.auth.validateToken(token, req.ip);
+    if (!principal) {
       throw new AccessDeniedError('Invalid token');
     }
-    // Attach user to request
-    // Attach user to request
-    req.user = { id: apiToken.userId };
+    // Attach user and principal to request
+    req.user = { id: principal.subjectId || (principal as any).userId };
+    (req as any).principal = principal;
   };
 
   // Authorization Hook: Verify Guardian/Owner Access

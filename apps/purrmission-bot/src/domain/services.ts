@@ -20,6 +20,7 @@ import type {
   TOTPLinkConsent,
   TOTPDelegationConsent,
   TOTPLinkEnvelope,
+  Credential,
 } from './models.js';
 import type { Repositories } from './repositories.js';
 import { logger } from '../logging/logger.js';
@@ -36,6 +37,7 @@ import {
 } from './policy.js';
 import { getPrismaClient } from '../infra/prismaClient.js';
 import { generateTOTPCode } from './totp.js';
+import { computeKeyedDigest } from './crypto.js';
 
 /**
  * Service dependencies.
@@ -584,7 +586,174 @@ export class ResourceService {
    * Verify an API key and return the resource.
    */
   async verifyApiKey(apiKey: string): Promise<Resource | null> {
-    return this.deps.repositories.resources.findByApiKey(apiKey);
+    const { repositories } = this.deps;
+
+    // 1. Try new digested credentials lookup
+    const digest = computeKeyedDigest(apiKey, 'RESOURCE_API_KEY');
+    const credential = await repositories.credentials.findByDigest(digest);
+
+    if (
+      credential &&
+      credential.type === 'RESOURCE_API_KEY' &&
+      !credential.revokedAt &&
+      (!credential.expiresAt || credential.expiresAt > new Date())
+    ) {
+      // Update last used time
+      await repositories.credentials.updateLastUsed(credential.id);
+      return repositories.resources.findById(credential.subjectId);
+    }
+
+    // 2. Dual-read fallback: check legacy plaintext apiKey in Resources table
+    const legacyResource = await repositories.resources.findByApiKey(apiKey);
+    if (legacyResource) {
+      return legacyResource;
+    }
+
+    return null;
+  }
+
+  /**
+   * Mint a new API key for a resource.
+   */
+  async mintApiKey(
+    resourceId: string,
+    actorId: string,
+    name: string,
+    expiresInMs?: number
+  ): Promise<{ plaintext: string; credential: Credential }> {
+    const { repositories } = this.deps;
+
+    // Verify Resource Authority (actor must be resource owner)
+    const hasOwnerAccess = await isEffectiveOwner(repositories, resourceId, actorId);
+    if (!hasOwnerAccess) {
+      throw new Error('Only the resource owner can mint API keys.');
+    }
+
+    const resource = await repositories.resources.findById(resourceId);
+    if (!resource) {
+      throw new ResourceNotFoundError(`Resource not found: ${resourceId}`);
+    }
+
+    const plaintext = 'pur_' + crypto.randomBytes(32).toString('hex');
+    const digest = computeKeyedDigest(plaintext, 'RESOURCE_API_KEY');
+    const prefix = plaintext.substring(0, 12);
+
+    const expiresAt = expiresInMs ? new Date(Date.now() + expiresInMs) : null;
+
+    const prisma = getPrismaClient();
+    let credential!: Credential;
+
+    try {
+      await prisma.$transaction(async (tx) => {
+        credential = await repositories.credentials.create(
+          {
+            type: 'RESOURCE_API_KEY',
+            subjectId: resourceId,
+            name,
+            digest,
+            prefix,
+            scopes: 'resource.view,request.create', // Default scopes for resource API keys
+            audience: 'api',
+            expiresAt,
+            revokedAt: null,
+          },
+          tx
+        );
+
+        // Update resource version to rotate it
+        await repositories.resources.update(resourceId, { version: crypto.randomUUID() }, tx);
+
+        if (this.deps.audit) {
+          await this.deps.audit.log(
+            {
+              eventType: 'API_KEY_MINT',
+              outcomeCode: 'SUCCESS',
+              actorType: 'DISCORD_USER',
+              actorId,
+              authKind: 'DISCORD',
+              resourceId,
+              payload: { credentialId: credential.id },
+            },
+            tx
+          );
+        }
+      });
+    } catch (err) {
+      logger.error('Failed to mint API key atomically', {
+        resourceId,
+        name,
+        error: err instanceof Error ? err.message : String(err),
+      });
+      throw err;
+    }
+
+    return { plaintext, credential };
+  }
+
+  /**
+   * Revoke an API key.
+   */
+  async revokeApiKey(resourceId: string, credentialId: string, actorId: string): Promise<void> {
+    const { repositories } = this.deps;
+
+    // Verify Resource Authority (actor must be resource owner)
+    const hasOwnerAccess = await isEffectiveOwner(repositories, resourceId, actorId);
+    if (!hasOwnerAccess) {
+      throw new Error('Only the resource owner can revoke API keys.');
+    }
+
+    const credential = await repositories.credentials.findById(credentialId);
+    if (!credential || credential.subjectId !== resourceId) {
+      throw new Error('Credential not found or mismatch.');
+    }
+
+    const prisma = getPrismaClient();
+    try {
+      await prisma.$transaction(async (tx) => {
+        await repositories.credentials.revoke(credentialId, tx);
+
+        // Update resource version
+        await repositories.resources.update(resourceId, { version: crypto.randomUUID() }, tx);
+
+        if (this.deps.audit) {
+          await this.deps.audit.log(
+            {
+              eventType: 'API_KEY_REVOKE',
+              outcomeCode: 'SUCCESS',
+              actorType: 'DISCORD_USER',
+              actorId,
+              authKind: 'DISCORD',
+              resourceId,
+              payload: { credentialId },
+            },
+            tx
+          );
+        }
+      });
+    } catch (err) {
+      logger.error('Failed to revoke API key atomically', {
+        resourceId,
+        credentialId,
+        error: err instanceof Error ? err.message : String(err),
+      });
+      throw err;
+    }
+  }
+
+  /**
+   * List API keys/credentials for a resource.
+   */
+  async listApiKeys(resourceId: string, actorId: string): Promise<Credential[]> {
+    const { repositories } = this.deps;
+
+    // Verify Access (actor must be resource owner or guardian)
+    const hasAccess = await this.isGuardian(resourceId, actorId);
+    if (!hasAccess) {
+      throw new Error('Access denied. You must be a guardian or owner to list API keys.');
+    }
+
+    const creds = await repositories.credentials.findBySubject(resourceId);
+    return creds.filter((c) => c.type === 'RESOURCE_API_KEY');
   }
 
   /**
@@ -1199,7 +1368,7 @@ export function createServices(baseDeps: { repositories: Repositories }): Servic
     approval: new ApprovalService(fullDeps),
     resource: new ResourceService(fullDeps),
     audit,
-    auth: new AuthService(baseDeps.repositories.auth),
+    auth: new AuthService(baseDeps.repositories.auth, baseDeps.repositories.credentials),
     project: new ProjectService(baseDeps.repositories.projects, new ResourceService(fullDeps)),
   };
 }

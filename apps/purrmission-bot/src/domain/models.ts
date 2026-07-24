@@ -46,7 +46,7 @@ export interface Resource {
    * API key for authenticating external requests.
    * TODO: In production, this should be hashed. For MVP, stored as plaintext.
    */
-  apiKey: string;
+  apiKey?: string | null;
 
   /** Optional linked TOTP account ID (one-to-one) */
   totpAccountId?: string | null;
@@ -464,11 +464,37 @@ export type AuthKind = 'DISCORD' | 'PAWTHY' | 'API_KEY' | 'SERVICE';
 
 export interface Principal {
   type: PrincipalType;
-  id: string; // The primary identifier (e.g. Discord ID, token ID, etc.)
+  id: string; // Stable Credential / Principal ID
+  subjectId: string; // Resource ID, User ID, or Service Name
   authKind: AuthKind;
   actorDiscordId?: string; // Optional human Discord User ID association
   correlationId?: string;
+  scopes?: string[];
+  audience?: string;
+  expiresAt?: Date | null;
+  createdAt?: Date;
+  lastUsedAt?: Date | null;
 }
+
+export type CredentialType = 'RESOURCE_API_KEY' | 'PAWTHY_TOKEN' | 'SERVICE_CREDENTIAL';
+
+export interface Credential {
+  id: string;
+  type: CredentialType;
+  subjectId: string;
+  name: string;
+  digest: string;
+  prefix: string;
+  scopes: string; // Comma-separated or JSON list
+  audience: string;
+  createdAt: Date;
+  expiresAt: Date | null;
+  revokedAt: Date | null;
+  lastUsedAt: Date | null;
+  version: string;
+}
+
+export type CreateCredentialInput = Omit<Credential, 'id' | 'createdAt' | 'lastUsedAt' | 'version'>;
 
 export type Capability =
   // Project capabilities
@@ -550,7 +576,9 @@ export type ReasonCode =
   | 'INVALID_AUTH'
   | 'MISSING_CONTEXT'
   | 'GRANT_EXPIRED'
-  | 'GRANT_SCOPE_MISMATCH';
+  | 'GRANT_SCOPE_MISMATCH'
+  | 'SERVICE'
+  | 'INSUFFICIENT_SCOPES';
 
 export interface EvaluationResult {
   allowed: boolean;
