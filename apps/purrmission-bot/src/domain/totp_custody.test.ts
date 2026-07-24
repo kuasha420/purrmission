@@ -1,7 +1,7 @@
 import { describe, it, beforeEach } from 'node:test';
 import assert from 'node:assert';
 import { createInMemoryRepositories } from './repositories.mock.js';
-import { ResourceService } from './services.js';
+import { ResourceService, ApprovalService } from './services.js';
 import { ProjectService } from './project.js';
 
 describe('TOTP Custody, Consents, and Reveals', () => {
@@ -11,7 +11,10 @@ describe('TOTP Custody, Consents, and Reveals', () => {
 
   beforeEach(() => {
     repos = createInMemoryRepositories();
-    resourceService = new ResourceService({ repositories: repos });
+    const deps: any = { repositories: repos };
+    const approval = new ApprovalService(deps);
+    deps.approval = approval;
+    resourceService = new ResourceService(deps);
     projectService = new ProjectService(repos.projects, resourceService);
   });
 
@@ -201,16 +204,45 @@ describe('TOTP Custody, Consents, and Reveals', () => {
         await resourceService.revealTOTPCode(resourceId, strangerId);
       }, /Access denied/);
 
-      // Create approved request for requester
-      await repos.approvalRequests.create({
-        id: 'req-id',
+      // Create delegation consent directly in repo
+      const currentResource = await repos.resources.findById(resourceId);
+      assert.ok(currentResource);
+      await repos.totp.createDelegationConsent({
         resourceId,
-        status: 'APPROVED',
-        context: { requesterId, type: 'TOTP_ACCESS', description: 'desc' },
+        totpAccountId: totpAcc.id,
+        operation: 'totp.code.read',
+        requesterId,
+        authFamily: 'DISCORD',
+        accountVersion: totpAcc.version,
+        linkVersion: currentResource.version,
+        expiresAt: new Date(Date.now() + 10 * 60 * 1000),
       });
 
-      // Requester with active approval can reveal code
-      const reqCode = await resourceService.revealTOTPCode(resourceId, requesterId);
+      // Create approved request for requester (which generates ApprovalGrant)
+      const reqRes = await resourceService.deps.approval.createApprovalRequest({
+        resourceId,
+        requesterId,
+        requesterType: 'DISCORD_USER',
+        authKind: 'DISCORD',
+        action: 'totp.code.read',
+      });
+      assert.ok(reqRes.success && reqRes.request);
+
+      const decision = await resourceService.deps.approval.recordDecision(
+        reqRes.request.id,
+        'APPROVE',
+        ownerId
+      );
+      assert.ok(decision.success);
+
+      // Requester with active approval and consent can reveal code
+      const reqCode = await resourceService.revealTOTPCode(resourceId, {
+        type: 'DISCORD_USER',
+        id: requesterId,
+        subjectId: requesterId,
+        authKind: 'DISCORD',
+        actorDiscordId: requesterId,
+      });
       assert.match(reqCode, /^\d{6}$/);
     });
   });

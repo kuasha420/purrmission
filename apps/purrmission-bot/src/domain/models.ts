@@ -97,38 +97,43 @@ export type ApprovalStatus = 'PENDING' | 'APPROVED' | 'DENIED' | 'EXPIRED';
  * An approval request for access to a protected resource.
  */
 export interface ApprovalRequest {
-  /** Unique identifier for the request */
   id: string;
-
-  /** The resource being requested */
   resourceId: string;
-
-  /** Current status of the request */
   status: ApprovalStatus;
-
-  /** Additional context provided with the request (e.g., reason, requester info) */
-  context: Record<string, unknown>;
-
-  /** Optional URL to call when the request is resolved */
+  context?: Record<string, unknown> | null; // Legacy metadata/telemetry compatibility
+  requesterId: string;
+  requesterType: string;
+  authKind: string;
+  action: string;
+  targetKey: string | null;
+  targetVersion: string;
+  policyVersion: string;
+  constraints: Record<string, unknown> | null;
   callbackUrl?: string;
-
-  /** ID of the Discord message showing the approval buttons */
   discordMessageId?: string;
-
-  /** ID of the Discord channel where the approval message was sent */
   discordChannelId?: string;
-
-  /** Timestamp when the request was created */
   createdAt: Date;
-
-  /** Timestamp when the request expires (null = no expiration) */
-  expiresAt: Date | null;
-
-  /** Discord user ID of the guardian who resolved the request */
+  expiresAt: Date;
   resolvedBy?: string;
-
-  /** Timestamp when the request was resolved */
   resolvedAt?: Date;
+}
+
+export interface ApprovalGrant {
+  id: string;
+  requestId: string;
+  resourceId: string;
+  requesterId: string;
+  requesterType: string;
+  authKind: string;
+  action: string;
+  targetKey: string | null;
+  targetVersion: string;
+  policyVersion: string;
+  constraints: Record<string, unknown> | null;
+  createdAt: Date;
+  expiresAt: Date;
+  consumedAt: Date | null;
+  revokedAt: Date | null;
 }
 
 /**
@@ -170,7 +175,15 @@ export type AddGuardianInput = Omit<Guardian, 'createdAt'>;
 /**
  * Input for creating a new approval request.
  */
-export type CreateApprovalRequestInput = Omit<ApprovalRequest, 'createdAt'>;
+export type CreateApprovalRequestInput = Omit<
+  ApprovalRequest,
+  'createdAt' | 'resolvedBy' | 'resolvedAt'
+>;
+
+export type CreateApprovalGrantInput = Omit<
+  ApprovalGrant,
+  'id' | 'createdAt' | 'consumedAt' | 'revokedAt'
+>;
 
 /**
  * Type of access being requested via approval flow.

@@ -26,6 +26,8 @@ import type {
   ResourceFieldMetadata,
   Credential,
   CreateCredentialInput,
+  ApprovalGrant,
+  CreateApprovalGrantInput,
 } from './models.js';
 import {
   ResourceRepository,
@@ -38,6 +40,7 @@ import {
   ProjectRepository,
   Repositories,
   CredentialRepository,
+  ApprovalGrantRepository,
 } from './repositories.js';
 import crypto from 'node:crypto';
 
@@ -216,16 +219,40 @@ export class InMemoryApprovalRequestRepository implements ApprovalRequestReposit
 
   async findActiveByRequester(
     resourceId: string,
-    requesterId: string
+    requesterId: string,
+    action: string,
+    targetKey: string | null
   ): Promise<ApprovalRequest | null> {
     const now = new Date();
     return (
       Array.from(this.requests.values()).find(
         (request) =>
           request.resourceId === resourceId &&
+          request.requesterId === requesterId &&
+          request.action === action &&
+          request.targetKey === targetKey &&
           ['PENDING', 'APPROVED'].includes(request.status) &&
-          (!request.expiresAt || request.expiresAt > now) &&
-          (request.context as Record<string, unknown>)['requesterId'] === requesterId
+          request.expiresAt > now
+      ) || null
+    );
+  }
+
+  async findPending(
+    resourceId: string,
+    requesterId: string,
+    action: string,
+    targetKey: string | null
+  ): Promise<ApprovalRequest | null> {
+    const now = new Date();
+    return (
+      Array.from(this.requests.values()).find(
+        (request) =>
+          request.resourceId === resourceId &&
+          request.requesterId === requesterId &&
+          request.action === action &&
+          request.targetKey === targetKey &&
+          request.status === 'PENDING' &&
+          request.expiresAt > now
       ) || null
     );
   }
@@ -234,7 +261,7 @@ export class InMemoryApprovalRequestRepository implements ApprovalRequestReposit
     const now = new Date();
     let count = 0;
     for (const request of this.requests.values()) {
-      if (request.status === 'PENDING' && request.expiresAt && request.expiresAt < now) {
+      if (request.status === 'PENDING' && request.expiresAt < now) {
         request.status = 'EXPIRED';
         count++;
       }
@@ -387,6 +414,26 @@ export class InMemoryTOTPRepository implements TOTPRepository {
 
   async findDelegationConsentById(id: string): Promise<TOTPDelegationConsent | null> {
     return this.delegationConsents.get(id) ?? null;
+  }
+
+  async findActiveDelegationConsent(
+    resourceId: string,
+    requesterId: string,
+    operation: string
+  ): Promise<TOTPDelegationConsent | null> {
+    const now = new Date();
+    for (const consent of this.delegationConsents.values()) {
+      if (
+        consent.resourceId === resourceId &&
+        consent.requesterId === requesterId &&
+        consent.operation === operation &&
+        consent.usedAt === null &&
+        consent.expiresAt > now
+      ) {
+        return consent;
+      }
+    }
+    return null;
   }
 
   async useDelegationConsent(id: string): Promise<void> {
@@ -866,6 +913,92 @@ export class InMemoryCredentialRepository implements CredentialRepository {
   }
 }
 
+export class InMemoryApprovalGrantRepository implements ApprovalGrantRepository {
+  private grants: Map<string, ApprovalGrant> = new Map();
+
+  async create(
+    input: CreateApprovalGrantInput,
+    _tx?: Prisma.TransactionClient
+  ): Promise<ApprovalGrant> {
+    const grant: ApprovalGrant = {
+      id: crypto.randomUUID(),
+      requestId: input.requestId,
+      resourceId: input.resourceId,
+      requesterId: input.requesterId,
+      requesterType: input.requesterType,
+      authKind: input.authKind,
+      action: input.action,
+      targetKey: input.targetKey,
+      targetVersion: input.targetVersion,
+      policyVersion: input.policyVersion,
+      constraints: input.constraints ?? null,
+      createdAt: new Date(),
+      expiresAt: input.expiresAt,
+      consumedAt: null,
+      revokedAt: null,
+    };
+    this.grants.set(grant.id, grant);
+    return grant;
+  }
+
+  async findById(id: string): Promise<ApprovalGrant | null> {
+    return this.grants.get(id) ?? null;
+  }
+
+  async findByRequestId(requestId: string): Promise<ApprovalGrant | null> {
+    for (const grant of this.grants.values()) {
+      if (grant.requestId === requestId) {
+        return grant;
+      }
+    }
+    return null;
+  }
+
+  async findActiveUnconsumed(
+    resourceId: string,
+    requesterId: string,
+    action: string,
+    targetKey: string | null
+  ): Promise<ApprovalGrant | null> {
+    const now = new Date();
+    for (const grant of this.grants.values()) {
+      if (
+        grant.resourceId === resourceId &&
+        grant.requesterId === requesterId &&
+        grant.action === action &&
+        grant.targetKey === targetKey &&
+        grant.consumedAt === null &&
+        grant.revokedAt === null &&
+        grant.expiresAt > now
+      ) {
+        return grant;
+      }
+    }
+    return null;
+  }
+
+  async consume(id: string, _tx?: Prisma.TransactionClient): Promise<boolean> {
+    const grant = this.grants.get(id);
+    if (
+      grant &&
+      grant.consumedAt === null &&
+      grant.revokedAt === null &&
+      grant.expiresAt > new Date()
+    ) {
+      grant.consumedAt = new Date();
+      return true;
+    }
+    return false;
+  }
+
+  async revoke(id: string, _tx?: Prisma.TransactionClient): Promise<void> {
+    const grant = this.grants.get(id);
+    if (grant) {
+      grant.revokedAt = new Date();
+    }
+  }
+}
+
 /**
  * Create in-memory repositories for tests.
  */
@@ -882,5 +1015,6 @@ export function createInMemoryRepositories(): Repositories {
     projects: new InMemoryProjectRepository(),
     outbox: new InMemoryOutboxRepository(),
     credentials: new InMemoryCredentialRepository(),
+    approvalGrants: new InMemoryApprovalGrantRepository(),
   };
 }

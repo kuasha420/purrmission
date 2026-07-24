@@ -179,6 +179,12 @@ export function createHttpServer(deps: HttpServerDeps): FastifyInstance {
       context: body.context,
       callbackUrl: body.callbackUrl,
       expiresInMs: body.expiresInMs,
+      requesterId: resource.id,
+      requesterType: 'SERVICE',
+      authKind: 'API_KEY',
+      action: 'resource.view',
+      targetVersion: resource.version,
+      policyVersion: resource.version,
     });
 
     if (!result.success) {
@@ -216,32 +222,48 @@ export function createHttpServer(deps: HttpServerDeps): FastifyInstance {
       status: approvalRequest.status,
       resourceId: resource.id,
       resourceName: resource.name,
-      expiresAt: approvalRequest.expiresAt?.toISOString() ?? null,
+      expiresAt: approvalRequest.expiresAt.toISOString(),
     });
   });
 
   // Get request status endpoint
-  server.get<{ Params: { id: string } }>('/api/requests/:id', async (request, reply) => {
-    const { id } = request.params;
+  server.get<{ Params: { id: string } }>(
+    '/api/requests/:id',
+    {
+      preHandler: [authenticate],
+    },
+    async (request, reply) => {
+      const { id } = request.params;
+      const userId = request.user.id;
 
-    const approvalRequest = await services.approval.getApprovalRequest(id);
-    if (!approvalRequest) {
-      return reply.status(404).send({
-        error: 'Request not found',
-      });
+      const approvalRequest = await services.approval.getApprovalRequest(id);
+      if (!approvalRequest) {
+        return reply.status(404).send({
+          error: 'Request not found',
+        });
+      }
+
+      // Exact-object authorization
+      const isRequester = approvalRequest.requesterId === userId;
+      const isGuardian = await services.resource.isGuardian(approvalRequest.resourceId, userId);
+
+      if (!isRequester && !isGuardian) {
+        throw new AccessDeniedError(
+          'Access denied: You do not have permission to view this request.'
+        );
+      }
+
+      return {
+        requestId: approvalRequest.id,
+        resourceId: approvalRequest.resourceId,
+        status: approvalRequest.status,
+        createdAt: approvalRequest.createdAt.toISOString(),
+        expiresAt: approvalRequest.expiresAt.toISOString(),
+        resolvedBy: approvalRequest.resolvedBy ?? null,
+        resolvedAt: approvalRequest.resolvedAt?.toISOString() ?? null,
+      };
     }
-
-    return {
-      requestId: approvalRequest.id,
-      resourceId: approvalRequest.resourceId,
-      status: approvalRequest.status,
-      context: approvalRequest.context,
-      createdAt: approvalRequest.createdAt.toISOString(),
-      expiresAt: approvalRequest.expiresAt?.toISOString() ?? null,
-      resolvedBy: approvalRequest.resolvedBy ?? null,
-      resolvedAt: approvalRequest.resolvedAt?.toISOString() ?? null,
-    };
-  });
+  );
 
   // Device Auth Flow: Initiate
   server.post('/api/auth/device/code', async (request, reply) => {
@@ -350,7 +372,7 @@ export function createHttpServer(deps: HttpServerDeps): FastifyInstance {
   });
 
   // Authentication Hook
-  const authenticate = async (req: FastifyRequest, _rep: FastifyReply) => {
+  async function authenticate(req: FastifyRequest, _rep: FastifyReply) {
     const authHeader = req.headers.authorization;
     if (!authHeader || !authHeader.startsWith('Bearer ')) {
       throw new AccessDeniedError('Missing Bearer token');
@@ -363,7 +385,7 @@ export function createHttpServer(deps: HttpServerDeps): FastifyInstance {
     // Attach user and principal to request
     req.user = { id: principal.subjectId || (principal as any).userId };
     (req as any).principal = principal;
-  };
+  }
 
   // Authorization Hook: Verify Guardian/Owner Access
   const verifyIsGuardian = async (req: FastifyRequest<{ Params: { id: string } }>) => {
@@ -413,7 +435,9 @@ export function createHttpServer(deps: HttpServerDeps): FastifyInstance {
     }
 
     // Default handler
-    logger.error('Unhandled API error', { error });
+    logger.error('Unhandled API error', {
+      error: err instanceof Error ? { message: err.message, stack: err.stack } : err,
+    });
     return reply.status(500).send({ error: 'internal_server_error' });
   });
   server.post(
@@ -561,16 +585,30 @@ export function createHttpServer(deps: HttpServerDeps): FastifyInstance {
         return { secrets: fieldsToSecrets(fields) };
       }
 
+      // Fetch the current resource version for V2 state tracking
+      let targetVersion = 'v1';
+      if (typeof services.resource.getResource === 'function') {
+        const resourceObj = await services.resource.getResource(resourceId);
+        targetVersion = resourceObj?.version || 'v1';
+      }
+
       // Non-owner/non-guardian: Check for active approval or create one
       let approval: ApprovalRequest | null = await services.approval.findActiveApproval(
         resourceId,
-        userId
+        userId,
+        'secrets.read'
       );
 
       if (!approval) {
         // Create a new approval request
         const result = await services.approval.createApprovalRequest({
           resourceId,
+          requesterId: userId,
+          requesterType: (req as any).principal?.type || 'DISCORD_USER',
+          authKind: (req as any).principal?.authKind || 'DISCORD',
+          action: 'secrets.read',
+          targetVersion,
+          policyVersion: targetVersion,
           context: {
             requesterId: userId,
             type: 'SECRET_ACCESS',
@@ -609,6 +647,53 @@ export function createHttpServer(deps: HttpServerDeps): FastifyInstance {
       }
 
       if (approval.status === 'APPROVED') {
+        // Find active unconsumed grant
+        let activeGrant = null;
+        if (typeof services.approval.findActiveUnconsumedGrant === 'function') {
+          activeGrant = await services.approval.findActiveUnconsumedGrant(
+            resourceId,
+            userId,
+            'secrets.read',
+            null
+          );
+        }
+
+        if (activeGrant) {
+          // Atomically consume the grant
+          const prisma = getPrismaClient();
+          try {
+            await prisma.$transaction(async (tx) => {
+              await services.approval.consumeGrant(
+                activeGrant.id,
+                (req as any).principal || {
+                  type: 'DISCORD_USER',
+                  id: userId,
+                  authKind: 'DISCORD',
+                  actorDiscordId: userId,
+                },
+                'secrets.read',
+                targetVersion,
+                targetVersion,
+                tx
+              );
+            });
+          } catch (consumeErr) {
+            logger.error('Failed to consume approval grant for secrets access', {
+              resourceId,
+              userId,
+              error: consumeErr instanceof Error ? consumeErr.message : String(consumeErr),
+            });
+            throw consumeErr;
+          }
+        } else {
+          const hasGrantRepo = !!(services.approval as any).deps?.repositories?.approvalGrants;
+          if (hasGrantRepo) {
+            throw new AccessDeniedError(
+              'Access denied: No active unconsumed approval grant found. Please request approval again.'
+            );
+          }
+        }
+
         const fields = await services.resource.listFields(resourceId);
         return { secrets: fieldsToSecrets(fields) };
       }

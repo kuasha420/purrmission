@@ -79,13 +79,21 @@ model Guardian {
 }
 
 model ApprovalRequest {
-  id          String                @id @default(uuid())
-  resourceId  String
-  status      ApprovalRequestStatus @default(PENDING)
-  context     Json
-  callbackUrl String? // nullable
+  id               String                @id @default(uuid())
+  resourceId       String
+  status           ApprovalRequestStatus @default(PENDING)
+  context          Json?                 // Nullable legacy context
+  requesterId      String                @default("legacy")
+  requesterType    String                @default("DISCORD_USER")
+  authKind         String                @default("DISCORD")
+  action           String                @default("resource.view")
+  targetKey        String?
+  targetVersion    String                @default("legacy")
+  policyVersion    String                @default("legacy")
+  constraints      String?               // JSON serialized constraints
+  callbackUrl      String?               // nullable
   createdAt        DateTime              @default(now())
-  expiresAt        DateTime?
+  expiresAt        DateTime              @default(now())
   resolvedBy       String?
   resolvedAt       DateTime?
   discordMessageId String?
@@ -95,6 +103,29 @@ model ApprovalRequest {
 
   @@index([resourceId])
   @@index([status])
+  @@index([requesterId])
+}
+
+model ApprovalGrant {
+  id            String    @id @default(uuid())
+  requestId     String    @unique
+  resourceId    String
+  requesterId   String
+  requesterType String
+  authKind      String
+  action        String
+  targetKey     String?
+  targetVersion String
+  policyVersion String
+  constraints   String?
+  createdAt     DateTime  @default(now())
+  expiresAt     DateTime
+  consumedAt    DateTime?
+  revokedAt     DateTime?
+
+  @@index([resourceId])
+  @@index([requesterId])
+  @@index([expiresAt])
 }
 
 model TOTPAccount {

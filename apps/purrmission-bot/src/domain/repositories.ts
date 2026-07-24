@@ -19,6 +19,8 @@ import type {
   ApprovalMode,
   ApprovalRequest,
   ApprovalStatus,
+  ApprovalGrant,
+  CreateApprovalGrantInput,
   AuditLog,
   AuthSession,
   AuthSessionStatus,
@@ -137,15 +139,49 @@ export interface ApprovalRequestRepository {
   findByResourceId(resourceId: string): Promise<ApprovalRequest[]>;
 
   /**
-   * Find an active approval request by resource and requester.
+   * Find an active approval request by resource, requester, action and targetKey.
    */
-  findActiveByRequester(resourceId: string, requesterId: string): Promise<ApprovalRequest | null>;
+  findActiveByRequester(
+    resourceId: string,
+    requesterId: string,
+    action: string,
+    targetKey: string | null
+  ): Promise<ApprovalRequest | null>;
+
+  /**
+   * Find a pending request by resource, requester, action, and targetKey.
+   */
+  findPending(
+    resourceId: string,
+    requesterId: string,
+    action: string,
+    targetKey: string | null
+  ): Promise<ApprovalRequest | null>;
 
   /**
    * Mark all pending requests that have passed their expiresAt time as EXPIRED.
    * @returns The number of requests updated.
    */
   expireRequests(tx?: Prisma.TransactionClient): Promise<number>;
+}
+
+export interface ApprovalGrantRepository {
+  create(input: CreateApprovalGrantInput, tx?: Prisma.TransactionClient): Promise<ApprovalGrant>;
+
+  findById(id: string): Promise<ApprovalGrant | null>;
+
+  findByRequestId(requestId: string): Promise<ApprovalGrant | null>;
+
+  findActiveUnconsumed(
+    resourceId: string,
+    requesterId: string,
+    action: string,
+    targetKey: string | null
+  ): Promise<ApprovalGrant | null>;
+
+  consume(id: string, tx?: Prisma.TransactionClient): Promise<boolean>;
+
+  revoke(id: string, tx?: Prisma.TransactionClient): Promise<void>;
 }
 
 /**
@@ -175,6 +211,11 @@ export interface TOTPRepository {
     tx?: Prisma.TransactionClient
   ): Promise<TOTPDelegationConsent>;
   findDelegationConsentById(id: string): Promise<TOTPDelegationConsent | null>;
+  findActiveDelegationConsent(
+    resourceId: string,
+    requesterId: string,
+    operation: string
+  ): Promise<TOTPDelegationConsent | null>;
   useDelegationConsent(id: string, tx?: Prisma.TransactionClient): Promise<void>;
 }
 
@@ -621,6 +662,27 @@ export class PrismaTOTPRepository implements TOTPRepository {
     };
   }
 
+  async findActiveDelegationConsent(
+    resourceId: string,
+    requesterId: string,
+    operation: string
+  ): Promise<TOTPDelegationConsent | null> {
+    const now = new Date();
+    const found = await this.prisma.tOTPDelegationConsent.findFirst({
+      where: {
+        resourceId,
+        requesterId,
+        operation,
+        usedAt: null,
+        expiresAt: { gt: now },
+      },
+      orderBy: {
+        createdAt: 'desc',
+      },
+    });
+    return found ? this.mapDelegationConsent(found) : null;
+  }
+
   async useDelegationConsent(id: string, tx?: Prisma.TransactionClient): Promise<void> {
     const client = tx || this.prisma;
     await client.tOTPDelegationConsent.update({
@@ -839,6 +901,7 @@ export interface Repositories {
   projects: ProjectRepository;
   outbox: OutboxRepository;
   credentials: CredentialRepository;
+  approvalGrants: ApprovalGrantRepository;
 }
 
 /**
@@ -1136,7 +1199,15 @@ export class PrismaApprovalRequestRepository implements ApprovalRequestRepositor
         id: input.id,
         resourceId: input.resourceId,
         status: input.status,
-        context: input.context as Prisma.InputJsonValue,
+        context: input.context ? (input.context as Prisma.InputJsonValue) : null,
+        requesterId: input.requesterId,
+        requesterType: input.requesterType,
+        authKind: input.authKind,
+        action: input.action,
+        targetKey: input.targetKey,
+        targetVersion: input.targetVersion,
+        policyVersion: input.policyVersion,
+        constraints: input.constraints ? JSON.stringify(input.constraints) : null,
         callbackUrl: input.callbackUrl,
         expiresAt: input.expiresAt,
         discordMessageId: input.discordMessageId,
@@ -1193,32 +1264,48 @@ export class PrismaApprovalRequestRepository implements ApprovalRequestRepositor
 
   async findActiveByRequester(
     resourceId: string,
-    requesterId: string
+    requesterId: string,
+    action: string,
+    targetKey: string | null
   ): Promise<ApprovalRequest | null> {
     const now = new Date();
-    const rows = await this.prisma.approvalRequest.findMany({
+    const row = await this.prisma.approvalRequest.findFirst({
       where: {
         resourceId,
+        requesterId,
+        action,
+        targetKey,
         status: { in: ['PENDING', 'APPROVED'] },
-        OR: [{ expiresAt: null }, { expiresAt: { gt: now } }],
+        expiresAt: { gt: now },
       },
       orderBy: {
         createdAt: 'desc',
       },
     });
+    return row ? this.mapPrismaToDomain(row) : null;
+  }
 
-    // NOTE: In-memory filtering is used here as a workaround for Prisma's SQLite provider,
-    // which has limitations with JSON path queries. This may have performance implications
-    // for resources with a very large number of approval requests.
-    const match = rows.find((row) => {
-      const ctx = row.context;
-      if (ctx && typeof ctx === 'object' && !Array.isArray(ctx)) {
-        return (ctx as Record<string, unknown>)['requesterId'] === requesterId;
-      }
-      return false;
+  async findPending(
+    resourceId: string,
+    requesterId: string,
+    action: string,
+    targetKey: string | null
+  ): Promise<ApprovalRequest | null> {
+    const now = new Date();
+    const row = await this.prisma.approvalRequest.findFirst({
+      where: {
+        resourceId,
+        requesterId,
+        action,
+        targetKey,
+        status: 'PENDING',
+        expiresAt: { gt: now },
+      },
+      orderBy: {
+        createdAt: 'desc',
+      },
     });
-
-    return match ? this.mapPrismaToDomain(match) : null;
+    return row ? this.mapPrismaToDomain(row) : null;
   }
 
   async expireRequests(tx?: Prisma.TransactionClient): Promise<number> {
@@ -1236,24 +1323,20 @@ export class PrismaApprovalRequestRepository implements ApprovalRequestRepositor
     return result.count;
   }
 
-  private mapPrismaToDomain(row: {
-    id: string;
-    resourceId: string;
-    status: string;
-    context: unknown;
-    callbackUrl: string | null;
-    createdAt: Date;
-    expiresAt: Date | null;
-    resolvedBy: string | null;
-    resolvedAt: Date | null;
-    discordMessageId: string | null;
-    discordChannelId: string | null;
-  }): ApprovalRequest {
+  private mapPrismaToDomain(row: any): ApprovalRequest {
     return {
       id: row.id,
       resourceId: row.resourceId,
       status: row.status as ApprovalStatus,
-      context: (row.context as Record<string, unknown>) ?? {},
+      context: row.context as Record<string, unknown> | null,
+      requesterId: row.requesterId,
+      requesterType: row.requesterType,
+      authKind: row.authKind,
+      action: row.action,
+      targetKey: row.targetKey,
+      targetVersion: row.targetVersion,
+      policyVersion: row.policyVersion,
+      constraints: row.constraints ? JSON.parse(row.constraints) : null,
       callbackUrl: row.callbackUrl ?? undefined,
       createdAt: row.createdAt,
       expiresAt: row.expiresAt,
@@ -1261,6 +1344,111 @@ export class PrismaApprovalRequestRepository implements ApprovalRequestRepositor
       resolvedAt: row.resolvedAt ?? undefined,
       discordMessageId: row.discordMessageId ?? undefined,
       discordChannelId: row.discordChannelId ?? undefined,
+    };
+  }
+}
+
+export class PrismaApprovalGrantRepository implements ApprovalGrantRepository {
+  constructor(private readonly prisma: PrismaClient) {}
+
+  async create(
+    input: CreateApprovalGrantInput,
+    tx?: Prisma.TransactionClient
+  ): Promise<ApprovalGrant> {
+    const client = tx || this.prisma;
+    const row = await client.approvalGrant.create({
+      data: {
+        requestId: input.requestId,
+        resourceId: input.resourceId,
+        requesterId: input.requesterId,
+        requesterType: input.requesterType,
+        authKind: input.authKind,
+        action: input.action,
+        targetKey: input.targetKey,
+        targetVersion: input.targetVersion,
+        policyVersion: input.policyVersion,
+        constraints: input.constraints ? JSON.stringify(input.constraints) : null,
+        expiresAt: input.expiresAt,
+      },
+    });
+    return this.mapRow(row);
+  }
+
+  async findById(id: string): Promise<ApprovalGrant | null> {
+    const row = await this.prisma.approvalGrant.findUnique({ where: { id } });
+    return row ? this.mapRow(row) : null;
+  }
+
+  async findByRequestId(requestId: string): Promise<ApprovalGrant | null> {
+    const row = await this.prisma.approvalGrant.findUnique({ where: { requestId } });
+    return row ? this.mapRow(row) : null;
+  }
+
+  async findActiveUnconsumed(
+    resourceId: string,
+    requesterId: string,
+    action: string,
+    targetKey: string | null
+  ): Promise<ApprovalGrant | null> {
+    const now = new Date();
+    const row = await this.prisma.approvalGrant.findFirst({
+      where: {
+        resourceId,
+        requesterId,
+        action,
+        targetKey,
+        consumedAt: null,
+        revokedAt: null,
+        expiresAt: { gt: now },
+      },
+      orderBy: {
+        createdAt: 'desc',
+      },
+    });
+    return row ? this.mapRow(row) : null;
+  }
+
+  async consume(id: string, tx?: Prisma.TransactionClient): Promise<boolean> {
+    const client = tx || this.prisma;
+    const result = await client.approvalGrant.updateMany({
+      where: {
+        id,
+        consumedAt: null,
+        revokedAt: null,
+        expiresAt: { gt: new Date() },
+      },
+      data: {
+        consumedAt: new Date(),
+      },
+    });
+    return result.count === 1;
+  }
+
+  async revoke(id: string, tx?: Prisma.TransactionClient): Promise<void> {
+    const client = tx || this.prisma;
+    await client.approvalGrant.update({
+      where: { id },
+      data: { revokedAt: new Date() },
+    });
+  }
+
+  private mapRow(row: any): ApprovalGrant {
+    return {
+      id: row.id,
+      requestId: row.requestId,
+      resourceId: row.resourceId,
+      requesterId: row.requesterId,
+      requesterType: row.requesterType,
+      authKind: row.authKind,
+      action: row.action,
+      targetKey: row.targetKey,
+      targetVersion: row.targetVersion,
+      policyVersion: row.policyVersion,
+      constraints: row.constraints ? JSON.parse(row.constraints) : null,
+      createdAt: row.createdAt,
+      expiresAt: row.expiresAt,
+      consumedAt: row.consumedAt,
+      revokedAt: row.revokedAt,
     };
   }
 }

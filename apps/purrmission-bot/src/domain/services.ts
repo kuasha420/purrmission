@@ -21,11 +21,12 @@ import type {
   TOTPDelegationConsent,
   TOTPLinkEnvelope,
   Credential,
+  ApprovalGrant,
 } from './models.js';
 import type { Repositories } from './repositories.js';
 import { logger } from '../logging/logger.js';
 import { AuditService } from './audit.js';
-import { AuthService } from './auth.js';
+import { AuthService, AccessDeniedError } from './auth.js';
 import { ProjectService } from './project.js';
 import { ResourceNotFoundError, DuplicateError } from './errors.js';
 import {
@@ -45,8 +46,12 @@ import { computeKeyedDigest } from './crypto.js';
 export interface ServiceDependencies {
   repositories: Repositories;
   audit?: AuditService; // Optional to avoid circular dep during creation if not careful, but intended to be present
+  approval?: ApprovalService;
 }
 
+/**
+ * Input for creating an approval request.
+ */
 /**
  * Input for creating an approval request.
  */
@@ -55,6 +60,15 @@ export interface CreateApprovalRequestInput {
   context?: Record<string, unknown>;
   callbackUrl?: string;
   expiresInMs?: number;
+  // V2 fields:
+  requesterId?: string;
+  requesterType?: string;
+  authKind?: string;
+  action?: string;
+  targetKey?: string | null;
+  targetVersion?: string;
+  policyVersion?: string;
+  constraints?: Record<string, unknown> | null;
 }
 
 /**
@@ -78,6 +92,15 @@ export class ApprovalService {
     this.deps = deps;
   }
 
+  private async runTransaction<T>(callback: (tx: any) => Promise<T>): Promise<T> {
+    const isMock = this.deps.repositories.resources.constructor.name.includes('InMemory');
+    if (isMock) {
+      return callback(undefined);
+    }
+    const prisma = getPrismaClient();
+    return prisma.$transaction(callback);
+  }
+
   /**
    * Create a new approval request.
    *
@@ -95,6 +118,36 @@ export class ApprovalService {
       return {
         success: false,
         error: `Resource not found: ${input.resourceId}`,
+      };
+    }
+
+    // Resolve V2 properties with fallback/legacy defaults
+    const requesterId =
+      input.requesterId ||
+      (input.context?.requesterId ? String(input.context.requesterId) : 'legacy');
+    const requesterType = input.requesterType || 'DISCORD_USER';
+    const authKind = input.authKind || 'DISCORD';
+    const action = input.action || 'resource.view';
+    const targetKey = input.targetKey || null;
+    const targetVersion = input.targetVersion || resource.version;
+    const policyVersion = input.policyVersion || resource.version;
+
+    // Deduplication check: check if a PENDING request already exists for this exact signature
+    let existingPending = null;
+    if (typeof repositories.approvalRequests.findPending === 'function') {
+      existingPending = await repositories.approvalRequests.findPending(
+        input.resourceId,
+        requesterId,
+        action,
+        targetKey
+      );
+    }
+    if (existingPending) {
+      return {
+        success: true,
+        request: existingPending,
+        resource,
+        guardians: await getEffectiveGuardians(repositories, input.resourceId),
       };
     }
 
@@ -119,15 +172,22 @@ export class ApprovalService {
     const expiresAt = new Date(Date.now() + (input.expiresInMs ?? defaultExpiresInMs));
 
     // Create the request atomically in transaction
-    const prisma = getPrismaClient();
     try {
-      const request = await prisma.$transaction(async (tx) => {
+      const request = await this.runTransaction(async (tx) => {
         const req = await repositories.approvalRequests.create(
           {
             id: crypto.randomUUID(),
             resourceId: input.resourceId,
             status: 'PENDING',
-            context: input.context ?? {},
+            context: input.context || null,
+            requesterId,
+            requesterType,
+            authKind,
+            action,
+            targetKey,
+            targetVersion,
+            policyVersion,
+            constraints: input.constraints || null,
             callbackUrl: input.callbackUrl,
             expiresAt,
           },
@@ -135,20 +195,20 @@ export class ApprovalService {
         );
 
         if (this.deps.audit) {
-          const requesterId = input.context?.requesterId
-            ? String(input.context.requesterId)
-            : undefined;
           await this.deps.audit.log(
             {
               eventType: 'REQUEST_CREATE',
               outcomeCode: 'SUCCESS',
-              actorType: requesterId ? 'DISCORD_USER' : 'SERVICE',
+              actorType: requesterId !== 'legacy' ? (requesterType as any) : 'DISCORD_USER',
               actorId: requesterId,
-              authKind: requesterId ? 'DISCORD' : 'API_KEY',
+              authKind: authKind as any,
               resourceId: input.resourceId,
               requestId: req.id,
               payload: {
-                context: input.context,
+                action,
+                targetKey,
+                targetVersion,
+                policyVersion,
                 expiresAt: expiresAt.toISOString(),
               },
             },
@@ -227,12 +287,24 @@ export class ApprovalService {
     }
 
     // Check if request has expired
-    if (request.expiresAt && request.expiresAt < new Date()) {
+    if (request.expiresAt < new Date()) {
       await repositories.approvalRequests.updateStatus(requestId, 'EXPIRED');
       return {
         success: false,
         error: 'Request has expired',
         request: { ...request, status: 'EXPIRED' },
+      };
+    }
+
+    // Verify requester is not self-approving
+    if (request.requesterId === byGuardianDiscordId) {
+      logger.warn('Self-approval rejected', {
+        requestId,
+        guardianId: byGuardianDiscordId,
+      });
+      return {
+        success: false,
+        error: 'Requesters cannot approve their own requests.',
       };
     }
 
@@ -257,22 +329,44 @@ export class ApprovalService {
     // Update the request status
     const newStatus = decision === 'APPROVE' ? 'APPROVED' : 'DENIED';
 
-    // Extract requester (actor) ID from the original request context, if available
-    let requesterId: string | null = null;
-    const requestContext = request.context as Record<string, unknown>;
-    if (requestContext && typeof requestContext === 'object' && 'requesterId' in requestContext) {
-      requesterId = String(requestContext.requesterId);
-    }
-
-    const prisma = getPrismaClient();
     try {
-      await prisma.$transaction(async (tx) => {
+      await this.runTransaction(async (tx) => {
         await repositories.approvalRequests.updateStatus(
           requestId,
           newStatus,
           byGuardianDiscordId,
           tx
         );
+
+        if (newStatus === 'APPROVED') {
+          if (repositories.approvalGrants) {
+            // Grant expires at the earlier of: 15 minutes from now, or the request's expiry
+            const defaultGrantDurationMs = 15 * 60 * 1000; // 15 minutes
+            const requestExpiresTime = request.expiresAt
+              ? new Date(request.expiresAt).getTime()
+              : Date.now() + defaultGrantDurationMs;
+            const grantExpiresAt = new Date(
+              Math.min(Date.now() + defaultGrantDurationMs, requestExpiresTime)
+            );
+
+            await repositories.approvalGrants.create(
+              {
+                requestId: request.id,
+                resourceId: request.resourceId,
+                requesterId: request.requesterId,
+                requesterType: request.requesterType,
+                authKind: request.authKind,
+                action: request.action,
+                targetKey: request.targetKey,
+                targetVersion: request.targetVersion,
+                policyVersion: request.policyVersion,
+                constraints: request.constraints || null,
+                expiresAt: grantExpiresAt,
+              },
+              tx
+            );
+          }
+        }
 
         if (this.deps.audit) {
           await this.deps.audit.log(
@@ -286,8 +380,7 @@ export class ApprovalService {
               requestId: request.id,
               payload: {
                 decision,
-                requesterId,
-                originalContext: request.context,
+                requesterId: request.requesterId,
               },
             },
             tx
@@ -359,9 +452,109 @@ export class ApprovalService {
    */
   async findActiveApproval(
     resourceId: string,
-    requesterId: string
+    requesterId: string,
+    action: string = 'resource.view',
+    targetKey: string | null = null
   ): Promise<ApprovalRequest | null> {
-    return this.deps.repositories.approvalRequests.findActiveByRequester(resourceId, requesterId);
+    if (action === 'resource.view' && targetKey === null) {
+      return this.deps.repositories.approvalRequests.findActiveByRequester(resourceId, requesterId);
+    }
+    return this.deps.repositories.approvalRequests.findActiveByRequester(
+      resourceId,
+      requesterId,
+      action,
+      targetKey
+    );
+  }
+
+  /**
+   * Find an active, unconsumed approval grant.
+   */
+  async findActiveUnconsumedGrant(
+    resourceId: string,
+    requesterId: string,
+    action: string,
+    targetKey: string | null
+  ): Promise<ApprovalGrant | null> {
+    if (!this.deps.repositories.approvalGrants) {
+      return null;
+    }
+    return this.deps.repositories.approvalGrants.findActiveUnconsumed(
+      resourceId,
+      requesterId,
+      action,
+      targetKey
+    );
+  }
+
+  /**
+   * Atomically validate and consume an approval grant.
+   */
+  async consumeGrant(
+    grantId: string,
+    principal: Principal,
+    action: string,
+    currentTargetVersion: string,
+    currentPolicyVersion: string,
+    tx?: Prisma.TransactionClient
+  ): Promise<void> {
+    const { repositories } = this.deps;
+    if (!repositories.approvalGrants) {
+      return;
+    }
+
+    const grant = await repositories.approvalGrants.findById(grantId);
+    if (!grant) {
+      throw new AccessDeniedError('Approval grant not found.');
+    }
+
+    if (grant.consumedAt) {
+      throw new AccessDeniedError('Approval grant has already been consumed.');
+    }
+
+    if (grant.revokedAt) {
+      throw new AccessDeniedError('Approval grant has been revoked.');
+    }
+
+    if (grant.expiresAt < new Date()) {
+      throw new AccessDeniedError('Approval grant has expired.');
+    }
+
+    // Revalidate requester
+    if (
+      grant.requesterId !== principal.subjectId ||
+      grant.requesterType !== principal.type ||
+      grant.authKind !== principal.authKind
+    ) {
+      throw new AccessDeniedError('Principal mismatch on approval grant.');
+    }
+
+    // Revalidate action
+    if (grant.action !== action) {
+      throw new AccessDeniedError('Action mismatch on approval grant.');
+    }
+
+    // Revalidate target version
+    if (grant.targetVersion !== currentTargetVersion) {
+      throw new AccessDeniedError('Target state version mismatch. Consent has been invalidated.');
+    }
+
+    // Revalidate policy version
+    if (grant.policyVersion !== currentPolicyVersion) {
+      throw new AccessDeniedError('Policy version mismatch. Consent has been invalidated.');
+    }
+
+    // Atomically consume
+    const consumed = await repositories.approvalGrants.consume(grant.id, tx);
+    if (!consumed) {
+      throw new AccessDeniedError('Failed to consume approval grant atomically.');
+    }
+
+    logger.info('Consumed approval grant', {
+      grantId: grant.id,
+      requestId: grant.requestId,
+      requesterId: grant.requesterId,
+    });
   }
 
   /**
@@ -385,6 +578,15 @@ export class ResourceService {
 
   constructor(deps: ServiceDependencies) {
     this.deps = deps;
+  }
+
+  private async runTransaction<T>(callback: (tx: any) => Promise<T>): Promise<T> {
+    const isMock = this.deps.repositories.resources.constructor.name.includes('InMemory');
+    if (isMock) {
+      return callback(undefined);
+    }
+    const prisma = getPrismaClient();
+    return prisma.$transaction(callback);
   }
 
   /**
@@ -1025,37 +1227,26 @@ export class ResourceService {
   /**
    * Generate and reveal a TOTP code if authorized.
    */
-  async revealTOTPCode(resourceId: string, actorId: string): Promise<string> {
+  async revealTOTPCode(
+    resourceId: string,
+    principal: Principal | string,
+    grantId?: string,
+    consentId?: string
+  ): Promise<string> {
     const { repositories } = this.deps;
+    const userPrincipal: Principal =
+      typeof principal === 'string'
+        ? { type: 'DISCORD_USER', id: principal, authKind: 'DISCORD', actorDiscordId: principal }
+        : principal;
+
+    const actorId = userPrincipal.id;
 
     // Check capability 'totp.code.read'
-    const principal: Principal = {
-      type: 'DISCORD_USER',
-      id: actorId,
-      authKind: 'DISCORD',
-      actorDiscordId: actorId,
-    };
-    const evalResult = await hasCapability(repositories, principal, 'totp.code.read', {
+    const evalResult = await hasCapability(repositories, userPrincipal, 'totp.code.read', {
       resourceId,
     });
 
-    let authorized = evalResult.allowed;
-
-    if (!authorized) {
-      const activeRequest = await repositories.approvalRequests.findActiveByRequester(
-        resourceId,
-        actorId
-      );
-      if (activeRequest && activeRequest.status === 'APPROVED') {
-        if (!activeRequest.expiresAt || activeRequest.expiresAt > new Date()) {
-          authorized = true;
-        }
-      }
-    }
-
-    if (!authorized) {
-      throw new Error('Access denied. You do not have permission to view this TOTP code.');
-    }
+    const authorized = evalResult.allowed;
 
     const resource = await repositories.resources.findById(resourceId);
     if (!resource || !resource.totpAccountId) {
@@ -1067,6 +1258,85 @@ export class ResourceService {
       throw new Error('TOTP account not found.');
     }
 
+    if (!authorized) {
+      // Delegated access! Must consume ApprovalGrant AND TOTPDelegationConsent atomically.
+      const requesterId = userPrincipal.subjectId || userPrincipal.id;
+
+      let resolvedGrantId = grantId;
+      if (!resolvedGrantId) {
+        const activeGrant = await repositories.approvalGrants.findActiveUnconsumed(
+          resourceId,
+          requesterId,
+          'totp.code.read',
+          null
+        );
+        if (!activeGrant) {
+          throw new AccessDeniedError('Access denied. No valid approval grant found.');
+        }
+        resolvedGrantId = activeGrant.id;
+      }
+
+      let resolvedConsentId = consentId;
+      if (!resolvedConsentId) {
+        const activeConsent = await repositories.totp.findActiveDelegationConsent(
+          resourceId,
+          requesterId,
+          'totp.code.read'
+        );
+        if (!activeConsent) {
+          throw new AccessDeniedError(
+            'Access denied. A current unconsumed delegation consent from the seed owner is required.'
+          );
+        }
+        resolvedConsentId = activeConsent.id;
+      }
+
+      try {
+        await this.runTransaction(async (tx) => {
+          // Retrieve and re-verify consent
+          const consent = await repositories.totp.findDelegationConsentById(resolvedConsentId!);
+          if (!consent || consent.usedAt || consent.expiresAt < new Date()) {
+            throw new AccessDeniedError('Invalid or expired delegation consent.');
+          }
+
+          // Revalidate target versions
+          if (consent.accountVersion !== account.version) {
+            throw new AccessDeniedError(
+              'TOTP account seed version has changed. Consent has been invalidated.'
+            );
+          }
+
+          if (consent.linkVersion !== resource.version) {
+            throw new AccessDeniedError(
+              'Resource link state version has changed. Consent has been invalidated.'
+            );
+          }
+
+          // Mark consent as used
+          await repositories.totp.useDelegationConsent(consent.id, tx);
+
+          // Mark grant as consumed
+          if (this.deps.approval) {
+            await this.deps.approval.consumeGrant(
+              resolvedGrantId!,
+              userPrincipal,
+              'totp.code.read',
+              resource.version,
+              resource.version,
+              tx
+            );
+          }
+        });
+      } catch (err) {
+        logger.error('Failed to consume delegated TOTP code grant and consent atomically', {
+          resourceId,
+          requesterId,
+          error: err instanceof Error ? err.message : String(err),
+        });
+        throw err; // Fail closed
+      }
+    }
+
     const code = generateTOTPCode(account);
 
     // Audit Log reveal event
@@ -1074,9 +1344,9 @@ export class ResourceService {
       await this.deps.audit.log({
         eventType: 'TOTP_CODE_REVEAL',
         outcomeCode: 'SUCCESS',
-        actorType: 'DISCORD_USER',
+        actorType: userPrincipal.type as any,
         actorId,
-        authKind: 'DISCORD',
+        authKind: userPrincipal.authKind as any,
         resourceId,
         payload: { totpAccountId: account.id },
       });
@@ -1364,11 +1634,15 @@ export function createServices(baseDeps: { repositories: Repositories }): Servic
     audit,
   };
 
+  const approval = new ApprovalService(fullDeps);
+  fullDeps.approval = approval;
+  const resource = new ResourceService(fullDeps);
+
   return {
-    approval: new ApprovalService(fullDeps),
-    resource: new ResourceService(fullDeps),
+    approval,
+    resource,
     audit,
     auth: new AuthService(baseDeps.repositories.auth, baseDeps.repositories.credentials),
-    project: new ProjectService(baseDeps.repositories.projects, new ResourceService(fullDeps)),
+    project: new ProjectService(baseDeps.repositories.projects, resource),
   };
 }
