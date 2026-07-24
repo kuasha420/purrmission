@@ -13,9 +13,8 @@ import {
   ButtonStyle,
 } from 'discord.js';
 import type { Services } from '../../domain/services.js';
-import type { ApprovalDecision, AccessRequestContext } from '../../domain/models.js';
+import type { ApprovalDecision, AccessRequestContext, Principal } from '../../domain/models.js';
 import type { Repositories } from '../../domain/repositories.js';
-import type { Principal } from '../../domain/policy.js';
 import { generateTOTPCode } from '../../domain/totp.js';
 import { logger } from '../../logging/logger.js';
 

@@ -1,8 +1,7 @@
 import { ChatInputCommandInteraction, Colors } from 'discord.js';
 import type { Services } from '../../domain/services.js';
 import { logger } from '../../logging/logger.js';
-import type { ApprovalDecision, ApprovalRequest } from '../../domain/models.js';
-import type { Principal } from '../../domain/policy.js';
+import type { ApprovalDecision, ApprovalRequest, Principal } from '../../domain/models.js';
 
 /**
  * Handle approval/denial decision commands.

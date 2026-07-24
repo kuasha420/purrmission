@@ -89,7 +89,7 @@ describe('System API E2E Tests', () => {
     },
     ports: {
       getSecrets: async (principal: any, projectId: string, envId: string, grantId?: string) => {
-        const userId = principal.id;
+        const userId = principal.subjectId ?? principal.id;
         const project = await mockGetProject.fn(projectId);
         if (!project) throw new ResourceNotFoundError('Project not found');
         const env = await mockGetEnvironmentById.fn(projectId, envId);
@@ -127,7 +127,7 @@ describe('System API E2E Tests', () => {
       createApprovalRequest: async (principal: any, resourceId: string, action: string) => {
         const result = await mockCreateApprovalRequest.fn({
           resourceId,
-          requesterId: principal.id,
+          requesterId: principal.subjectId ?? principal.id,
           requesterType: principal.type,
           authKind: principal.authKind,
           action,

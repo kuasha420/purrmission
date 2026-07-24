@@ -16,6 +16,7 @@ import {
   SlowDownError,
 } from '../domain/auth.js';
 import { ResourceNotFoundError } from '../domain/errors.js';
+import type { Principal } from '../domain/models.js';
 import type { Services } from '../domain/services.js';
 import { logger } from '../logging/logger.js';
 import crypto from 'node:crypto';
@@ -80,6 +81,17 @@ function redactBody(body: unknown): unknown {
  */
 export function createHttpServer(deps: HttpServerDeps): FastifyInstance {
   const { services, discordClient } = deps;
+
+  function extractPrincipal(req: FastifyRequest, userId: string): Principal {
+    const raw = (req as any).principal;
+    return {
+      type: raw?.type || 'DISCORD_USER',
+      id: raw?.id || raw?.subjectId || raw?.userId || userId,
+      subjectId: raw?.subjectId || raw?.userId || raw?.id || userId,
+      authKind: raw?.authKind || 'DISCORD',
+      actorDiscordId: raw?.actorDiscordId || raw?.id || raw?.subjectId || raw?.userId || userId,
+    };
+  }
 
   const server = Fastify({
     logger: false, // We use our own logger
@@ -220,18 +232,7 @@ export function createHttpServer(deps: HttpServerDeps): FastifyInstance {
       const { id } = request.params;
       const userId = request.user.id;
 
-      const rawPrincipal = (request as any).principal;
-      const principal = {
-        type: rawPrincipal?.type || 'DISCORD_USER',
-        id: rawPrincipal?.id || rawPrincipal?.subjectId || rawPrincipal?.userId || userId,
-        authKind: rawPrincipal?.authKind || 'DISCORD',
-        actorDiscordId:
-          rawPrincipal?.actorDiscordId ||
-          rawPrincipal?.id ||
-          rawPrincipal?.subjectId ||
-          rawPrincipal?.userId ||
-          userId,
-      };
+      const principal = extractPrincipal(request, userId);
 
       try {
         const approvalRequest = await services.ports.getApprovalRequest(principal, id);
@@ -562,18 +563,7 @@ export function createHttpServer(deps: HttpServerDeps): FastifyInstance {
 
       const resourceId = environment.resourceId;
 
-      const rawPrincipal = (req as any).principal;
-      const principal = {
-        type: rawPrincipal?.type || 'DISCORD_USER',
-        id: rawPrincipal?.id || rawPrincipal?.subjectId || rawPrincipal?.userId || userId,
-        authKind: rawPrincipal?.authKind || 'DISCORD',
-        actorDiscordId:
-          rawPrincipal?.actorDiscordId ||
-          rawPrincipal?.id ||
-          rawPrincipal?.subjectId ||
-          rawPrincipal?.userId ||
-          userId,
-      };
+      const principal = extractPrincipal(req, userId);
 
       try {
         // Resolve active grant first if not explicitly passed
@@ -679,12 +669,7 @@ export function createHttpServer(deps: HttpServerDeps): FastifyInstance {
 
       const resourceId = environment.resourceId;
 
-      const principal = (req as any).principal || {
-        type: 'DISCORD_USER',
-        id: userId,
-        authKind: 'DISCORD',
-        actorDiscordId: userId,
-      };
+      const principal = extractPrincipal(req, userId);
 
       await services.resource.setSecrets(resourceId, secrets, principal);
 
