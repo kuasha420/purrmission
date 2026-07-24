@@ -2,6 +2,7 @@ import { ChatInputCommandInteraction, Colors } from 'discord.js';
 import type { Services } from '../../domain/services.js';
 import { logger } from '../../logging/logger.js';
 import type { ApprovalDecision, ApprovalRequest } from '../../domain/models.js';
+import type { Principal } from '../../domain/policy.js';
 
 /**
  * Handle approval/denial decision commands.
@@ -18,7 +19,16 @@ export async function handleDecisionCommand(
   const icon = decision === 'APPROVE' ? '✅' : '🚫'; // correction: DENY usually 🚫 or ❌
 
   try {
-    const result = await services.approval.recordDecision(requestId, decision, userId);
+    const principal: Principal = {
+      id: userId,
+      type: 'DISCORD_USER',
+      subjectId: userId,
+      authKind: 'DISCORD',
+      scopes: [],
+      audience: 'discord',
+    };
+
+    const result = await services.ports.recordApprovalDecision(principal, requestId, decision);
 
     if (result.success) {
       await interaction.reply({
@@ -27,42 +37,13 @@ export async function handleDecisionCommand(
       });
 
       // Update original message
-      const { request } = result;
+      const request = await services.ports.getApprovalRequest(principal, requestId);
       if (request) {
         await updateDiscordMessage(interaction, request, decision, userId, actionPastTense);
       }
-
-      // Handle Callback logic
-      if (result.action && result.action.type === 'CALL_CALLBACK_URL') {
-        const { url, status } = result.action;
-        try {
-          // Fire and forget fetch
-          fetch(url, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              requestId,
-              status,
-              resolvedBy: userId,
-              resolvedAt: new Date().toISOString(),
-              context: request?.context,
-            }),
-          })
-            .then((res) => {
-              if (!res.ok) {
-                logger.warn('Callback URL returned non-200 status', { url, status: res.status });
-              }
-            })
-            .catch((err) => {
-              logger.error('Failed to call callback URL', { url, err });
-            });
-        } catch (err) {
-          logger.error('Error initiating callback request', { err });
-        }
-      }
     } else {
       await interaction.reply({
-        content: `❌ Failed to ${decision.toLowerCase()} request: ${result.error}`,
+        content: `❌ Failed to ${decision.toLowerCase()} request.`,
         ephemeral: true,
       });
     }

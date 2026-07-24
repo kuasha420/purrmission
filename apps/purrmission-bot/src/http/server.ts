@@ -4,16 +4,10 @@
  * Provides the HTTP API for external services to request approvals.
  */
 import formBody from '@fastify/formbody';
-import type { Client, TextChannel } from 'discord.js';
+import type { Client } from 'discord.js';
 import Fastify, { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { z } from 'zod';
 
-import {
-  createAccessRequestEmbed,
-  createApprovalButtons,
-  createApprovalEmbed,
-  isAccessRequestContext,
-} from '../discord/interactions/approvalButtons.js';
 import {
   AccessDeniedError,
   ExpiredTokenError,
@@ -22,7 +16,6 @@ import {
   SlowDownError,
 } from '../domain/auth.js';
 import { ResourceNotFoundError } from '../domain/errors.js';
-import type { ApprovalRequest, ResourceField } from '../domain/models.js';
 import type { Services } from '../domain/services.js';
 import { logger } from '../logging/logger.js';
 import crypto from 'node:crypto';
@@ -201,16 +194,7 @@ export function createHttpServer(deps: HttpServerDeps): FastifyInstance {
     }
     const approvalRequest = result.request;
 
-    // Send Discord message to guardians
-    try {
-      await sendApprovalMessage(deps, result, body.channelId);
-    } catch (error) {
-      logger.warn('Failed to send Discord notification for approval request', {
-        requestId: approvalRequest.id,
-        error: error instanceof Error ? error.message : String(error),
-      });
-      // Continue anyway - the request was created successfully
-    }
+    // Discord notification is enqueued via the transactional outbox and processed by the worker
 
     logger.info('Approval request created via API', {
       requestId: approvalRequest.id,
@@ -236,32 +220,44 @@ export function createHttpServer(deps: HttpServerDeps): FastifyInstance {
       const { id } = request.params;
       const userId = request.user.id;
 
-      const approvalRequest = await services.approval.getApprovalRequest(id);
-      if (!approvalRequest) {
-        return reply.status(404).send({
-          error: 'Request not found',
-        });
-      }
-
-      // Exact-object authorization
-      const isRequester = approvalRequest.requesterId === userId;
-      const isGuardian = await services.resource.isGuardian(approvalRequest.resourceId, userId);
-
-      if (!isRequester && !isGuardian) {
-        throw new AccessDeniedError(
-          'Access denied: You do not have permission to view this request.'
-        );
-      }
-
-      return {
-        requestId: approvalRequest.id,
-        resourceId: approvalRequest.resourceId,
-        status: approvalRequest.status,
-        createdAt: approvalRequest.createdAt.toISOString(),
-        expiresAt: approvalRequest.expiresAt.toISOString(),
-        resolvedBy: approvalRequest.resolvedBy ?? null,
-        resolvedAt: approvalRequest.resolvedAt?.toISOString() ?? null,
+      const rawPrincipal = (request as any).principal;
+      const principal = {
+        type: rawPrincipal?.type || 'DISCORD_USER',
+        id: rawPrincipal?.id || rawPrincipal?.subjectId || rawPrincipal?.userId || userId,
+        authKind: rawPrincipal?.authKind || 'DISCORD',
+        actorDiscordId:
+          rawPrincipal?.actorDiscordId ||
+          rawPrincipal?.id ||
+          rawPrincipal?.subjectId ||
+          rawPrincipal?.userId ||
+          userId,
       };
+
+      try {
+        const approvalRequest = await services.ports.getApprovalRequest(principal, id);
+        if (!approvalRequest) {
+          return reply.status(404).send({
+            error: 'Request not found',
+          });
+        }
+
+        return {
+          requestId: approvalRequest.id,
+          resourceId: approvalRequest.resourceId,
+          status: approvalRequest.status,
+          createdAt: approvalRequest.createdAt.toISOString(),
+          expiresAt: approvalRequest.expiresAt.toISOString(),
+          resolvedBy: approvalRequest.resolvedBy ?? null,
+          resolvedAt: approvalRequest.resolvedAt?.toISOString() ?? null,
+        };
+      } catch (err) {
+        if (err instanceof ForbiddenError) {
+          throw new AccessDeniedError(
+            'Access denied: You do not have permission to view this request.'
+          );
+        }
+        throw err;
+      }
     }
   );
 
@@ -553,6 +549,7 @@ export function createHttpServer(deps: HttpServerDeps): FastifyInstance {
     },
     async (req, rep) => {
       const { projectId, envId } = req.params as { projectId: string; envId: string };
+      const { grantId } = (req.query || {}) as { grantId?: string };
       const userId = req.user.id;
 
       const project = await services.project.getProject(projectId);
@@ -565,140 +562,89 @@ export function createHttpServer(deps: HttpServerDeps): FastifyInstance {
 
       const resourceId = environment.resourceId;
 
-      // Project owner has immediate access
-      if (project.ownerId === userId) {
-        const fields = await services.resource.listFields(resourceId);
-        return { secrets: fieldsToSecrets(fields) };
-      }
+      const rawPrincipal = (req as any).principal;
+      const principal = {
+        type: rawPrincipal?.type || 'DISCORD_USER',
+        id: rawPrincipal?.id || rawPrincipal?.subjectId || rawPrincipal?.userId || userId,
+        authKind: rawPrincipal?.authKind || 'DISCORD',
+        actorDiscordId:
+          rawPrincipal?.actorDiscordId ||
+          rawPrincipal?.id ||
+          rawPrincipal?.subjectId ||
+          rawPrincipal?.userId ||
+          userId,
+      };
 
-      // Project Members (READER or WRITER) have immediate access
-      const memberRole = await services.project.getMemberRole(projectId, userId);
-      if (memberRole === 'READER' || memberRole === 'WRITER') {
-        const fields = await services.resource.listFields(resourceId);
-        return { secrets: fieldsToSecrets(fields) };
-      }
-
-      // Guardians also have immediate access
-      const isGuardian = await services.resource.isGuardian(resourceId, userId);
-      if (isGuardian) {
-        const fields = await services.resource.listFields(resourceId);
-        return { secrets: fieldsToSecrets(fields) };
-      }
-
-      // Fetch the current resource version for V2 state tracking
-      let targetVersion = 'v1';
-      if (typeof services.resource.getResource === 'function') {
-        const resourceObj = await services.resource.getResource(resourceId);
-        targetVersion = resourceObj?.version || 'v1';
-      }
-
-      // Non-owner/non-guardian: Check for active approval or create one
-      let approval: ApprovalRequest | null = await services.approval.findActiveApproval(
-        resourceId,
-        userId,
-        'secrets.read'
-      );
-
-      if (!approval) {
-        // Create a new approval request
-        const result = await services.approval.createApprovalRequest({
-          resourceId,
-          requesterId: userId,
-          requesterType: (req as any).principal?.type || 'DISCORD_USER',
-          authKind: (req as any).principal?.authKind || 'DISCORD',
-          action: 'secrets.read',
-          targetVersion,
-          policyVersion: targetVersion,
-          context: {
-            requesterId: userId,
-            type: 'SECRET_ACCESS',
-            description: `CLI pull request for ${project.name}:${environment.name}`,
-          },
-        });
-
-        if (!result.success || !result.request) {
-          throw new Error(`Failed to create approval request: ${result.error || 'Unknown error'}`);
-        }
-        approval = result.request;
-
-        // Send Discord notification to guardians
-        try {
-          await sendApprovalMessage(deps, result);
-        } catch (notifyError) {
-          logger.warn('Failed to send Discord notification for approval request', {
-            requestId: approval.id,
-            error: notifyError instanceof Error ? notifyError.message : String(notifyError),
-          });
-          // Continue anyway - the request was created successfully
-        }
-      }
-
-      if (!approval) {
-        throw new Error('Approval request could not be found or created');
-      }
-
-      if (approval.status === 'PENDING') {
-        rep.status(202);
-        return {
-          status: 'pending',
-          message: 'Secret access is pending approval in Discord',
-          requestId: approval.id,
-        };
-      }
-
-      if (approval.status === 'APPROVED') {
-        // Find active unconsumed grant
-        let activeGrant = null;
-        if (typeof services.approval.findActiveUnconsumedGrant === 'function') {
-          activeGrant = await services.approval.findActiveUnconsumedGrant(
+      try {
+        // Resolve active grant first if not explicitly passed
+        let resolvedGrantId = grantId;
+        if (!resolvedGrantId) {
+          const activeGrant = await services.approval.findActiveUnconsumedGrant(
             resourceId,
             userId,
             'secrets.read',
             null
           );
+          if (activeGrant) {
+            resolvedGrantId = activeGrant.id;
+          }
         }
 
-        if (activeGrant) {
-          // Atomically consume the grant
-          const prisma = getPrismaClient();
-          try {
-            await prisma.$transaction(async (tx) => {
-              await services.approval.consumeGrant(
-                activeGrant.id,
-                (req as any).principal || {
-                  type: 'DISCORD_USER',
-                  id: userId,
-                  authKind: 'DISCORD',
-                  actorDiscordId: userId,
-                },
-                'secrets.read',
-                targetVersion,
-                targetVersion,
-                tx
+        const secrets = await services.ports.getSecrets(
+          principal,
+          projectId,
+          envId,
+          resolvedGrantId
+        );
+        return { secrets };
+      } catch (err) {
+        if (err instanceof ForbiddenError) {
+          // Check for active approval or create one
+          const approval = await services.approval.findActiveApproval(
+            resourceId,
+            userId,
+            'secrets.read'
+          );
+
+          if (approval) {
+            if (approval.status === 'PENDING') {
+              rep.status(202);
+              return {
+                status: 'pending',
+                message: 'Secret access is pending approval in Discord',
+                requestId: approval.id,
+              };
+            }
+            if (approval.status === 'APPROVED') {
+              throw new AccessDeniedError(
+                'Access denied: Active approval is approved but grant is missing or consumed.'
               );
-            });
-          } catch (consumeErr) {
-            logger.error('Failed to consume approval grant for secrets access', {
-              resourceId,
-              userId,
-              error: consumeErr instanceof Error ? consumeErr.message : String(consumeErr),
-            });
-            throw consumeErr;
+            }
+            throw new AccessDeniedError('Access denied: Secrets access was denied');
           }
-        } else {
-          const hasGrantRepo = !!(services.approval as any).deps?.repositories?.approvalGrants;
-          if (hasGrantRepo) {
-            throw new AccessDeniedError(
-              'Access denied: No active unconsumed approval grant found. Please request approval again.'
+
+          // Create a new approval request
+          const result = await services.ports.createApprovalRequest(
+            principal,
+            resourceId,
+            'secrets.read'
+          );
+          if (!result.success || !result.request) {
+            throw new Error(
+              `Failed to create approval request: ${result.error || 'Unknown error'}`
             );
           }
+          const newApproval = result.request;
+
+          rep.status(202);
+          return {
+            status: 'pending',
+            message: 'Secret access is pending approval in Discord',
+            requestId: newApproval.id,
+          };
         }
-
-        const fields = await services.resource.listFields(resourceId);
-        return { secrets: fieldsToSecrets(fields) };
+        throw err;
       }
-
-      throw new AccessDeniedError('Access denied: Secrets access not approved');
     }
   );
 
@@ -905,93 +851,6 @@ export function createHttpServer(deps: HttpServerDeps): FastifyInstance {
 }
 
 /**
- * Send the approval message to Discord.
- */
-async function sendApprovalMessage(
-  deps: HttpServerDeps,
-  result: Awaited<ReturnType<typeof deps.services.approval.createApprovalRequest>>,
-  channelId?: string
-): Promise<void> {
-  const { discordClient } = deps;
-  const { request, resource, guardians } = result;
-
-  if (!request || !resource || !guardians) {
-    return;
-  }
-
-  // Determine which channel to use
-  // Priority: explicit channelId > first guardian's DM > skip
-  let channel: TextChannel | null = null;
-
-  if (channelId) {
-    const fetchedChannel = await discordClient.channels.fetch(channelId).catch(() => null);
-    if (fetchedChannel?.isTextBased() && 'send' in fetchedChannel) {
-      channel = fetchedChannel as TextChannel;
-    }
-  }
-
-  // If no channel specified, try to DM the first guardian
-  // TODO: Implement better notification strategy (e.g., dedicated channel per resource)
-  if (!channel && guardians.length > 0) {
-    try {
-      const owner = guardians.find((g) => g.role === 'OWNER') ?? guardians[0];
-      const user = await discordClient.users.fetch(owner.discordUserId);
-      const dm = await user.createDM();
-
-      // Create and send message
-      const embed = isAccessRequestContext(request.context)
-        ? createAccessRequestEmbed(resource.name, request.context, request.expiresAt)
-        : createApprovalEmbed(resource.name, request.context, request.expiresAt);
-      const buttons = createApprovalButtons(request.id);
-
-      // Mention other guardians
-      const mentions = guardians
-        .filter((g) => g.discordUserId !== owner.discordUserId)
-        .map((g) => `<@${g.discordUserId}>`)
-        .join(' ');
-
-      await dm.send({
-        content: mentions.length > 0 ? `Guardians: ${mentions}` : undefined,
-        embeds: [embed],
-        components: [buttons],
-      });
-
-      logger.info('Sent approval DM to guardian', {
-        requestId: request.id,
-        guardianId: owner.discordUserId,
-      });
-      return;
-    } catch (error) {
-      logger.warn('Failed to DM guardian, trying channel', {
-        error: error instanceof Error ? error.message : String(error),
-      });
-    }
-  }
-
-  // Send to channel if available
-  if (channel) {
-    const embed = isAccessRequestContext(request.context)
-      ? createAccessRequestEmbed(resource.name, request.context, request.expiresAt)
-      : createApprovalEmbed(resource.name, request.context, request.expiresAt);
-    const buttons = createApprovalButtons(request.id);
-
-    // Mention all guardians
-    const mentions = guardians.map((g) => `<@${g.discordUserId}>`).join(' ');
-
-    await channel.send({
-      content: mentions.length > 0 ? `🔐 Approval needed! ${mentions}` : '🔐 Approval needed!',
-      embeds: [embed],
-      components: [buttons],
-    });
-
-    logger.info('Sent approval message to channel', {
-      requestId: request.id,
-      channelId: channel.id,
-    });
-  }
-}
-
-/**
  * Start the HTTP server.
  */
 export async function startHttpServer(
@@ -1004,8 +863,4 @@ export async function startHttpServer(
   logger.info(`HTTP server listening on port ${port}`);
 
   return server;
-}
-
-function fieldsToSecrets(fields: ResourceField[]): Record<string, string> {
-  return Object.fromEntries(fields.map((f) => [f.name, f.value]));
 }
