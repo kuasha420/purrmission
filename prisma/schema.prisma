@@ -71,6 +71,7 @@ model Guardian {
 
   resource Resource @relation(fields: [resourceId], references: [id], onDelete: Cascade)
 
+  @@unique([resourceId, discordUserId])
   @@index([resourceId])
   @@index([discordUserId])
 }
@@ -115,17 +116,41 @@ model TOTPAccount {
 }
 
 model AuditLog {
-  id          String   @id @default(uuid())
-  action      String
-  resourceId  String?
-  actorId     String?
-  resolverId  String?
-  status      String
-  context     String?
-  createdAt   DateTime @default(now())
+  id             String   @id @default(uuid())
+  schemaVersion  Int      @default(1)
+  eventType      String
+  outcomeCode    String
+  actorType      String
+  actorId        String?
+  authKind       String?
+  resourceId     String?
+  projectId      String?
+  environmentId  String?
+  requestId      String?
+  grantId        String?
+  correlationId  String?
+  causationId    String?
+  payload        Json?    // Redacted metadata and non-sensitive context
+  createdAt      DateTime @default(now())
 
   @@index([resourceId])
-  @@index([actorId])
+  @@index([projectId])
+  @@index([eventType])
+  @@index([correlationId])
+  @@index([createdAt])
+}
+
+model OutboxEvent {
+  id          String   @id @default(uuid())
+  eventType   String
+  payload     Json     // Webhook context / notifications
+  status      String   @default("PENDING") // PENDING, PROCESSED, FAILED
+  attempts    Int      @default(0)
+  lastError   String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([status])
   @@index([createdAt])
 }
 

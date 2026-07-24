@@ -251,16 +251,43 @@ export type CreateResourceFieldInput = Omit<ResourceField, 'id' | 'createdAt' | 
  */
 export interface AuditLog {
   id: string;
-  action: string;
-  resourceId?: string | null;
+  schemaVersion: number;
+  eventType: string;
+  outcomeCode: string;
+  actorType: string;
   actorId?: string | null;
-  resolverId?: string | null;
-  status: string;
-  context?: string | null; // JSON string
+  authKind?: string | null;
+  resourceId?: string | null;
+  projectId?: string | null;
+  environmentId?: string | null;
+  requestId?: string | null;
+  grantId?: string | null;
+  correlationId?: string | null;
+  causationId?: string | null;
+  payload?: Record<string, unknown> | null; // Redacted JSON context
   createdAt: Date;
 }
 
 export type CreateAuditLogInput = Omit<AuditLog, 'id' | 'createdAt'>;
+
+/**
+ * OutboxEvent for transactional outbox side-effects.
+ */
+export interface OutboxEvent {
+  id: string;
+  eventType: string;
+  payload: Record<string, unknown>;
+  status: 'PENDING' | 'PROCESSED' | 'FAILED';
+  attempts: number;
+  lastError?: string | null;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+export type CreateOutboxEventInput = Omit<
+  OutboxEvent,
+  'id' | 'attempts' | 'status' | 'createdAt' | 'updatedAt'
+>;
 
 /**
  * Represents a device login session (OAuth Device Flow).
@@ -358,4 +385,108 @@ export interface CreateProjectMemberInput {
   userId: string;
   role?: ProjectMemberRole;
   addedBy: string;
+}
+
+// ----------------------------------------------------
+// RBAC & Capabilities (Prerequisite 1/8)
+// ----------------------------------------------------
+
+export type PrincipalType = 'DISCORD_USER' | 'PAWTHY_TOKEN' | 'RESOURCE_API_KEY' | 'SERVICE';
+export type AuthKind = 'DISCORD' | 'PAWTHY' | 'API_KEY' | 'SERVICE';
+
+export interface Principal {
+  type: PrincipalType;
+  id: string; // The primary identifier (e.g. Discord ID, token ID, etc.)
+  authKind: AuthKind;
+  actorDiscordId?: string; // Optional human Discord User ID association
+  correlationId?: string;
+}
+
+export type Capability =
+  // Project capabilities
+  | 'project.create'
+  | 'project.view'
+  | 'project.update'
+  | 'project.delete'
+  | 'project.transfer'
+  | 'project.members.view'
+  | 'project.members.manage'
+  // Environment capabilities
+  | 'environment.view'
+  | 'environment.create'
+  | 'environment.update'
+  | 'environment.delete'
+  // Resource capabilities
+  | 'resource.create'
+  | 'resource.view'
+  | 'resource.policy.manage'
+  | 'resource.delete'
+  | 'resource.api-key.list'
+  | 'resource.api-key.mint'
+  | 'resource.api-key.rotate'
+  | 'resource.api-key.revoke'
+  // Secret capabilities
+  | 'secret.metadata.read'
+  | 'secret.value.read'
+  | 'secret.write'
+  | 'secret.delete'
+  // TOTP capabilities
+  | 'totp.metadata.read'
+  | 'totp.code.read'
+  | 'totp.recovery.read'
+  | 'totp.link.manage'
+  | 'totp.account.manage'
+  // Guardian capabilities
+  | 'guardian.view'
+  | 'guardian.context.read'
+  | 'guardian.manage'
+  // Request capabilities
+  | 'request.create'
+  | 'request.view-own'
+  | 'request.queue.view'
+  | 'request.decide'
+  | 'request.cancel-own'
+  // Grant capabilities
+  | 'grant.consume'
+  // Audit capabilities
+  | 'audit.full.read'
+  | 'audit.operational.read'
+  | 'audit.queue.read'
+  | 'audit.own.read'
+  | 'audit.export';
+
+export interface CapabilityContext {
+  projectId?: string;
+  environmentId?: string;
+  resourceId?: string;
+  totpAccountId?: string;
+  requestId?: string;
+  fieldName?: string; // specific secret/field
+  // For grant consumption validation
+  grantId?: string;
+  targetVersion?: string;
+  currentTimestamp?: Date;
+}
+
+export type DecisionCode = 'ALLOW' | 'DENY' | 'APPROVAL_REQUIRED';
+
+export type ReasonCode =
+  | 'OWNER'
+  | 'WRITER'
+  | 'READER'
+  | 'GUARDIAN'
+  | 'GRANT'
+  | 'SELF_APPROVAL_FORBIDDEN'
+  | 'RECOVERY_KEY_OWNER_REQUIRED'
+  | 'NO_ROLE'
+  | 'INVALID_AUTH'
+  | 'MISSING_CONTEXT'
+  | 'GRANT_EXPIRED'
+  | 'GRANT_SCOPE_MISMATCH';
+
+export interface EvaluationResult {
+  allowed: boolean;
+  decisionCode: DecisionCode;
+  reasonCode: ReasonCode;
+  reason: string;
 }
