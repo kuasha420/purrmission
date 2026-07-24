@@ -1,8 +1,13 @@
 # Purrmission RBAC and Observability Knowledgebase
 
-- Status: Phase 1 technical specification
-- Issue: [#107](https://github.com/kuasha420/purrmission/issues/107)
-- Audited revision: `9eedd4d` (`master`, 2026-07-24)
+- Status: Phase 1 technical specification; prerequisite remediation in progress
+- Preparation issue: [#107](https://github.com/kuasha420/purrmission/issues/107) (complete)
+- Prerequisite epic: [#116](https://github.com/kuasha420/purrmission/issues/116)
+- Execution graph:
+  [Pre-Dashboard RBAC Prerequisite Execution Graph](../epics/rbac-prerequisite-execution-graph.md)
+- Readiness gate: [#126](https://github.com/kuasha420/purrmission/issues/126)
+- Dashboard readiness: Blocked until #126 records Go
+- Baseline audited revision: `9eedd4d` (`master`, 2026-07-24)
 - Applies to: Discord commands, the Fastify API, Pawthy, and the future
   `apps/purrmission-web`
 
@@ -18,6 +23,38 @@ Discord-authenticated Purrmission dashboard. It has two deliberately separate pa
 
 The words **MUST**, **MUST NOT**, **SHOULD**, and **MAY** are normative in target-policy sections.
 Current-state sections are descriptive only.
+
+### 1.1 Delivery-phase classification
+
+Normative requirements are implemented and verified in four delivery classes. A later-phase
+requirement remains authoritative design, but it is not a pass/fail criterion for the prerequisite
+readiness gate in #126.
+
+| Class               | Delivery boundary                                                                                                               |
+| ------------------- | ------------------------------------------------------------------------------------------------------------------------------- |
+| `PREREQUISITE`      | Existing Discord, HTTP, Pawthy, domain, persistence, credential, approval, TOTP, audit, and delivery contracts under #116       |
+| `OAUTH_SESSION`     | Discord OAuth endpoints, browser sessions/cookies, CSRF/Origin, recent-auth, and web-session inventory after #126 records Go    |
+| `DASHBOARD_BACKEND` | Dashboard-specific routes, web DTO composition, session-backed web transport, and dashboard data-fetch behavior after OAuth     |
+| `DASHBOARD_UI`      | `apps/purrmission-web`, router/control gates, reveal/clipboard UX, and client cache behavior after backend contracts are stable |
+
+The authoritative section mapping is:
+
+| Knowledgebase content                    | Delivery class and #126 treatment                                                                                  |
+| ---------------------------------------- | ------------------------------------------------------------------------------------------------------------------ |
+| Sections 3-5                             | Current-state evidence and `PREREQUISITE` remediation inventory                                                    |
+| Sections 6.1-6.9                         | `PREREQUISITE` domain policy, except sentences explicitly limited to browser sessions, recent-auth, or UI behavior |
+| Section 7                                | `OAUTH_SESSION`; excluded from #126 implementation evidence                                                        |
+| Sections 8.1 and 8.4                     | `DASHBOARD_BACKEND`; #126 verifies only their prerequisite evaluator, metadata, versioning, and DTO substrate      |
+| Sections 8.2 and 8.3                     | `DASHBOARD_UI`; excluded from #126 implementation evidence                                                         |
+| Section 9                                | `PREREQUISITE` for current-surface envelopes/events; OAuth/web-session event instances remain `OAUTH_SESSION`      |
+| Section 10, items 1-9                    | `PREREQUISITE`; future principal variants are modeled but their authenticators are not implemented                 |
+| Section 10, item 10                      | CLI token inventory/revocation is `PREREQUISITE`; web-session inventory/revocation is `OAUTH_SESSION`              |
+| Section 11 prerequisite list             | Required by #126                                                                                                   |
+| Section 11 deferred OAuth/dashboard list | Required only in the named later phase                                                                             |
+
+If a clause mixes classes, #126 verifies the `PREREQUISITE` substrate and records the later-phase
+behavior as deferred—not failed and not implemented. Moving a requirement between classes requires
+an explicit knowledgebase change with security review; implementation issues cannot reclassify it.
 
 The central rule is:
 
@@ -526,13 +563,24 @@ catalog.
 resource does not transfer custody. Creating a link requires the account owner to be the acting
 resource owner or to provide an explicit, one-time consent; either the resource owner or account
 owner may later unlink it. Project and Resource ownership never grants backup/recovery material or
-permission to update/delete the personal account. Link consent explicitly names the resource and
-acknowledges that its authorized Resource Owners may generate codes under resource policy.
-Third-party approval grants are denied by default for personal-custody accounts. Enabling them
-requires the account owner to opt in explicitly, naming the resource, approval policy,
-account/seed version, maximum consent expiry, and initiating actor. The one-time consent is consumed
-atomically when the link is created; its delegation policy persists on that link. A seed or link
-policy change invalidates it and requires new consent.
+permission to update/delete the personal account.
+
+TOTP consent uses two deliberately separate records:
+
+1. **Link consent** is one-time consent naming the account/seed version, resource, initiating
+   resource owner, initial link-policy version, and whether third-party delegation may ever be
+   requested. It is consumed atomically when the link is created. The resulting versioned
+   delegation envelope persists on the link and defines maximum scope/lifetime; it grants no code
+   reveal by itself.
+2. **Delegation consent** is required for each third-party TOTP-code grant when the link envelope
+   permits delegation. It is short-lived and bound to the account/seed version, resource,
+   link-policy version, requester, authentication family/audience, operation, and maximum grant
+   expiry. It is consumed atomically when Approval Request V2 issues the matching grant.
+
+Guardian approval alone cannot override either consent layer. A seed, link, custody, or delegation
+policy change invalidates outstanding delegation consent and grants and requires new link consent
+when the link envelope itself changes. Third-party code use remains denied until a current
+delegation consent and any required Guardian decision produce a matching one-time grant.
 
 A TOTP-code grant is one successful reveal, bound to requester and TOTP target, with a maximum
 five-minute grant lifetime. A recovery key is outside ordinary TOTP-code approval scope and cannot
@@ -632,6 +680,9 @@ cannot supply raw callback URLs or Discord channel IDs. Failed delivery does not
 success.
 
 ## 7. Discord OAuth2 web-session design
+
+Delivery class: `OAUTH_SESSION`. This section is a normative future contract but is not
+implementation evidence required by #126.
 
 ### 7.1 Separation from Pawthy authentication
 
@@ -828,6 +879,10 @@ denial as an expired session.
 
 ## 8. Dashboard route and UI gating specification
 
+Delivery classes: sections 8.1 and 8.4 are `DASHBOARD_BACKEND`; sections 8.2 and 8.3 are
+`DASHBOARD_UI`. #126 verifies their prerequisite capability, projection, and versioning substrate,
+not these dashboard-specific routes or controls.
+
 ### 8.1 Server-provided capabilities
 
 The web API SHOULD return safe per-object capabilities with each authorized metadata DTO, for
@@ -960,6 +1015,10 @@ protected value and then hide it with CSS.
 
 ## 9. Target observability contract
 
+Delivery class: `PREREQUISITE` for current Discord, HTTP, Pawthy, and worker behavior. OAuth and
+web-session event instances in the shared event vocabulary are `OAUTH_SESSION` and are verified
+when that phase is implemented.
+
 ### 9.1 Required event envelope
 
 Every protected action produces a structured decision/outcome event containing:
@@ -1048,8 +1107,8 @@ search.
 
 ## 10. Required backend contracts before dashboard UI
 
-Phase 2 through Phase 4 must not expose the current repositories directly to web handlers. The
-minimum prerequisites are:
+No later OAuth or dashboard phase may expose the current repositories directly to web handlers.
+The minimum pre-dashboard contracts are:
 
 1. A typed authenticated principal supporting Discord interactions, web sessions, short-lived web
    bearers, Pawthy bearers, Resource API keys, and service identities.
@@ -1063,7 +1122,8 @@ minimum prerequisites are:
    administration.
 8. Transactional or outbox-backed audit events and notification/callback delivery.
 9. Consistent error semantics, request IDs, rate limits, response cache policy, and input schemas.
-10. Web session inventory/revocation and a distinct CLI token inventory/revocation path.
+10. A CLI token inventory/revocation path (`PREREQUISITE`) and a distinct web-session
+    inventory/revocation path (`OAUTH_SESSION`).
 
 ## 11. Verification and known test gaps
 
@@ -1080,7 +1140,7 @@ Existing tests establish useful pieces of current behavior:
 - owner pull, synthetic requester states, Reader push denial, and owner push:
   `src/test/system_api.test.ts`.
 
-Before dashboard enforcement is considered complete, tests MUST cover:
+Before prerequisite remediation is considered complete, #126 MUST verify:
 
 - every target matrix row for Owner, Writer, Reader, explicit Guardian, and Requester;
 - a user holding multiple roles and deny-rule precedence;
@@ -1099,15 +1159,22 @@ Before dashboard enforcement is considered complete, tests MUST cover:
 - metadata queries that do not decrypt values;
 - Reader/Writer/Guardian direct and denied Pawthy flows;
 - invalid/malformed batch payloads and atomic write failure;
-- OAuth state mismatch/replay/expiry, safe return paths, cookie flags, CSRF, logout, and session
-  revocation;
-- recent-auth same-user binding, session rotation, and ambiguous cookie/bearer rejection;
 - `POST`-only reveal/grant-consumption semantics;
 - standalone Resource, API-key, personal TOTP, and linked-TOTP route/control gates;
 - `401`/`403`/`404` semantics;
 - required audit emission/redaction, same-scope export authorization, and audit-write failure
   behavior; and
 - token/API-key rotation and revocation.
+
+The deferred `OAUTH_SESSION` phase MUST add coverage for:
+
+- OAuth state mismatch/replay/expiry, safe return paths, cookie flags, CSRF, logout, and session
+  revocation;
+- recent-auth same-user binding, session rotation, and ambiguous cookie/bearer rejection; and
+- OAuth/session event emission, redaction, rotation, expiry, and revocation.
+
+The deferred `DASHBOARD_BACKEND` and `DASHBOARD_UI` phases MUST add coverage for their exact route,
+control, data-fetch, cache-clearing, reveal, and clipboard contracts in section 8.
 
 ## 12. Source map and external references
 
