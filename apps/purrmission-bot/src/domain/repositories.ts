@@ -8,6 +8,7 @@
  * TODO: Replace in-memory implementations with Postgres/Prisma for production.
  */
 import { type PrismaClient, Prisma } from '@prisma/client';
+import { randomUUID } from 'crypto';
 
 import { decryptValue, encryptValue } from '../infra/crypto.js';
 import { logger } from '../logging/logger.js';
@@ -40,6 +41,8 @@ import type {
   TOTPAccount,
   OutboxEvent,
   CreateOutboxEventInput,
+  TOTPAccountMetadata,
+  ResourceFieldMetadata,
 } from './models.js';
 
 export interface ResourceRepository {
@@ -147,7 +150,7 @@ export interface ApprovalRequestRepository {
  */
 export interface TOTPRepository {
   create(
-    account: Omit<TOTPAccount, 'id' | 'createdAt' | 'updatedAt'>,
+    account: Omit<TOTPAccount, 'id' | 'createdAt' | 'updatedAt' | 'version'>,
     tx?: Prisma.TransactionClient
   ): Promise<TOTPAccount>;
   update(account: TOTPAccount, tx?: Prisma.TransactionClient): Promise<TOTPAccount>;
@@ -160,6 +163,8 @@ export interface TOTPRepository {
    * TODO: Implement fine-grained ACLs. For now, returns all shared accounts.
    */
   findSharedVisibleTo(discordUserId: string): Promise<TOTPAccount[]>;
+  findSharedMetadataVisibleTo(discordUserId: string): Promise<TOTPAccountMetadata[]>;
+  findMetadataByOwnerDiscordUserId(ownerDiscordUserId: string): Promise<TOTPAccountMetadata[]>;
 }
 
 /**
@@ -198,6 +203,12 @@ export interface ResourceFieldRepository {
    * Delete a field by ID.
    */
   delete(id: string, tx?: Prisma.TransactionClient): Promise<void>;
+
+  findMetadataByResourceId(resourceId: string): Promise<ResourceFieldMetadata[]>;
+  findMetadataByResourceAndName(
+    resourceId: string,
+    name: string
+  ): Promise<ResourceFieldMetadata | null>;
 }
 
 /**
@@ -220,6 +231,7 @@ export class PrismaResourceRepository implements ResourceRepository {
         mode: input.mode,
         apiKey: input.apiKey,
         totpAccountId: input.totpAccountId ?? null,
+        version: input.version || randomUUID(),
       },
     });
     return this.mapPrismaToDomain(created);
@@ -249,6 +261,7 @@ export class PrismaResourceRepository implements ResourceRepository {
       where: { id },
       data: {
         totpAccountId: data.totpAccountId,
+        version: randomUUID(),
       },
     });
     return this.mapPrismaToDomain(updated);
@@ -274,6 +287,7 @@ export class PrismaResourceRepository implements ResourceRepository {
     mode: string;
     apiKey: string;
     totpAccountId: string | null;
+    version: string;
     createdAt: Date;
   }): Resource {
     // Validate mode is a valid ApprovalMode
@@ -287,6 +301,7 @@ export class PrismaResourceRepository implements ResourceRepository {
       mode: row.mode as ApprovalMode,
       apiKey: row.apiKey,
       totpAccountId: row.totpAccountId ?? undefined,
+      version: row.version,
       createdAt: row.createdAt,
     };
   }
@@ -351,7 +366,7 @@ export class PrismaTOTPRepository implements TOTPRepository {
   }
 
   async create(
-    account: Omit<TOTPAccount, 'id' | 'createdAt' | 'updatedAt'>,
+    account: Omit<TOTPAccount, 'id' | 'createdAt' | 'updatedAt' | 'version'>,
     tx?: Prisma.TransactionClient
   ): Promise<TOTPAccount> {
     const client = tx || this.prisma;
@@ -369,6 +384,7 @@ export class PrismaTOTPRepository implements TOTPRepository {
         issuer: account.issuer ?? null,
         shared: account.shared,
         backupKey: encryptedBackupKey,
+        version: randomUUID(),
       },
     });
 
@@ -393,28 +409,47 @@ export class PrismaTOTPRepository implements TOTPRepository {
         issuer: account.issuer ?? null,
         shared: account.shared,
         backupKey: encryptedBackupKey,
+        version: randomUUID(),
       },
     });
+
+    // Rotate version on parent/linked Resource if exists
+    const linkedResource = await client.resource.findUnique({
+      where: { totpAccountId: account.id },
+    });
+    if (linkedResource) {
+      await client.resource.update({
+        where: { id: linkedResource.id },
+        data: { version: randomUUID() },
+      });
+    }
 
     return this.mapPrismaToDomain(updated);
   }
 
   async deleteById(id: string, tx?: Prisma.TransactionClient): Promise<void> {
     const client = tx || this.prisma;
-    // If record doesn't exist, Prisma will throw; swallow "not found" errors for idempotency.
+    // Find linked resource first
+    const linkedResource = await client.resource.findUnique({
+      where: { totpAccountId: id },
+    });
+
     try {
       await client.tOTPAccount.delete({
         where: { id },
       });
     } catch (e) {
-      // Prisma's error code for "record to delete does not exist" is P2025.
-      // We check for this specific error to avoid swallowing other unexpected errors.
       if ((e as { code?: string }).code === 'P2025') {
-        // Record not found, which is fine for an idempotent delete.
         return;
       }
-      // Re-throw any other unexpected errors.
       throw e;
+    }
+
+    if (linkedResource) {
+      await client.resource.update({
+        where: { id: linkedResource.id },
+        data: { version: randomUUID() },
+      });
     }
   }
 
@@ -460,6 +495,44 @@ export class PrismaTOTPRepository implements TOTPRepository {
     return rows.map((row) => this.mapPrismaToDomain(row));
   }
 
+  async findSharedMetadataVisibleTo(_discordUserId: string): Promise<TOTPAccountMetadata[]> {
+    const rows = await this.prisma.tOTPAccount.findMany({
+      where: { shared: true },
+      select: {
+        id: true,
+        ownerDiscordUserId: true,
+        accountName: true,
+        issuer: true,
+        shared: true,
+        version: true,
+        createdAt: true,
+        updatedAt: true,
+      },
+      orderBy: { accountName: 'asc' },
+    });
+    return rows;
+  }
+
+  async findMetadataByOwnerDiscordUserId(
+    ownerDiscordUserId: string
+  ): Promise<TOTPAccountMetadata[]> {
+    const rows = await this.prisma.tOTPAccount.findMany({
+      where: { ownerDiscordUserId },
+      select: {
+        id: true,
+        ownerDiscordUserId: true,
+        accountName: true,
+        issuer: true,
+        shared: true,
+        version: true,
+        createdAt: true,
+        updatedAt: true,
+      },
+      orderBy: { accountName: 'asc' },
+    });
+    return rows;
+  }
+
   private mapPrismaToDomain(row: {
     id: string;
     ownerDiscordUserId: string;
@@ -468,6 +541,7 @@ export class PrismaTOTPRepository implements TOTPRepository {
     issuer: string | null;
     shared: boolean;
     backupKey?: string | null;
+    version: string;
     createdAt: Date;
     updatedAt: Date;
   }): TOTPAccount {
@@ -484,6 +558,7 @@ export class PrismaTOTPRepository implements TOTPRepository {
       issuer: row.issuer ?? undefined,
       shared: row.shared,
       backupKey: decryptedBackupKey,
+      version: row.version,
       createdAt: row.createdAt,
       updatedAt: row.updatedAt,
     };
@@ -513,6 +588,11 @@ export class PrismaResourceFieldRepository implements ResourceFieldRepository {
         name: input.name,
         value: encryptedValue,
       },
+    });
+    // Rotate version on parent Resource
+    await client.resource.update({
+      where: { id: input.resourceId },
+      data: { version: randomUUID() },
     });
     return this.mapPrismaToDomain(created);
   }
@@ -551,11 +631,22 @@ export class PrismaResourceFieldRepository implements ResourceFieldRepository {
       where: { id },
       data: { value: encryptedValue },
     });
+    // Rotate version on parent Resource
+    await client.resource.update({
+      where: { id: updated.resourceId },
+      data: { version: randomUUID() },
+    });
     return this.mapPrismaToDomain(updated);
   }
 
   async delete(id: string, tx?: Prisma.TransactionClient): Promise<void> {
     const client = tx || this.prisma;
+    // Find record first
+    const field = await client.resourceField.findUnique({
+      where: { id },
+    });
+    if (!field) return;
+
     try {
       await client.resourceField.delete({
         where: { id },
@@ -566,6 +657,49 @@ export class PrismaResourceFieldRepository implements ResourceFieldRepository {
       }
       throw e;
     }
+
+    // Rotate version on parent Resource
+    await client.resource.update({
+      where: { id: field.resourceId },
+      data: { version: randomUUID() },
+    });
+  }
+
+  async findMetadataByResourceId(resourceId: string): Promise<ResourceFieldMetadata[]> {
+    const rows = await this.prisma.resourceField.findMany({
+      where: { resourceId },
+      select: {
+        id: true,
+        resourceId: true,
+        name: true,
+        createdAt: true,
+        updatedAt: true,
+      },
+      orderBy: { name: 'asc' },
+    });
+    return rows;
+  }
+
+  async findMetadataByResourceAndName(
+    resourceId: string,
+    name: string
+  ): Promise<ResourceFieldMetadata | null> {
+    const row = await this.prisma.resourceField.findUnique({
+      where: {
+        resourceId_name: {
+          resourceId,
+          name,
+        },
+      },
+      select: {
+        id: true,
+        resourceId: true,
+        name: true,
+        createdAt: true,
+        updatedAt: true,
+      },
+    });
+    return row;
   }
 
   private mapPrismaToDomain(row: {
@@ -814,6 +948,11 @@ export class PrismaGuardianRepository implements GuardianRepository {
         role: input.role,
       },
     });
+    // Rotate version on parent Resource
+    await client.resource.update({
+      where: { id: input.resourceId },
+      data: { version: randomUUID() },
+    });
     return this.mapPrismaToDomain(created);
   }
 
@@ -857,6 +996,11 @@ export class PrismaGuardianRepository implements GuardianRepository {
         resourceId,
         discordUserId,
       },
+    });
+    // Rotate version on parent Resource
+    await client.resource.update({
+      where: { id: resourceId },
+      data: { version: randomUUID() },
     });
   }
 
@@ -1208,11 +1352,13 @@ export class PrismaProjectRepository implements ProjectRepository {
         name: input.name,
         description: input.description ?? null,
         ownerId: input.ownerId,
+        policyVersion: randomUUID(),
       },
     });
     return {
       ...project,
       description: project.description ?? null,
+      policyVersion: project.policyVersion,
     };
   }
 
@@ -1222,6 +1368,7 @@ export class PrismaProjectRepository implements ProjectRepository {
     return {
       ...row,
       description: row.description ?? null,
+      policyVersion: row.policyVersion,
     };
   }
 
@@ -1233,6 +1380,7 @@ export class PrismaProjectRepository implements ProjectRepository {
     return rows.map((row) => ({
       ...row,
       description: row.description ?? null,
+      policyVersion: row.policyVersion,
     }));
   }
 
@@ -1313,6 +1461,11 @@ export class PrismaProjectRepository implements ProjectRepository {
           addedBy: input.addedBy,
         },
       });
+      // Rotate project policyVersion
+      await this.prisma.project.update({
+        where: { id: input.projectId },
+        data: { policyVersion: randomUUID() },
+      });
       return {
         ...member,
         role: member.role as ProjectMemberRole,
@@ -1330,6 +1483,11 @@ export class PrismaProjectRepository implements ProjectRepository {
           where: { projectId_userId: { projectId: input.projectId, userId: input.userId } },
           data: { role: input.role ?? 'READER' },
         });
+        // Rotate project policyVersion
+        await this.prisma.project.update({
+          where: { id: input.projectId },
+          data: { policyVersion: randomUUID() },
+        });
         return { ...member, role: member.role as ProjectMemberRole };
       }
       throw error;
@@ -1340,6 +1498,11 @@ export class PrismaProjectRepository implements ProjectRepository {
     try {
       await this.prisma.projectMember.delete({
         where: { projectId_userId: { projectId, userId } },
+      });
+      // Rotate project policyVersion
+      await this.prisma.project.update({
+        where: { id: projectId },
+        data: { policyVersion: randomUUID() },
       });
     } catch (e: unknown) {
       if (e && typeof e === 'object' && 'code' in e && (e as { code: string }).code === 'P2025')

@@ -34,6 +34,7 @@ model Resource {
   // Optional linked 2FA account (one-to-one)
   totpAccountId String?      @unique
   totpAccount   TOTPAccount? @relation(fields: [totpAccountId], references: [id], onDelete: SetNull)
+  version       String       @default(uuid())
 
   guardians        Guardian[]
   approvalRequests ApprovalRequest[]
@@ -104,6 +105,7 @@ model TOTPAccount {
   issuer             String?
   shared             Boolean  @default(false)
   backupKey          String?
+  version            String   @default(uuid())
   createdAt          DateTime @default(now())
   updatedAt          DateTime @updatedAt
 
@@ -194,9 +196,10 @@ model Project {
   id          String   @id @default(uuid())
   name        String
   description String?
-  ownerId     String   // Discord User ID
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  ownerId       String   // Discord User ID
+  policyVersion String   @default(uuid())
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
 
   environments Environment[]
   members      ProjectMember[]

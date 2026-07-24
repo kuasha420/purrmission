@@ -1,6 +1,6 @@
 import type { ChatInputCommandInteraction } from 'discord.js';
 import type { CommandContext } from '../../context.js';
-import type { TOTPAccount } from '../../../../domain/models.js';
+import type { TOTPAccountMetadata } from '../../../../domain/models.js';
 
 export async function handleList2FA(
   interaction: ChatInputCommandInteraction,
@@ -10,11 +10,12 @@ export async function handleList2FA(
   const ownerDiscordUserId = interaction.user.id;
   const { totp: totpRepository } = context.repositories;
 
-  const personalAccounts = await totpRepository.findByOwnerDiscordUserId(ownerDiscordUserId);
+  const personalAccounts =
+    await totpRepository.findMetadataByOwnerDiscordUserId(ownerDiscordUserId);
 
-  let sharedAccounts: TOTPAccount[] = [];
+  let sharedAccounts: TOTPAccountMetadata[] = [];
   if (includeShared) {
-    sharedAccounts = await totpRepository.findSharedVisibleTo(ownerDiscordUserId);
+    sharedAccounts = await totpRepository.findSharedMetadataVisibleTo(ownerDiscordUserId);
   }
 
   if (personalAccounts.length === 0 && (!includeShared || sharedAccounts.length === 0)) {

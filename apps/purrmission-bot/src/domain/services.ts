@@ -16,6 +16,7 @@ import type {
   Guardian,
   TOTPAccount,
   ResourceField,
+  ResourceFieldMetadata,
 } from './models.js';
 import type { Repositories } from './repositories.js';
 import { logger } from '../logging/logger.js';
@@ -778,12 +779,22 @@ export class ResourceService {
     return repositories.resourceFields.findByResourceId(resourceId);
   }
 
+  async listFieldsMetadata(resourceId: string): Promise<ResourceFieldMetadata[]> {
+    const { repositories } = this.deps;
+    return repositories.resourceFields.findMetadataByResourceId(resourceId);
+  }
+
   /**
    * Get a specific field for a resource.
    */
   async getField(resourceId: string, name: string): Promise<ResourceField | null> {
     const { repositories } = this.deps;
     return repositories.resourceFields.findByResourceAndName(resourceId, name);
+  }
+
+  async getFieldMetadata(resourceId: string, name: string): Promise<ResourceFieldMetadata | null> {
+    const { repositories } = this.deps;
+    return repositories.resourceFields.findMetadataByResourceAndName(resourceId, name);
   }
 
   /**

@@ -39,6 +39,9 @@ export interface Resource {
   /** Optional linked TOTP account ID (one-to-one) */
   totpAccountId?: string | null;
 
+  /** Stable version identifier of the resource state */
+  version: string;
+
   /** Timestamp when the resource was created */
   createdAt: Date;
 }
@@ -142,7 +145,7 @@ export interface DecisionResult {
 /**
  * Input for creating a new resource.
  */
-export type CreateResourceInput = Omit<Resource, 'createdAt'>;
+export type CreateResourceInput = Omit<Resource, 'createdAt' | 'version'> & { version?: string };
 
 /**
  * Input for adding a new guardian.
@@ -210,10 +213,27 @@ export interface TOTPAccount {
   /** Optional backup key / recovery code */
   backupKey?: string;
 
+  /** Stable version identifier of the TOTP state */
+  version: string;
+
   /** Timestamp when the account was created */
   createdAt: Date;
 
   /** Timestamp when the account was last updated */
+  updatedAt: Date;
+}
+
+/**
+ * Metadata projection of a TOTP account (excludes sensitive secrets).
+ */
+export interface TOTPAccountMetadata {
+  id: string;
+  ownerDiscordUserId: string;
+  accountName: string;
+  issuer?: string | null;
+  shared: boolean;
+  version: string;
+  createdAt: Date;
   updatedAt: Date;
 }
 
@@ -238,6 +258,17 @@ export interface ResourceField {
   createdAt: Date;
 
   /** Timestamp when the field was last updated */
+  updatedAt: Date;
+}
+
+/**
+ * Metadata projection of a resource field (excludes sensitive value).
+ */
+export interface ResourceFieldMetadata {
+  id: string;
+  resourceId: string;
+  name: string;
+  createdAt: Date;
   updatedAt: Date;
 }
 
@@ -330,6 +361,7 @@ export interface Project {
   name: string;
   description: string | null;
   ownerId: string;
+  policyVersion: string;
   createdAt: Date;
   updatedAt: Date;
 }

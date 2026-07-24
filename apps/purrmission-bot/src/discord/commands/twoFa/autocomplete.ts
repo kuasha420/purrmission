@@ -1,6 +1,6 @@
 import type { AutocompleteInteraction } from 'discord.js';
 import type { CommandContext } from '../context.js';
-import type { TOTPAccount } from '../../../domain/models.js';
+import type { TOTPAccountMetadata } from '../../../domain/models.js';
 
 /**
  * Handle autocomplete for /2fa commands (account names).
@@ -25,11 +25,12 @@ export async function handleTwoFaAutocomplete(
   const { totp: totpRepository } = context.repositories;
 
   // Load accounts visible to this user:
-  const personalAccounts = await totpRepository.findByOwnerDiscordUserId(ownerDiscordUserId);
-  const sharedAccounts = await totpRepository.findSharedVisibleTo(ownerDiscordUserId);
+  const personalAccounts =
+    await totpRepository.findMetadataByOwnerDiscordUserId(ownerDiscordUserId);
+  const sharedAccounts = await totpRepository.findSharedMetadataVisibleTo(ownerDiscordUserId);
 
   // Merge + dedupe by accountName, preferring personal first
-  const accountMap = new Map<string, TOTPAccount>();
+  const accountMap = new Map<string, TOTPAccountMetadata>();
   personalAccounts.forEach((acc) => accountMap.set(acc.accountName, acc));
   sharedAccounts.forEach((acc) => {
     if (!accountMap.has(acc.accountName)) {

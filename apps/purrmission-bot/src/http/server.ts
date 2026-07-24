@@ -452,8 +452,8 @@ export function createHttpServer(deps: HttpServerDeps): FastifyInstance {
       const project = await services.project.getProject(projectId);
       if (!project) throw new ResourceNotFoundError('Project not found');
 
-      // Basic ACL: only owner can view (for now)
-      if (project.ownerId !== userId) throw new AccessDeniedError('Access denied');
+      const role = await services.project.getMemberRole(projectId, userId);
+      if (project.ownerId !== userId && !role) throw new AccessDeniedError('Access denied');
 
       return project;
     }
@@ -500,7 +500,9 @@ export function createHttpServer(deps: HttpServerDeps): FastifyInstance {
 
       const project = await services.project.getProject(projectId);
       if (!project) throw new ResourceNotFoundError('Project not found');
-      if (project.ownerId !== userId) throw new AccessDeniedError('Access denied');
+
+      const role = await services.project.getMemberRole(projectId, userId);
+      if (project.ownerId !== userId && !role) throw new AccessDeniedError('Access denied');
 
       const envs = await services.project.listEnvironments(projectId);
       return envs;
@@ -658,7 +660,7 @@ export function createHttpServer(deps: HttpServerDeps): FastifyInstance {
     },
     async (req) => {
       const { id } = req.params;
-      const fields = await services.resource.listFields(id);
+      const fields = await services.resource.listFieldsMetadata(id);
       return fields.map((f) => f.name);
     }
   );

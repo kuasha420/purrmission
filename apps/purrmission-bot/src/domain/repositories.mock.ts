@@ -21,6 +21,8 @@ import type {
   ProjectMember,
   CreateProjectMemberInput,
   ProjectMemberRole,
+  TOTPAccountMetadata,
+  ResourceFieldMetadata,
 } from './models.js';
 import {
   ResourceRepository,
@@ -40,11 +42,12 @@ import crypto from 'node:crypto';
  * Useful for tests.
  */
 export class InMemoryResourceRepository implements ResourceRepository {
-  private resources: Map<string, Resource> = new Map();
+  public resources: Map<string, Resource> = new Map();
 
   async create(input: CreateResourceInput): Promise<Resource> {
     const resource: Resource = {
       ...input,
+      version: input.version || crypto.randomUUID(),
       createdAt: new Date(),
     };
     this.resources.set(resource.id, resource);
@@ -73,6 +76,7 @@ export class InMemoryResourceRepository implements ResourceRepository {
       ...resource,
       totpAccountId:
         data.totpAccountId === null ? undefined : (data.totpAccountId ?? resource.totpAccountId),
+      version: crypto.randomUUID(),
     };
     this.resources.set(id, updated);
     return updated;
@@ -89,6 +93,13 @@ export class InMemoryResourceRepository implements ResourceRepository {
     }
     return result;
   }
+
+  rotateVersion(id: string): void {
+    const resource = this.resources.get(id);
+    if (resource) {
+      resource.version = crypto.randomUUID();
+    }
+  }
 }
 
 /**
@@ -98,12 +109,15 @@ export class InMemoryResourceRepository implements ResourceRepository {
 export class InMemoryGuardianRepository implements GuardianRepository {
   private guardians: Map<string, Guardian> = new Map();
 
+  constructor(private resources?: InMemoryResourceRepository) {}
+
   async add(input: AddGuardianInput): Promise<Guardian> {
     const guardian: Guardian = {
       ...input,
       createdAt: new Date(),
     };
     this.guardians.set(guardian.id, guardian);
+    this.resources?.rotateVersion(input.resourceId);
     return guardian;
   }
 
@@ -140,6 +154,7 @@ export class InMemoryGuardianRepository implements GuardianRepository {
         this.guardians.delete(id);
       }
     }
+    this.resources?.rotateVersion(resourceId);
   }
 }
 
@@ -224,11 +239,16 @@ export class InMemoryApprovalRequestRepository implements ApprovalRequestReposit
 export class InMemoryTOTPRepository implements TOTPRepository {
   private accounts: Map<string, TOTPAccount> = new Map();
 
-  async create(account: Omit<TOTPAccount, 'id' | 'createdAt' | 'updatedAt'>): Promise<TOTPAccount> {
+  constructor(private resources?: InMemoryResourceRepository) {}
+
+  async create(
+    account: Omit<TOTPAccount, 'id' | 'createdAt' | 'updatedAt' | 'version'>
+  ): Promise<TOTPAccount> {
     const newAccount: TOTPAccount = {
       ...account,
       id: crypto.randomUUID(),
-      backupKey: account.backupKey,
+      backupKey: account.backupKey ?? undefined,
+      version: crypto.randomUUID(),
       createdAt: new Date(),
       updatedAt: new Date(),
     };
@@ -244,14 +264,30 @@ export class InMemoryTOTPRepository implements TOTPRepository {
     const updated: TOTPAccount = {
       ...account,
       backupKey: account.backupKey,
+      version: crypto.randomUUID(),
       updatedAt: new Date(),
     };
     this.accounts.set(updated.id, updated);
+    if (this.resources) {
+      for (const res of this.resources.resources.values()) {
+        if (res.totpAccountId === account.id) {
+          this.resources.rotateVersion(res.id);
+        }
+      }
+    }
     return updated;
   }
 
   async deleteById(id: string): Promise<void> {
     this.accounts.delete(id);
+    if (this.resources) {
+      for (const res of this.resources.resources.values()) {
+        if (res.totpAccountId === id) {
+          res.totpAccountId = undefined;
+          this.resources.rotateVersion(res.id);
+        }
+      }
+    }
   }
 
   async findById(id: string): Promise<TOTPAccount | null> {
@@ -292,6 +328,38 @@ export class InMemoryTOTPRepository implements TOTPRepository {
     }
     return results;
   }
+
+  async findSharedMetadataVisibleTo(_discordUserId: string): Promise<TOTPAccountMetadata[]> {
+    return Array.from(this.accounts.values())
+      .filter((a) => a.shared)
+      .map((a) => ({
+        id: a.id,
+        ownerDiscordUserId: a.ownerDiscordUserId,
+        accountName: a.accountName,
+        issuer: a.issuer,
+        shared: a.shared,
+        version: a.version,
+        createdAt: a.createdAt,
+        updatedAt: a.updatedAt,
+      }));
+  }
+
+  async findMetadataByOwnerDiscordUserId(
+    ownerDiscordUserId: string
+  ): Promise<TOTPAccountMetadata[]> {
+    return Array.from(this.accounts.values())
+      .filter((a) => a.ownerDiscordUserId === ownerDiscordUserId)
+      .map((a) => ({
+        id: a.id,
+        ownerDiscordUserId: a.ownerDiscordUserId,
+        accountName: a.accountName,
+        issuer: a.issuer,
+        shared: a.shared,
+        version: a.version,
+        createdAt: a.createdAt,
+        updatedAt: a.updatedAt,
+      }));
+  }
 }
 
 /**
@@ -301,6 +369,8 @@ export class InMemoryTOTPRepository implements TOTPRepository {
 export class InMemoryResourceFieldRepository implements ResourceFieldRepository {
   private fields: Map<string, ResourceField> = new Map();
 
+  constructor(private resources?: InMemoryResourceRepository) {}
+
   async create(input: CreateResourceFieldInput): Promise<ResourceField> {
     const field: ResourceField = {
       ...input,
@@ -309,6 +379,7 @@ export class InMemoryResourceFieldRepository implements ResourceFieldRepository 
       updatedAt: new Date(),
     };
     this.fields.set(field.id, field);
+    this.resources?.rotateVersion(input.resourceId);
     return field;
   }
 
@@ -346,11 +417,45 @@ export class InMemoryResourceFieldRepository implements ResourceFieldRepository 
       updatedAt: new Date(),
     };
     this.fields.set(id, updated);
+    this.resources?.rotateVersion(field.resourceId);
     return updated;
   }
 
   async delete(id: string): Promise<void> {
-    this.fields.delete(id);
+    const field = this.fields.get(id);
+    if (field) {
+      this.fields.delete(id);
+      this.resources?.rotateVersion(field.resourceId);
+    }
+  }
+
+  async findMetadataByResourceId(resourceId: string): Promise<ResourceFieldMetadata[]> {
+    return Array.from(this.fields.values())
+      .filter((f) => f.resourceId === resourceId)
+      .map((f) => ({
+        id: f.id,
+        resourceId: f.resourceId,
+        name: f.name,
+        createdAt: f.createdAt,
+        updatedAt: f.updatedAt,
+      }));
+  }
+
+  async findMetadataByResourceAndName(
+    resourceId: string,
+    name: string
+  ): Promise<ResourceFieldMetadata | null> {
+    const field = Array.from(this.fields.values()).find(
+      (f) => f.resourceId === resourceId && f.name === name
+    );
+    if (!field) return null;
+    return {
+      id: field.id,
+      resourceId: field.resourceId,
+      name: field.name,
+      createdAt: field.createdAt,
+      updatedAt: field.updatedAt,
+    };
   }
 }
 
@@ -542,6 +647,7 @@ export class InMemoryProjectRepository implements ProjectRepository {
       name: input.name,
       description: input.description ?? null,
       ownerId: input.ownerId,
+      policyVersion: crypto.randomUUID(),
       createdAt: new Date(),
       updatedAt: new Date(),
     };
@@ -576,11 +682,19 @@ export class InMemoryProjectRepository implements ProjectRepository {
       updatedAt: new Date(),
     };
     this.members.set(`${input.projectId}::${input.userId}`, member);
+    const p = this.projects.get(input.projectId);
+    if (p) {
+      p.policyVersion = crypto.randomUUID();
+    }
     return member;
   }
 
   async removeMember(projectId: string, userId: string): Promise<void> {
     this.members.delete(`${projectId}::${userId}`);
+    const p = this.projects.get(projectId);
+    if (p) {
+      p.policyVersion = crypto.randomUUID();
+    }
   }
 
   async getMemberRole(projectId: string, userId: string): Promise<ProjectMemberRole | null> {
@@ -641,12 +755,13 @@ export class InMemoryProjectRepository implements ProjectRepository {
  * Create in-memory repositories for tests.
  */
 export function createInMemoryRepositories(): Repositories {
+  const resources = new InMemoryResourceRepository();
   return {
-    resources: new InMemoryResourceRepository(),
-    guardians: new InMemoryGuardianRepository(),
+    resources,
+    guardians: new InMemoryGuardianRepository(resources),
     approvalRequests: new InMemoryApprovalRequestRepository(),
-    totp: new InMemoryTOTPRepository(),
-    resourceFields: new InMemoryResourceFieldRepository(),
+    totp: new InMemoryTOTPRepository(resources),
+    resourceFields: new InMemoryResourceFieldRepository(resources),
     audit: new InMemoryAuditRepository(),
     auth: new InMemoryAuthRepository(),
     projects: new InMemoryProjectRepository(),

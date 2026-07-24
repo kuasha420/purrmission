@@ -22,7 +22,24 @@ export class ProjectService {
   }
 
   async listProjects(userId: string): Promise<Project[]> {
-    return this.projectRepo.listProjectsByOwner(userId);
+    const owned = await this.projectRepo.listProjectsByOwner(userId);
+    const memberships = await this.projectRepo.listMembershipsByUser(userId);
+
+    const projectsMap = new Map<string, Project>();
+    for (const p of owned) {
+      projectsMap.set(p.id, p);
+    }
+
+    for (const m of memberships) {
+      if (!projectsMap.has(m.projectId)) {
+        const p = await this.projectRepo.findById(m.projectId);
+        if (p) {
+          projectsMap.set(p.id, p);
+        }
+      }
+    }
+
+    return Array.from(projectsMap.values());
   }
 
   async getProject(id: string): Promise<Project | null> {

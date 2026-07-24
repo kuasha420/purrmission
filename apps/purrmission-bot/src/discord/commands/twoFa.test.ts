@@ -87,6 +87,8 @@ describe('twoFa command module', () => {
       ),
       findByOwnerDiscordUserId: mock.fn(async (_userId: string) => []),
       findSharedVisibleTo: mock.fn(async (_userId: string) => []),
+      findMetadataByOwnerDiscordUserId: mock.fn(async (_userId: string) => []),
+      findSharedMetadataVisibleTo: mock.fn(async (_userId: string) => []),
       findByOwnerAndName: mock.fn(async (_userId: string, _name: string) => null),
       update: mock.fn(async (account: TOTPAccount) => account),
     };
@@ -312,10 +314,13 @@ describe('twoFa command module', () => {
 
   describe('handleList2FA', () => {
     it('should list personal accounts', async () => {
-      mockTotpRepository.findByOwnerDiscordUserId = mock.fn(async () => [
-        { accountName: 'Google', shared: false },
-        { accountName: 'AWS', shared: true },
-      ]);
+      mockTotpRepository.findMetadataByOwnerDiscordUserId = mock.fn(
+        async () =>
+          [
+            { accountName: 'Google', shared: false },
+            { accountName: 'AWS', shared: true },
+          ] as any
+      );
 
       await handleList2FA(
         mockInteraction as unknown as Parameters<typeof handleList2FA>[0],
@@ -327,13 +332,17 @@ describe('twoFa command module', () => {
     });
 
     it('should list shared accounts visible to user', async () => {
-      mockTotpRepository.findByOwnerDiscordUserId = mock.fn(async () => [
-        { ownerDiscordUserId: 'user-123', accountName: 'Google', shared: false },
-      ]);
-      mockTotpRepository.findSharedVisibleTo = mock.fn(async () => [
-        { ownerDiscordUserId: 'user-999', accountName: 'Team-VPN', shared: true },
-        { ownerDiscordUserId: 'user-123', accountName: 'Google', shared: false },
-      ]);
+      mockTotpRepository.findMetadataByOwnerDiscordUserId = mock.fn(
+        async () =>
+          [{ ownerDiscordUserId: 'user-123', accountName: 'Google', shared: false }] as any
+      );
+      mockTotpRepository.findSharedMetadataVisibleTo = mock.fn(
+        async () =>
+          [
+            { ownerDiscordUserId: 'user-999', accountName: 'Team-VPN', shared: true },
+            { ownerDiscordUserId: 'user-123', accountName: 'Google', shared: false },
+          ] as any
+      );
 
       mockInteraction.options.getBoolean = mock.fn((name: string) =>
         name === 'shared' ? true : null
@@ -571,13 +580,12 @@ describe('twoFa command module', () => {
       mockInteraction.options.getSubcommand = mock.fn(() => 'get');
       mockInteraction.options.getFocused = mock.fn(() => ({ name: 'account', value: 'goog' }));
 
-      mockTotpRepository.findByOwnerDiscordUserId = mock.fn(async () => [
-        { accountName: 'Google-Personal' },
-      ]);
-      mockTotpRepository.findSharedVisibleTo = mock.fn(async () => [
-        { accountName: 'Google-Shared' },
-        { accountName: 'AWS' },
-      ]);
+      mockTotpRepository.findMetadataByOwnerDiscordUserId = mock.fn(
+        async () => [{ accountName: 'Google-Personal' }] as any
+      );
+      mockTotpRepository.findSharedMetadataVisibleTo = mock.fn(
+        async () => [{ accountName: 'Google-Shared' }, { accountName: 'AWS' }] as any
+      );
 
       await handleTwoFaAutocomplete(
         mockInteraction as unknown as Parameters<typeof handleTwoFaAutocomplete>[0],
