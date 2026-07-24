@@ -96,7 +96,7 @@ flowchart TD
   I124 --> I126
   I126 -->|Go| READY
   I126 -->|No-go| NOGO
-  NOGO --> I126
+  NOGO -->|remediate and re-integrate| I124
   I105 -. parallel .-> PROD
   I124 -. migration evidence .-> PROD
 ```
@@ -419,8 +419,16 @@ No-go leaves the knowledgebase status, #126, and #116 open. The reviewer:
 1. creates or reopens a blocking issue under the correct contract owner;
 2. adds native dependency edges if the graph changes;
 3. updates this document and #116 in the same change;
-4. resumes from a new verified implementation node; and
-5. reruns #126 against a new pinned commit.
+4. resumes from a new verified implementation node;
+5. reopens #124 whenever remediation changes code, schema, contracts, migrations, or
+   current-surface behavior;
+6. reruns and re-verifies #124's complete cross-surface, migration, and legacy-path evidence
+   against the repaired candidate; and
+7. reruns #126 only against the new pinned commit accepted by #124.
+
+A correction limited to #126's evidence presentation or knowledgebase wording MAY skip reopening
+#124 only when the pinned implementation commit is unchanged and the independent reviewers record
+why the existing #124 evidence remains valid.
 
 No dashboard phase issue is filed while the gate is No-go.
 
