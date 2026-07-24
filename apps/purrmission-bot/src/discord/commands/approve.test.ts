@@ -16,8 +16,9 @@ describe('Approve Command', () => {
     } as unknown as ChatInputCommandInteraction;
 
     const services = {
-      approval: {
-        recordDecision: mock.fn(async () => ({ success: true })),
+      ports: {
+        recordApprovalDecision: mock.fn(async () => ({ success: true })),
+        getApprovalRequest: mock.fn(async () => ({ id: 'req-123', resourceId: 'res-1' })),
       },
     } as unknown as Services;
 
@@ -28,13 +29,19 @@ describe('Approve Command', () => {
       1
     );
     assert.strictEqual(
-      (services.approval.recordDecision as unknown as ReturnType<typeof mock.fn>).mock.calls.length,
+      (services.ports.recordApprovalDecision as unknown as ReturnType<typeof mock.fn>).mock.calls
+        .length,
       1
     );
     assert.deepStrictEqual(
-      (services.approval.recordDecision as unknown as ReturnType<typeof mock.fn>).mock.calls[0]
-        .arguments,
-      ['req-123', 'APPROVE', 'guardian-1']
+      (services.ports.recordApprovalDecision as unknown as ReturnType<typeof mock.fn>).mock.calls[0]
+        .arguments[1],
+      'req-123'
+    );
+    assert.deepStrictEqual(
+      (services.ports.recordApprovalDecision as unknown as ReturnType<typeof mock.fn>).mock.calls[0]
+        .arguments[2],
+      'APPROVE'
     );
     assert.strictEqual(mockReply.mock.calls.length, 1);
     assert.match(mockReply.mock.calls[0].arguments[0].content, /APPROVED/);
@@ -51,8 +58,8 @@ describe('Approve Command', () => {
     } as unknown as ChatInputCommandInteraction;
 
     const services = {
-      approval: {
-        recordDecision: mock.fn(async () => ({ success: false, error: 'Not found' })),
+      ports: {
+        recordApprovalDecision: mock.fn(async () => ({ success: false, error: 'Not found' })),
       },
     } as unknown as Services;
 
@@ -75,8 +82,8 @@ describe('Approve Command', () => {
     } as unknown as ChatInputCommandInteraction;
 
     const services = {
-      approval: {
-        recordDecision: mock.fn(async () => {
+      ports: {
+        recordApprovalDecision: mock.fn(async () => {
           throw new Error('Database error');
         }),
       },

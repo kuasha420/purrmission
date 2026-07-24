@@ -39,6 +39,8 @@ import {
 import { getPrismaClient } from '../infra/prismaClient.js';
 import { generateTOTPCode } from './totp.js';
 import { computeKeyedDigest, deterministicUUID } from './crypto.js';
+import { DomainPorts } from './ports.js';
+import { DomainPortsImpl } from './ports_impl.js';
 
 /**
  * Service dependencies.
@@ -1715,6 +1717,7 @@ export interface Services {
   audit: AuditService;
   auth: AuthService;
   project: ProjectService;
+  ports: DomainPorts;
 }
 
 /**
@@ -1730,12 +1733,14 @@ export function createServices(baseDeps: { repositories: Repositories }): Servic
   const approval = new ApprovalService(fullDeps);
   fullDeps.approval = approval;
   const resource = new ResourceService(fullDeps);
+  const project = new ProjectService(baseDeps.repositories.projects, resource);
 
   return {
     approval,
     resource,
     audit,
     auth: new AuthService(baseDeps.repositories.auth, baseDeps.repositories.credentials),
-    project: new ProjectService(baseDeps.repositories.projects, resource),
+    project,
+    ports: new DomainPortsImpl(project, resource, approval),
   };
 }

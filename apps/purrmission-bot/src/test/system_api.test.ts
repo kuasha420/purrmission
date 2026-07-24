@@ -3,6 +3,8 @@ import assert from 'node:assert';
 import type { Client } from 'discord.js';
 import type { FastifyInstance } from 'fastify';
 import type { Services } from '../domain/services.js';
+import { ForbiddenError } from '../domain/auth.js';
+import { ResourceNotFoundError } from '../domain/errors.js';
 import { createHttpServer } from '../http/server.js';
 
 // Minimal mock Discord client
@@ -67,6 +69,14 @@ describe('System API E2E Tests', () => {
       getApprovalRequest: (id: string) => mockGetApprovalRequest.fn(id),
       findActiveApproval: (resourceId: string, userId: string) =>
         mockFindActiveApproval.fn(resourceId, userId),
+      findActiveUnconsumedGrant: async (resourceId: string, userId: string) => {
+        const approval = await mockFindActiveApproval.fn(resourceId, userId);
+        if (approval && approval.status === 'APPROVED') {
+          return { id: 'mock-grant-id', resourceId, userId };
+        }
+        return null;
+      },
+      consumeGrant: async () => true,
     },
     auth: {
       validateToken: (token: string) => mockValidateToken.fn(token),
@@ -76,6 +86,57 @@ describe('System API E2E Tests', () => {
       getEnvironmentById: (projectId: string, envId: string) =>
         mockGetEnvironmentById.fn(projectId, envId),
       getMemberRole: (projectId: string, userId: string) => mockGetMemberRole.fn(projectId, userId),
+    },
+    ports: {
+      getSecrets: async (principal: any, projectId: string, envId: string, grantId?: string) => {
+        const userId = principal.id;
+        const project = await mockGetProject.fn(projectId);
+        if (!project) throw new ResourceNotFoundError('Project not found');
+        const env = await mockGetEnvironmentById.fn(projectId, envId);
+        if (!env) throw new ResourceNotFoundError('Environment not found');
+
+        // 1. Owner access
+        if (project.ownerId === userId) {
+          const fields = await mockListFields.fn(env.resourceId);
+          return Object.fromEntries((fields as any[]).map((f) => [f.name, f.value]));
+        }
+
+        // 2. Member role access
+        const role = await mockGetMemberRole.fn(projectId, userId);
+        if (role === 'READER' || role === 'WRITER') {
+          const fields = await mockListFields.fn(env.resourceId);
+          return Object.fromEntries((fields as any[]).map((f) => [f.name, f.value]));
+        }
+
+        // 3. Guardian access
+        const isGuardian = await mockIsGuardian.fn(env.resourceId, userId);
+        if (isGuardian) {
+          const fields = await mockListFields.fn(env.resourceId);
+          return Object.fromEntries((fields as any[]).map((f) => [f.name, f.value]));
+        }
+
+        // 4. Grant access
+        if (grantId) {
+          const fields = await mockListFields.fn(env.resourceId);
+          return Object.fromEntries((fields as any[]).map((f) => [f.name, f.value]));
+        }
+
+        // Fallback: throw ForbiddenError
+        throw new ForbiddenError('Access denied: Secrets access not approved');
+      },
+      createApprovalRequest: async (principal: any, resourceId: string, action: string) => {
+        const result = await mockCreateApprovalRequest.fn({
+          resourceId,
+          requesterId: principal.id,
+          requesterType: principal.type,
+          authKind: principal.authKind,
+          action,
+        });
+        return result;
+      },
+      getApprovalRequest: async (principal: any, requestId: string) => {
+        return mockGetApprovalRequest.fn(requestId);
+      },
     },
   } as unknown as Services;
 
