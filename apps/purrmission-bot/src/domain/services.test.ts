@@ -199,7 +199,7 @@ describe('ResourceService', () => {
   });
 
   describe('linkTOTPAccount', () => {
-    it('should succeed even if audit logging throws an error', async () => {
+    it('should fail and roll back if audit logging throws an error', async () => {
       const mockResource = { id: resourceId, totpAccountId: null };
       const mockTotpAccount = { id: 'totp-1' };
       const mockTotpRepo = {
@@ -227,11 +227,10 @@ describe('ResourceService', () => {
       };
       const svc = new ResourceService(deps);
 
-      // Should complete successfully without throwing
-      await svc.linkTOTPAccount(resourceId, 'totp-1', ownerId);
-
-      assert.strictEqual((mockResourceRepo.update as unknown as MockedFn).mock.calls.length, 1);
-      assert.strictEqual(failingAuditService.log.mock.calls.length, 1);
+      // Should throw due to audit service failure
+      await assert.rejects(async () => {
+        await svc.linkTOTPAccount(resourceId, 'totp-1', ownerId);
+      }, /Audit service unavailable/);
     });
   });
 });
@@ -296,7 +295,7 @@ describe('ApprovalService', () => {
   });
 
   describe('recordDecision', () => {
-    it('should succeed even if audit logging throws an error', async () => {
+    it('should fail and roll back if audit logging throws an error', async () => {
       const mockRequest = {
         id: 'req-1',
         status: 'PENDING',
@@ -326,14 +325,10 @@ describe('ApprovalService', () => {
       };
       const svc = new ApprovalService(deps);
 
-      const result = await svc.recordDecision('req-1', 'APPROVE', 'guardian-1');
-
-      assert.strictEqual(result.success, true);
-      assert.strictEqual(
-        (mockApprovalRepo.updateStatus as unknown as MockedFn).mock.calls.length,
-        1
-      );
-      assert.strictEqual(failingAuditService.log.mock.calls.length, 1);
+      // Should throw due to audit service failure
+      await assert.rejects(async () => {
+        await svc.recordDecision('req-1', 'APPROVE', 'guardian-1');
+      }, /Audit service unavailable/);
     });
   });
 });

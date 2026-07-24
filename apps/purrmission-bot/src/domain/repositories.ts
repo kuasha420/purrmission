@@ -38,16 +38,22 @@ import type {
   Resource,
   ResourceField,
   TOTPAccount,
+  OutboxEvent,
+  CreateOutboxEventInput,
 } from './models.js';
 
 export interface ResourceRepository {
-  create(resource: CreateResourceInput): Promise<Resource>;
+  create(resource: CreateResourceInput, tx?: Prisma.TransactionClient): Promise<Resource>;
 
   findById(id: string): Promise<Resource | null>;
 
   findByApiKey(apiKey: string): Promise<Resource | null>;
 
-  update(id: string, data: { totpAccountId?: string | null }): Promise<Resource>;
+  update(
+    id: string,
+    data: { totpAccountId?: string | null },
+    tx?: Prisma.TransactionClient
+  ): Promise<Resource>;
 
   findManyByIds(ids: string[], query?: string): Promise<Resource[]>;
 }
@@ -59,7 +65,7 @@ export interface GuardianRepository {
   /**
    * Add a new guardian to a resource.
    */
-  add(guardian: AddGuardianInput): Promise<Guardian>;
+  add(guardian: AddGuardianInput, tx?: Prisma.TransactionClient): Promise<Guardian>;
 
   /**
    * Find all guardians for a specific resource.
@@ -84,7 +90,7 @@ export interface GuardianRepository {
   /**
    * Remove a guardian from a resource.
    */
-  remove(resourceId: string, discordUserId: string): Promise<void>;
+  remove(resourceId: string, discordUserId: string, tx?: Prisma.TransactionClient): Promise<void>;
 }
 
 /**
@@ -94,12 +100,20 @@ export interface ApprovalRequestRepository {
   /**
    * Create a new approval request.
    */
-  create(request: CreateApprovalRequestInput): Promise<ApprovalRequest>;
+  create(
+    request: CreateApprovalRequestInput,
+    tx?: Prisma.TransactionClient
+  ): Promise<ApprovalRequest>;
 
   /**
    * Update the status of an approval request.
    */
-  updateStatus(id: string, status: ApprovalStatus, resolvedBy?: string): Promise<void>;
+  updateStatus(
+    id: string,
+    status: ApprovalStatus,
+    resolvedBy?: string,
+    tx?: Prisma.TransactionClient
+  ): Promise<void>;
 
   /**
    * Find an approval request by its ID.
@@ -125,16 +139,19 @@ export interface ApprovalRequestRepository {
    * Mark all pending requests that have passed their expiresAt time as EXPIRED.
    * @returns The number of requests updated.
    */
-  expireRequests(): Promise<number>;
+  expireRequests(tx?: Prisma.TransactionClient): Promise<number>;
 }
 
 /**
  * Repository for managing TOTPAccount entities.
  */
 export interface TOTPRepository {
-  create(account: Omit<TOTPAccount, 'id' | 'createdAt' | 'updatedAt'>): Promise<TOTPAccount>;
-  update(account: TOTPAccount): Promise<TOTPAccount>;
-  deleteById(id: string): Promise<void>;
+  create(
+    account: Omit<TOTPAccount, 'id' | 'createdAt' | 'updatedAt'>,
+    tx?: Prisma.TransactionClient
+  ): Promise<TOTPAccount>;
+  update(account: TOTPAccount, tx?: Prisma.TransactionClient): Promise<TOTPAccount>;
+  deleteById(id: string, tx?: Prisma.TransactionClient): Promise<void>;
   findById(id: string): Promise<TOTPAccount | null>;
   findByOwnerDiscordUserId(ownerDiscordUserId: string): Promise<TOTPAccount[]>;
   findByOwnerAndName(ownerDiscordUserId: string, accountName: string): Promise<TOTPAccount | null>;
@@ -154,7 +171,7 @@ export interface ResourceFieldRepository {
    * Create a new field for a resource.
    * The value will be encrypted before storage.
    */
-  create(input: CreateResourceFieldInput): Promise<ResourceField>;
+  create(input: CreateResourceFieldInput, tx?: Prisma.TransactionClient): Promise<ResourceField>;
 
   /**
    * Find a field by its ID.
@@ -175,12 +192,12 @@ export interface ResourceFieldRepository {
    * Update a field's value.
    * The value will be encrypted before storage.
    */
-  update(id: string, value: string): Promise<ResourceField>;
+  update(id: string, value: string, tx?: Prisma.TransactionClient): Promise<ResourceField>;
 
   /**
    * Delete a field by ID.
    */
-  delete(id: string): Promise<void>;
+  delete(id: string, tx?: Prisma.TransactionClient): Promise<void>;
 }
 
 /**
@@ -194,8 +211,9 @@ export class PrismaResourceRepository implements ResourceRepository {
     this.prisma = prisma;
   }
 
-  async create(input: CreateResourceInput): Promise<Resource> {
-    const created = await this.prisma.resource.create({
+  async create(input: CreateResourceInput, tx?: Prisma.TransactionClient): Promise<Resource> {
+    const client = tx || this.prisma;
+    const created = await client.resource.create({
       data: {
         id: input.id,
         name: input.name,
@@ -221,8 +239,13 @@ export class PrismaResourceRepository implements ResourceRepository {
     return row ? this.mapPrismaToDomain(row) : null;
   }
 
-  async update(id: string, data: { totpAccountId?: string | null }): Promise<Resource> {
-    const updated = await this.prisma.resource.update({
+  async update(
+    id: string,
+    data: { totpAccountId?: string | null },
+    tx?: Prisma.TransactionClient
+  ): Promise<Resource> {
+    const client = tx || this.prisma;
+    const updated = await client.resource.update({
       where: { id },
       data: {
         totpAccountId: data.totpAccountId,
@@ -327,14 +350,18 @@ export class PrismaTOTPRepository implements TOTPRepository {
     }
   }
 
-  async create(account: Omit<TOTPAccount, 'id' | 'createdAt' | 'updatedAt'>): Promise<TOTPAccount> {
+  async create(
+    account: Omit<TOTPAccount, 'id' | 'createdAt' | 'updatedAt'>,
+    tx?: Prisma.TransactionClient
+  ): Promise<TOTPAccount> {
+    const client = tx || this.prisma;
     const { encryptedSecret, encryptedBackupKey } = this.encryptAccountData(
       account.secret,
       account.backupKey,
       'creation'
     );
 
-    const created = await this.prisma.tOTPAccount.create({
+    const created = await client.tOTPAccount.create({
       data: {
         ownerDiscordUserId: account.ownerDiscordUserId,
         accountName: account.accountName,
@@ -348,7 +375,8 @@ export class PrismaTOTPRepository implements TOTPRepository {
     return this.mapPrismaToDomain(created);
   }
 
-  async update(account: TOTPAccount): Promise<TOTPAccount> {
+  async update(account: TOTPAccount, tx?: Prisma.TransactionClient): Promise<TOTPAccount> {
+    const client = tx || this.prisma;
     const { encryptedSecret, encryptedBackupKey } = this.encryptAccountData(
       account.secret,
       account.backupKey,
@@ -356,7 +384,7 @@ export class PrismaTOTPRepository implements TOTPRepository {
       account.id
     );
 
-    const updated = await this.prisma.tOTPAccount.update({
+    const updated = await client.tOTPAccount.update({
       where: { id: account.id },
       data: {
         ownerDiscordUserId: account.ownerDiscordUserId,
@@ -371,10 +399,11 @@ export class PrismaTOTPRepository implements TOTPRepository {
     return this.mapPrismaToDomain(updated);
   }
 
-  async deleteById(id: string): Promise<void> {
+  async deleteById(id: string, tx?: Prisma.TransactionClient): Promise<void> {
+    const client = tx || this.prisma;
     // If record doesn't exist, Prisma will throw; swallow "not found" errors for idempotency.
     try {
-      await this.prisma.tOTPAccount.delete({
+      await client.tOTPAccount.delete({
         where: { id },
       });
     } catch (e) {
@@ -472,9 +501,13 @@ export class PrismaResourceFieldRepository implements ResourceFieldRepository {
     this.prisma = prisma;
   }
 
-  async create(input: CreateResourceFieldInput): Promise<ResourceField> {
+  async create(
+    input: CreateResourceFieldInput,
+    tx?: Prisma.TransactionClient
+  ): Promise<ResourceField> {
+    const client = tx || this.prisma;
     const encryptedValue = encryptValue(input.value);
-    const created = await this.prisma.resourceField.create({
+    const created = await client.resourceField.create({
       data: {
         resourceId: input.resourceId,
         name: input.name,
@@ -511,18 +544,20 @@ export class PrismaResourceFieldRepository implements ResourceFieldRepository {
     return row ? this.mapPrismaToDomain(row) : null;
   }
 
-  async update(id: string, value: string): Promise<ResourceField> {
+  async update(id: string, value: string, tx?: Prisma.TransactionClient): Promise<ResourceField> {
+    const client = tx || this.prisma;
     const encryptedValue = encryptValue(value);
-    const updated = await this.prisma.resourceField.update({
+    const updated = await client.resourceField.update({
       where: { id },
       data: { value: encryptedValue },
     });
     return this.mapPrismaToDomain(updated);
   }
 
-  async delete(id: string): Promise<void> {
+  async delete(id: string, tx?: Prisma.TransactionClient): Promise<void> {
+    const client = tx || this.prisma;
     try {
-      await this.prisma.resourceField.delete({
+      await client.resourceField.delete({
         where: { id },
       });
     } catch (e) {
@@ -574,14 +609,31 @@ export interface Repositories {
   audit: AuditRepository;
   auth: AuthRepository;
   projects: ProjectRepository;
+  outbox: OutboxRepository;
 }
 
 /**
  * Repository for logging audit events.
  */
 export interface AuditRepository {
-  create(input: CreateAuditLogInput): Promise<AuditLog>;
+  create(input: CreateAuditLogInput, tx?: Prisma.TransactionClient): Promise<AuditLog>;
   findByResourceId(resourceId: string): Promise<AuditLog[]>;
+  findByProjectId(projectId: string): Promise<AuditLog[]>;
+}
+
+/**
+ * Repository for transactional outbox.
+ */
+export interface OutboxRepository {
+  create(input: CreateOutboxEventInput, tx?: Prisma.TransactionClient): Promise<OutboxEvent>;
+  findPending(): Promise<OutboxEvent[]>;
+  updateStatus(
+    id: string,
+    status: 'PENDING' | 'PROCESSED' | 'FAILED',
+    attempts: number,
+    lastError?: string,
+    tx?: Prisma.TransactionClient
+  ): Promise<void>;
 }
 
 /**
@@ -594,18 +646,27 @@ export class PrismaAuditRepository implements AuditRepository {
     this.prisma = prisma;
   }
 
-  async create(input: CreateAuditLogInput): Promise<AuditLog> {
-    const created = await this.prisma.auditLog.create({
+  async create(input: CreateAuditLogInput, tx?: Prisma.TransactionClient): Promise<AuditLog> {
+    const client = tx || this.prisma;
+    const created = await client.auditLog.create({
       data: {
-        action: input.action,
-        resourceId: input.resourceId,
-        actorId: input.actorId,
-        resolverId: input.resolverId,
-        status: input.status,
-        context: input.context,
+        schemaVersion: input.schemaVersion,
+        eventType: input.eventType,
+        outcomeCode: input.outcomeCode,
+        actorType: input.actorType,
+        actorId: input.actorId ?? null,
+        authKind: input.authKind ?? null,
+        resourceId: input.resourceId ?? null,
+        projectId: input.projectId ?? null,
+        environmentId: input.environmentId ?? null,
+        requestId: input.requestId ?? null,
+        grantId: input.grantId ?? null,
+        correlationId: input.correlationId ?? null,
+        causationId: input.causationId ?? null,
+        payload: input.payload ? (input.payload as Prisma.InputJsonValue) : null,
       },
     });
-    return created;
+    return this.mapPrismaToDomain(created);
   }
 
   async findByResourceId(resourceId: string): Promise<AuditLog[]> {
@@ -613,7 +674,123 @@ export class PrismaAuditRepository implements AuditRepository {
       where: { resourceId },
       orderBy: { createdAt: 'desc' },
     });
-    return rows;
+    return rows.map((row) => this.mapPrismaToDomain(row));
+  }
+
+  async findByProjectId(projectId: string): Promise<AuditLog[]> {
+    const rows = await this.prisma.auditLog.findMany({
+      where: { projectId },
+      orderBy: { createdAt: 'desc' },
+    });
+    return rows.map((row) => this.mapPrismaToDomain(row));
+  }
+
+  private mapPrismaToDomain(row: {
+    id: string;
+    schemaVersion: number;
+    eventType: string;
+    outcomeCode: string;
+    actorType: string;
+    actorId: string | null;
+    authKind: string | null;
+    resourceId: string | null;
+    projectId: string | null;
+    environmentId: string | null;
+    requestId: string | null;
+    grantId: string | null;
+    correlationId: string | null;
+    causationId: string | null;
+    payload: Prisma.JsonValue;
+    createdAt: Date;
+  }): AuditLog {
+    return {
+      id: row.id,
+      schemaVersion: row.schemaVersion,
+      eventType: row.eventType,
+      outcomeCode: row.outcomeCode,
+      actorType: row.actorType,
+      actorId: row.actorId,
+      authKind: row.authKind,
+      resourceId: row.resourceId,
+      projectId: row.projectId,
+      environmentId: row.environmentId,
+      requestId: row.requestId,
+      grantId: row.grantId,
+      correlationId: row.correlationId,
+      causationId: row.causationId,
+      payload: row.payload as Record<string, unknown> | null,
+      createdAt: row.createdAt,
+    };
+  }
+}
+
+/**
+ * Prisma implementation of OutboxRepository.
+ */
+export class PrismaOutboxRepository implements OutboxRepository {
+  private readonly prisma: PrismaClient;
+
+  constructor(prisma: PrismaClient) {
+    this.prisma = prisma;
+  }
+
+  async create(input: CreateOutboxEventInput, tx?: Prisma.TransactionClient): Promise<OutboxEvent> {
+    const client = tx || this.prisma;
+    const created = await client.outboxEvent.create({
+      data: {
+        eventType: input.eventType,
+        payload: input.payload as Prisma.InputJsonValue,
+      },
+    });
+    return this.mapPrismaToDomain(created);
+  }
+
+  async findPending(): Promise<OutboxEvent[]> {
+    const rows = await this.prisma.outboxEvent.findMany({
+      where: { status: 'PENDING' },
+      orderBy: { createdAt: 'asc' },
+    });
+    return rows.map((row) => this.mapPrismaToDomain(row));
+  }
+
+  async updateStatus(
+    id: string,
+    status: 'PENDING' | 'PROCESSED' | 'FAILED',
+    attempts: number,
+    lastError?: string,
+    tx?: Prisma.TransactionClient
+  ): Promise<void> {
+    const client = tx || this.prisma;
+    await client.outboxEvent.update({
+      where: { id },
+      data: {
+        status,
+        attempts,
+        lastError: lastError ?? null,
+      },
+    });
+  }
+
+  private mapPrismaToDomain(row: {
+    id: string;
+    eventType: string;
+    payload: Prisma.JsonValue;
+    status: string;
+    attempts: number;
+    lastError: string | null;
+    createdAt: Date;
+    updatedAt: Date;
+  }): OutboxEvent {
+    return {
+      id: row.id,
+      eventType: row.eventType,
+      payload: row.payload as Record<string, unknown>,
+      status: row.status as 'PENDING' | 'PROCESSED' | 'FAILED',
+      attempts: row.attempts,
+      lastError: row.lastError,
+      createdAt: row.createdAt,
+      updatedAt: row.updatedAt,
+    };
   }
 }
 
@@ -627,8 +804,9 @@ export class PrismaGuardianRepository implements GuardianRepository {
     this.prisma = prisma;
   }
 
-  async add(input: AddGuardianInput): Promise<Guardian> {
-    const created = await this.prisma.guardian.create({
+  async add(input: AddGuardianInput, tx?: Prisma.TransactionClient): Promise<Guardian> {
+    const client = tx || this.prisma;
+    const created = await client.guardian.create({
       data: {
         id: input.id,
         resourceId: input.resourceId,
@@ -667,9 +845,14 @@ export class PrismaGuardianRepository implements GuardianRepository {
     return rows.map((row) => this.mapPrismaToDomain(row));
   }
 
-  async remove(resourceId: string, discordUserId: string): Promise<void> {
+  async remove(
+    resourceId: string,
+    discordUserId: string,
+    tx?: Prisma.TransactionClient
+  ): Promise<void> {
+    const client = tx || this.prisma;
     // Using deleteMany is safe and idempotent-ish (won't fail if not found).
-    await this.prisma.guardian.deleteMany({
+    await client.guardian.deleteMany({
       where: {
         resourceId,
         discordUserId,
@@ -704,8 +887,12 @@ export class PrismaApprovalRequestRepository implements ApprovalRequestRepositor
     this.prisma = prisma;
   }
 
-  async create(input: CreateApprovalRequestInput): Promise<ApprovalRequest> {
-    const created = await this.prisma.approvalRequest.create({
+  async create(
+    input: CreateApprovalRequestInput,
+    tx?: Prisma.TransactionClient
+  ): Promise<ApprovalRequest> {
+    const client = tx || this.prisma;
+    const created = await client.approvalRequest.create({
       data: {
         id: input.id,
         resourceId: input.resourceId,
@@ -720,14 +907,20 @@ export class PrismaApprovalRequestRepository implements ApprovalRequestRepositor
     return this.mapPrismaToDomain(created);
   }
 
-  async updateStatus(id: string, status: ApprovalStatus, resolvedBy?: string): Promise<void> {
+  async updateStatus(
+    id: string,
+    status: ApprovalStatus,
+    resolvedBy?: string,
+    tx?: Prisma.TransactionClient
+  ): Promise<void> {
+    const client = tx || this.prisma;
     const data: Prisma.ApprovalRequestUpdateInput = { status };
     if (resolvedBy) {
       data.resolvedBy = resolvedBy;
       data.resolvedAt = new Date();
     }
 
-    await this.prisma.approvalRequest.update({
+    await client.approvalRequest.update({
       where: { id },
       data,
     });
@@ -789,9 +982,10 @@ export class PrismaApprovalRequestRepository implements ApprovalRequestRepositor
     return match ? this.mapPrismaToDomain(match) : null;
   }
 
-  async expireRequests(): Promise<number> {
+  async expireRequests(tx?: Prisma.TransactionClient): Promise<number> {
+    const client = tx || this.prisma;
     const now = new Date();
-    const result = await this.prisma.approvalRequest.updateMany({
+    const result = await client.approvalRequest.updateMany({
       where: {
         status: 'PENDING',
         expiresAt: { lt: now },

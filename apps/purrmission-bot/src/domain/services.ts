@@ -24,6 +24,7 @@ import { AuthService } from './auth.js';
 import { ProjectService } from './project.js';
 import { ResourceNotFoundError, DuplicateError } from './errors.js';
 import { getEffectiveGuardians, isEffectiveGuardian, isEffectiveOwner } from './policy.js';
+import { getPrismaClient } from '../infra/prismaClient.js';
 
 /**
  * Service dependencies.
@@ -104,29 +105,79 @@ export class ApprovalService {
     const defaultExpiresInMs = 24 * 60 * 60 * 1000; // 24 hours
     const expiresAt = new Date(Date.now() + (input.expiresInMs ?? defaultExpiresInMs));
 
-    // Create the request
-    const request = await repositories.approvalRequests.create({
-      id: crypto.randomUUID(),
-      resourceId: input.resourceId,
-      status: 'PENDING',
-      context: input.context ?? {},
-      callbackUrl: input.callbackUrl,
-      expiresAt,
-    });
+    // Create the request atomically in transaction
+    const prisma = getPrismaClient();
+    try {
+      const request = await prisma.$transaction(async (tx) => {
+        const req = await repositories.approvalRequests.create(
+          {
+            id: crypto.randomUUID(),
+            resourceId: input.resourceId,
+            status: 'PENDING',
+            context: input.context ?? {},
+            callbackUrl: input.callbackUrl,
+            expiresAt,
+          },
+          tx
+        );
 
-    logger.info('Created approval request', {
-      requestId: request.id,
-      resourceId: resource.id,
-      resourceName: resource.name,
-      guardianCount: guardians.length,
-    });
+        if (this.deps.audit) {
+          const requesterId = input.context?.requesterId
+            ? String(input.context.requesterId)
+            : undefined;
+          await this.deps.audit.log(
+            {
+              eventType: 'REQUEST_CREATE',
+              outcomeCode: 'SUCCESS',
+              actorType: requesterId ? 'DISCORD_USER' : 'SERVICE',
+              actorId: requesterId,
+              authKind: requesterId ? 'DISCORD' : 'API_KEY',
+              resourceId: input.resourceId,
+              requestId: req.id,
+              payload: {
+                context: input.context,
+                expiresAt: expiresAt.toISOString(),
+              },
+            },
+            tx
+          );
+        }
 
-    return {
-      success: true,
-      request,
-      resource,
-      guardians,
-    };
+        // Enqueue Outbox event to notify guardians
+        await repositories.outbox.create(
+          {
+            eventType: 'REQUEST_CREATED',
+            payload: {
+              requestId: req.id,
+              resourceId: input.resourceId,
+            },
+          },
+          tx
+        );
+
+        return req;
+      });
+
+      logger.info('Created approval request', {
+        requestId: request.id,
+        resourceId: resource.id,
+        resourceName: resource.name,
+        guardianCount: guardians.length,
+      });
+
+      return {
+        success: true,
+        request,
+        resource,
+        guardians,
+      };
+    } catch (err) {
+      logger.error('Failed to create approval request atomically', {
+        resourceId: input.resourceId,
+        error: err instanceof Error ? err.message : String(err),
+      });
+      throw err; // Fail closed
+    }
   }
 
   /**
@@ -192,21 +243,6 @@ export class ApprovalService {
 
     // Update the request status
     const newStatus = decision === 'APPROVE' ? 'APPROVED' : 'DENIED';
-    await repositories.approvalRequests.updateStatus(requestId, newStatus, byGuardianDiscordId);
-
-    const updatedRequest: ApprovalRequest = {
-      ...request,
-      status: newStatus,
-      resolvedBy: byGuardianDiscordId,
-      resolvedAt: new Date(),
-    };
-
-    logger.info('Recorded decision on approval request', {
-      requestId,
-      decision,
-      byGuardianDiscordId,
-      newStatus,
-    });
 
     // Extract requester (actor) ID from the original request context, if available
     let requesterId: string | null = null;
@@ -215,38 +251,87 @@ export class ApprovalService {
       requesterId = String(requestContext.requesterId);
     }
 
-    // Audit log
+    const prisma = getPrismaClient();
     try {
-      await this.deps.audit?.log({
-        action: 'APPROVAL_DECISION',
-        resourceId: request.resourceId,
-        actorId: requesterId,
-        resolverId: byGuardianDiscordId,
-        status: newStatus,
-        context: JSON.stringify({ requestId, decision, originalContext: request.context }),
-      });
-    } catch (error) {
-      logger.warn('Failed to record audit log for approval decision', {
-        requestId,
-        error: error instanceof Error ? error.message : String(error),
-      });
-    }
+      await prisma.$transaction(async (tx) => {
+        await repositories.approvalRequests.updateStatus(
+          requestId,
+          newStatus,
+          byGuardianDiscordId,
+          tx
+        );
 
-    // Prepare callback action if URL is configured
-    const result: DecisionResult = {
-      success: true,
-      request: updatedRequest,
-    };
+        if (this.deps.audit) {
+          await this.deps.audit.log(
+            {
+              eventType: 'APPROVAL_DECISION',
+              outcomeCode: newStatus === 'APPROVED' ? 'SUCCESS' : 'DENIED',
+              actorType: 'DISCORD_USER',
+              actorId: byGuardianDiscordId,
+              authKind: 'DISCORD',
+              resourceId: request.resourceId,
+              requestId: request.id,
+              payload: {
+                decision,
+                requesterId,
+                originalContext: request.context,
+              },
+            },
+            tx
+          );
+        }
 
-    if (request.callbackUrl) {
-      result.action = {
-        type: 'CALL_CALLBACK_URL',
-        url: request.callbackUrl,
+        if (request.callbackUrl) {
+          await repositories.outbox.create(
+            {
+              eventType: 'APPROVAL_CALLBACK',
+              payload: {
+                requestId: request.id,
+                callbackUrl: request.callbackUrl,
+                status: newStatus,
+              },
+            },
+            tx
+          );
+        }
+      });
+
+      const updatedRequest: ApprovalRequest = {
+        ...request,
         status: newStatus,
+        resolvedBy: byGuardianDiscordId,
+        resolvedAt: new Date(),
       };
-    }
 
-    return result;
+      logger.info('Recorded decision on approval request', {
+        requestId,
+        decision,
+        byGuardianDiscordId,
+        newStatus,
+      });
+
+      // Prepare callback action if URL is configured
+      const result: DecisionResult = {
+        success: true,
+        request: updatedRequest,
+      };
+
+      if (request.callbackUrl) {
+        result.action = {
+          type: 'CALL_CALLBACK_URL',
+          url: request.callbackUrl,
+          status: newStatus,
+        };
+      }
+
+      return result;
+    } catch (err) {
+      logger.error('Failed to record decision atomically', {
+        requestId,
+        error: err instanceof Error ? err.message : String(err),
+      });
+      throw err; // Fail closed
+    }
   }
 
   /**
@@ -525,34 +610,45 @@ export class ResourceService {
     }
 
     // Update the resource with the linked TOTP account ID
-    await repositories.resources.update(resourceId, { totpAccountId });
+    const prisma = getPrismaClient();
+    try {
+      await prisma.$transaction(async (tx) => {
+        await repositories.resources.update(resourceId, { totpAccountId }, tx);
+
+        if (this.deps.audit) {
+          await this.deps.audit.log(
+            {
+              eventType: 'TOTP_LINK',
+              outcomeCode: 'SUCCESS',
+              actorType: 'DISCORD_USER',
+              actorId,
+              authKind: 'DISCORD',
+              resourceId,
+              payload: { totpAccountId },
+            },
+            tx
+          );
+        }
+      });
+    } catch (err) {
+      logger.error('Failed to link TOTP account atomically', {
+        resourceId,
+        totpAccountId,
+        error: err instanceof Error ? err.message : String(err),
+      });
+      throw err; // Fail closed
+    }
 
     logger.info('Linked TOTP account to resource', {
       resourceId,
       totpAccountId,
     });
-
-    try {
-      await this.deps.audit?.log({
-        action: 'TOTP_LINKED',
-        resourceId,
-        actorId,
-        status: 'SUCCESS',
-        context: JSON.stringify({ totpAccountId }),
-      });
-    } catch (error) {
-      logger.warn('Failed to record audit log for linking TOTP account', {
-        resourceId,
-        totpAccountId,
-        error: error instanceof Error ? error.message : String(error),
-      });
-    }
   }
 
   /**
    * Unlink TOTP account from a resource.
    */
-  async unlinkTOTPAccount(resourceId: string): Promise<void> {
+  async unlinkTOTPAccount(resourceId: string, actorId?: string): Promise<void> {
     const { repositories } = this.deps;
 
     // Verify resource exists
@@ -562,7 +658,33 @@ export class ResourceService {
     }
 
     // Update the resource to remove the linked TOTP account
-    await repositories.resources.update(resourceId, { totpAccountId: null });
+    const prisma = getPrismaClient();
+    try {
+      await prisma.$transaction(async (tx) => {
+        await repositories.resources.update(resourceId, { totpAccountId: null }, tx);
+
+        if (this.deps.audit) {
+          await this.deps.audit.log(
+            {
+              eventType: 'TOTP_UNLINK',
+              outcomeCode: 'SUCCESS',
+              actorType: actorId ? 'DISCORD_USER' : 'SERVICE',
+              actorId: actorId ?? 'system',
+              authKind: actorId ? 'DISCORD' : 'SERVICE',
+              resourceId,
+              payload: {},
+            },
+            tx
+          );
+        }
+      });
+    } catch (err) {
+      logger.error('Failed to unlink TOTP account atomically', {
+        resourceId,
+        error: err instanceof Error ? err.message : String(err),
+      });
+      throw err; // Fail closed
+    }
 
     logger.info('Unlinked TOTP account from resource', {
       resourceId,
@@ -601,18 +723,49 @@ export class ResourceService {
       throw new DuplicateError(`Field '${name}' already exists for this resource`);
     }
 
-    const field = await repositories.resourceFields.create({
-      resourceId,
-      name,
-      value,
-    });
+    const prisma = getPrismaClient();
+    try {
+      const field = await prisma.$transaction(async (tx) => {
+        const createdField = await repositories.resourceFields.create(
+          {
+            resourceId,
+            name,
+            value,
+          },
+          tx
+        );
 
-    logger.info('Created resource field', {
-      resourceId,
-      fieldName: name,
-    });
+        if (this.deps.audit) {
+          await this.deps.audit.log(
+            {
+              eventType: 'SECRET_CREATE',
+              outcomeCode: 'SUCCESS',
+              actorType: 'SERVICE',
+              actorId: 'system',
+              authKind: 'SERVICE',
+              resourceId,
+              payload: { fieldName: name }, // Redacted value!
+            },
+            tx
+          );
+        }
+        return createdField;
+      });
 
-    return field;
+      logger.info('Created resource field', {
+        resourceId,
+        fieldName: name,
+      });
+
+      return field;
+    } catch (err) {
+      logger.error('Failed to create field atomically', {
+        resourceId,
+        name,
+        error: err instanceof Error ? err.message : String(err),
+      });
+      throw err;
+    }
   }
 
   /**
@@ -646,12 +799,39 @@ export class ResourceService {
       return;
     }
 
-    await repositories.resourceFields.delete(field.id);
+    const prisma = getPrismaClient();
+    try {
+      await prisma.$transaction(async (tx) => {
+        await repositories.resourceFields.delete(field.id, tx);
 
-    logger.info('Deleted resource field', {
-      resourceId,
-      fieldName: name,
-    });
+        if (this.deps.audit) {
+          await this.deps.audit.log(
+            {
+              eventType: 'SECRET_DELETE',
+              outcomeCode: 'SUCCESS',
+              actorType: 'SERVICE',
+              actorId: 'system',
+              authKind: 'SERVICE',
+              resourceId,
+              payload: { fieldName: name },
+            },
+            tx
+          );
+        }
+      });
+
+      logger.info('Deleted resource field', {
+        resourceId,
+        fieldName: name,
+      });
+    } catch (err) {
+      logger.error('Failed to delete field atomically', {
+        resourceId,
+        name,
+        error: err instanceof Error ? err.message : String(err),
+      });
+      throw err;
+    }
   }
 
   /**
@@ -675,14 +855,54 @@ export class ResourceService {
       throw new ResourceNotFoundError(`Resource not found: ${resourceId}`);
     }
 
-    const existing = await repositories.resourceFields.findByResourceAndName(resourceId, name);
-    if (existing) {
-      const updated = await repositories.resourceFields.update(existing.id, value);
-      logger.info('Updated resource field', { resourceId, fieldName: name });
-      return updated;
-    }
+    const prisma = getPrismaClient();
+    try {
+      const field = await prisma.$transaction(async (tx) => {
+        const existing = await repositories.resourceFields.findByResourceAndName(resourceId, name);
+        let resultField;
+        let eventType = 'SECRET_CREATE';
 
-    return this.createField(resourceId, name, value);
+        if (existing) {
+          resultField = await repositories.resourceFields.update(existing.id, value, tx);
+          eventType = 'SECRET_UPDATE';
+        } else {
+          resultField = await repositories.resourceFields.create(
+            {
+              resourceId,
+              name,
+              value,
+            },
+            tx
+          );
+        }
+
+        if (this.deps.audit) {
+          await this.deps.audit.log(
+            {
+              eventType,
+              outcomeCode: 'SUCCESS',
+              actorType: 'SERVICE',
+              actorId: 'system',
+              authKind: 'SERVICE',
+              resourceId,
+              payload: { fieldName: name },
+            },
+            tx
+          );
+        }
+        return resultField;
+      });
+
+      logger.info('Upserted resource field', { resourceId, fieldName: name });
+      return field;
+    } catch (err) {
+      logger.error('Failed to upsert field atomically', {
+        resourceId,
+        name,
+        error: err instanceof Error ? err.message : String(err),
+      });
+      throw err;
+    }
   }
 }
 

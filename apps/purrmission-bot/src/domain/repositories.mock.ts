@@ -361,7 +361,7 @@ export class InMemoryResourceFieldRepository implements ResourceFieldRepository 
 export class InMemoryAuditRepository implements AuditRepository {
   private logs: AuditLog[] = [];
 
-  async create(input: CreateAuditLogInput): Promise<AuditLog> {
+  async create(input: CreateAuditLogInput, _tx?: any): Promise<AuditLog> {
     const log: AuditLog = {
       id: crypto.randomUUID(),
       ...input,
@@ -373,6 +373,52 @@ export class InMemoryAuditRepository implements AuditRepository {
 
   async findByResourceId(resourceId: string): Promise<AuditLog[]> {
     return this.logs.filter((log) => log.resourceId === resourceId);
+  }
+
+  async findByProjectId(projectId: string): Promise<AuditLog[]> {
+    return this.logs.filter((log) => log.projectId === projectId);
+  }
+}
+
+/**
+ * In-memory implementation of OutboxRepository.
+ * Useful for tests.
+ */
+export class InMemoryOutboxRepository implements OutboxRepository {
+  private events: OutboxEvent[] = [];
+
+  async create(input: CreateOutboxEventInput, _tx?: any): Promise<OutboxEvent> {
+    const event: OutboxEvent = {
+      id: crypto.randomUUID(),
+      eventType: input.eventType,
+      payload: input.payload,
+      status: 'PENDING',
+      attempts: 0,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    };
+    this.events.push(event);
+    return event;
+  }
+
+  async findPending(): Promise<OutboxEvent[]> {
+    return this.events.filter((e) => e.status === 'PENDING');
+  }
+
+  async updateStatus(
+    id: string,
+    status: 'PENDING' | 'PROCESSED' | 'FAILED',
+    attempts: number,
+    lastError?: string,
+    _tx?: any
+  ): Promise<void> {
+    const event = this.events.find((e) => e.id === id);
+    if (event) {
+      event.status = status;
+      event.attempts = attempts;
+      event.lastError = lastError ?? null;
+      event.updatedAt = new Date();
+    }
   }
 }
 
@@ -604,5 +650,6 @@ export function createInMemoryRepositories(): Repositories {
     audit: new InMemoryAuditRepository(),
     auth: new InMemoryAuthRepository(),
     projects: new InMemoryProjectRepository(),
+    outbox: new InMemoryOutboxRepository(),
   };
 }

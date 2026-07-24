@@ -11,6 +11,7 @@ import {
   AuthRepository,
   TOTPRepository,
   AuditRepository,
+  OutboxRepository,
 } from '../domain/repositories.js';
 import {
   Project,
@@ -30,6 +31,8 @@ import {
   ProjectMember,
   CreateProjectMemberInput,
   ProjectMemberRole,
+  OutboxEvent,
+  CreateOutboxEventInput,
 } from '../domain/models.js';
 import { randomUUID } from 'crypto';
 
@@ -112,7 +115,7 @@ class MemProjectRepo implements ProjectRepository {
 class MemResourceRepo implements ResourceRepository {
   resources: Resource[] = [];
 
-  async create(input: CreateResourceInput): Promise<Resource> {
+  async create(input: CreateResourceInput, _tx?: any): Promise<Resource> {
     const r: Resource = {
       id: input.id,
       name: input.name,
@@ -126,7 +129,7 @@ class MemResourceRepo implements ResourceRepository {
   async findById(id: string): Promise<Resource | null> {
     return this.resources.find((r) => r.id === id) || null;
   }
-  async update(_id: string, _data: Partial<Resource>): Promise<Resource> {
+  async update(_id: string, _data: Partial<Resource>, _tx?: any): Promise<Resource> {
     throw new Error('Not implemented');
   }
   async findByApiKey(_apiKey: string): Promise<Resource | null> {
@@ -144,7 +147,7 @@ class MemResourceRepo implements ResourceRepository {
 class MemGuardianRepo implements GuardianRepository {
   guardians: Guardian[] = [];
 
-  async add(input: AddGuardianInput): Promise<Guardian> {
+  async add(input: AddGuardianInput, _tx?: any): Promise<Guardian> {
     const g: Guardian = { ...input, createdAt: new Date() };
     this.guardians.push(g);
     return g;
@@ -160,7 +163,7 @@ class MemGuardianRepo implements GuardianRepository {
       this.guardians.find((g) => g.resourceId === resourceId && g.discordUserId === userId) || null
     );
   }
-  async remove(resourceId: string, userId: string): Promise<void> {
+  async remove(resourceId: string, userId: string, _tx?: any): Promise<void> {
     this.guardians = this.guardians.filter(
       (g) => !(g.resourceId === resourceId && g.discordUserId === userId)
     );
@@ -173,7 +176,7 @@ class MemGuardianRepo implements GuardianRepository {
 class MemFieldRepo implements ResourceFieldRepository {
   fields: ResourceField[] = [];
 
-  async create(input: CreateResourceFieldInput): Promise<ResourceField> {
+  async create(input: CreateResourceFieldInput, _tx?: any): Promise<ResourceField> {
     const f: ResourceField = {
       id: randomUUID(),
       ...input,
@@ -189,13 +192,13 @@ class MemFieldRepo implements ResourceFieldRepository {
   async findByResourceAndName(resourceId: string, name: string): Promise<ResourceField | null> {
     return this.fields.find((f) => f.resourceId === resourceId && f.name === name) || null;
   }
-  async update(id: string, value: string): Promise<ResourceField> {
+  async update(id: string, value: string, _tx?: any): Promise<ResourceField> {
     const f = this.fields.find((f) => f.id === id);
     if (!f) throw new Error('Not found');
     f.value = value;
     return f;
   }
-  async delete(id: string): Promise<void> {
+  async delete(id: string, _tx?: any): Promise<void> {
     this.fields = this.fields.filter((f) => f.id !== id);
   }
   async findById(id: string): Promise<ResourceField | null> {
@@ -206,7 +209,7 @@ class MemFieldRepo implements ResourceFieldRepository {
 class MemApprovalRepo implements ApprovalRequestRepository {
   requests: ApprovalRequest[] = [];
 
-  async create(input: CreateApprovalRequestInput): Promise<ApprovalRequest> {
+  async create(input: CreateApprovalRequestInput, _tx?: any): Promise<ApprovalRequest> {
     const r: ApprovalRequest = {
       ...input,
       id: input.id || randomUUID(),
@@ -220,7 +223,12 @@ class MemApprovalRepo implements ApprovalRequestRepository {
   async findById(id: string): Promise<ApprovalRequest | null> {
     return this.requests.find((r) => r.id === id) || null;
   }
-  async updateStatus(id: string, status: ApprovalStatus, resolvedBy?: string): Promise<void> {
+  async updateStatus(
+    id: string,
+    status: ApprovalStatus,
+    resolvedBy?: string,
+    _tx?: any
+  ): Promise<void> {
     const r = this.requests.find((r) => r.id === id);
     if (!r) throw new Error('Not found');
     r.status = status;
@@ -252,7 +260,7 @@ class MemApprovalRepo implements ApprovalRequestRepository {
   async findPendingByResourceId(resourceId: string): Promise<ApprovalRequest[]> {
     return this.requests.filter((r) => r.resourceId === resourceId && r.status === 'PENDING');
   }
-  async expireRequests(): Promise<number> {
+  async expireRequests(_tx?: any): Promise<number> {
     const now = new Date();
     let count = 0;
     for (const r of this.requests) {
@@ -262,6 +270,44 @@ class MemApprovalRepo implements ApprovalRequestRepository {
       }
     }
     return count;
+  }
+}
+
+class MemOutboxRepo implements OutboxRepository {
+  events: OutboxEvent[] = [];
+
+  async create(input: CreateOutboxEventInput, _tx?: any): Promise<OutboxEvent> {
+    const event: OutboxEvent = {
+      id: randomUUID(),
+      eventType: input.eventType,
+      payload: input.payload,
+      status: 'PENDING',
+      attempts: 0,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    };
+    this.events.push(event);
+    return event;
+  }
+
+  async findPending(): Promise<OutboxEvent[]> {
+    return this.events.filter((e) => e.status === 'PENDING');
+  }
+
+  async updateStatus(
+    id: string,
+    status: 'PENDING' | 'PROCESSED' | 'FAILED',
+    attempts: number,
+    lastError?: string,
+    _tx?: any
+  ): Promise<void> {
+    const event = this.events.find((e) => e.id === id);
+    if (event) {
+      event.status = status;
+      event.attempts = attempts;
+      event.lastError = lastError ?? null;
+      event.updatedAt = new Date();
+    }
   }
 }
 
@@ -276,13 +322,34 @@ describe('Credential Sync Logic Smoke Test', () => {
   const guardianRepo = new MemGuardianRepo();
   const fieldRepo = new MemFieldRepo();
   const approvalRepo = new MemApprovalRepo();
+  const outboxRepo = new MemOutboxRepo();
 
   // Mock unnecessary repos
   const authRepo = {} as AuthRepository;
   const totpRepo = {} as TOTPRepository;
   const auditRepo: AuditRepository = {
-    create: async () => ({}) as AuditLog,
+    create: async (input: CreateAuditLogInput) => {
+      return {
+        id: randomUUID(),
+        schemaVersion: input.schemaVersion,
+        eventType: input.eventType,
+        outcomeCode: input.outcomeCode,
+        actorType: input.actorType,
+        actorId: input.actorId,
+        authKind: input.authKind,
+        resourceId: input.resourceId,
+        projectId: input.projectId,
+        environmentId: input.environmentId,
+        requestId: input.requestId,
+        grantId: input.grantId,
+        correlationId: input.correlationId,
+        causationId: input.causationId,
+        payload: input.payload,
+        createdAt: new Date(),
+      } as AuditLog;
+    },
     findByResourceId: async () => [],
+    findByProjectId: async () => [],
   };
 
   const repositories: Repositories = {
@@ -294,6 +361,7 @@ describe('Credential Sync Logic Smoke Test', () => {
     auth: authRepo,
     totp: totpRepo,
     audit: auditRepo,
+    outbox: outboxRepo,
   };
 
   beforeEach(() => {
@@ -305,6 +373,7 @@ describe('Credential Sync Logic Smoke Test', () => {
     guardianRepo.guardians = [];
     fieldRepo.fields = [];
     approvalRepo.requests = [];
+    outboxRepo.events = [];
 
     services = createServices({ repositories });
   });

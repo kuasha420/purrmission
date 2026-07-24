@@ -25,10 +25,13 @@ import type { ApprovalRequest, ResourceField } from '../domain/models.js';
 import type { Services } from '../domain/services.js';
 import { generateTOTPCode } from '../domain/totp.js';
 import { logger } from '../logging/logger.js';
+import crypto from 'node:crypto';
+import { correlationStorage } from '../logging/correlationContext.js';
 
 declare module 'fastify' {
   interface FastifyRequest {
     user: { id: string };
+    correlationId?: string;
   }
 }
 
@@ -54,6 +57,31 @@ const createRequestSchema = z.object({
 
 type CreateRequestBody = z.infer<typeof createRequestSchema>;
 
+function redactBody(body: unknown): unknown {
+  if (!body || typeof body !== 'object') {
+    return body;
+  }
+  const sensitiveKeys = ['value', 'secret', 'apiKey', 'token', 'access_token', 'device_code'];
+  const redact = (obj: unknown): unknown => {
+    if (Array.isArray(obj)) {
+      return obj.map(redact);
+    }
+    if (obj && typeof obj === 'object') {
+      const copy: Record<string, unknown> = {};
+      for (const [key, val] of Object.entries(obj as Record<string, unknown>)) {
+        if (sensitiveKeys.some((sk) => key.toLowerCase().includes(sk.toLowerCase()))) {
+          copy[key] = '[REDACTED]';
+        } else {
+          copy[key] = redact(val);
+        }
+      }
+      return copy;
+    }
+    return obj;
+  };
+  return redact(body);
+}
+
 /**
  * Create and configure the Fastify server.
  */
@@ -62,6 +90,39 @@ export function createHttpServer(deps: HttpServerDeps): FastifyInstance {
 
   const server = Fastify({
     logger: false, // We use our own logger
+  });
+
+  // Generate and attach correlation ID
+  server.addHook('onRequest', (request, reply, done) => {
+    const correlationId = (request.headers['x-correlation-id'] as string) || crypto.randomUUID();
+    request.headers['x-correlation-id'] = correlationId;
+    request.correlationId = correlationId;
+    reply.header('x-correlation-id', correlationId);
+
+    correlationStorage.run({ correlationId }, () => {
+      done();
+    });
+  });
+
+  // Log incoming requests inside correlation storage context
+  server.addHook('preHandler', async (request) => {
+    const redactedBody = redactBody(request.body);
+    logger.info('HTTP Request received', {
+      method: request.method,
+      url: request.url,
+      body: redactedBody,
+    });
+  });
+
+  // Log response completion
+  server.addHook('onResponse', async (request, reply) => {
+    logger.info('HTTP Response sent', {
+      method: request.method,
+      url: request.url,
+      correlationId: request.correlationId,
+      statusCode: reply.statusCode,
+      responseTimeMs: reply.elapsedTime,
+    });
   });
 
   // Register formbody to support application/x-www-form-urlencoded (OAuth2 standard)
