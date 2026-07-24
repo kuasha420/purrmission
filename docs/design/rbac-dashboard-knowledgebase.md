@@ -177,27 +177,27 @@ Primary command anchors:
 
 ### 4.2 HTTP API
 
-| Route                                        | Current authentication   | Current authorization and exposure                                                                                  |
-| -------------------------------------------- | ------------------------ | ------------------------------------------------------------------------------------------------------------------- |
-| `GET /health`                                | Public                   | Returns timestamp and Discord connection state.                                                                     |
-| `POST /api/requests`                         | Resource API key in body | API key must resolve to the supplied resource. Context, callback URL, expiry, and channel ID are caller-controlled. |
-| `GET /api/requests/:id`                      | Public                   | UUID possession reveals status, resource ID, arbitrary context, timestamps, and resolver Discord ID.                |
-| `POST /api/auth/device/code`                 | Public                   | Creates a 30-minute device session. No rate limit.                                                                  |
-| `POST /api/auth/token`                       | Device-code possession   | Mints an unscoped 90-day Pawthy bearer after Discord approval.                                                      |
-| `POST /api/projects`                         | Pawthy bearer            | Any authenticated user creates a project and becomes Owner.                                                         |
-| `GET /api/projects`                          | Pawthy bearer            | Returns owned projects only; Writer and Reader projects are omitted.                                                |
-| `GET /api/projects/:projectId`               | Pawthy bearer            | Project Owner only.                                                                                                 |
-| `POST /api/projects/:projectId/environments` | Pawthy bearer            | Project Owner only.                                                                                                 |
-| `GET /api/projects/:projectId/environments`  | Pawthy bearer            | Project Owner only.                                                                                                 |
-| `GET .../environments/:envId/secrets`        | Pawthy bearer            | Owner, Writer, Reader, or effective Guardian receives all values. Others create/reuse approval.                     |
-| `PUT .../environments/:envId/secrets`        | Pawthy bearer            | Owner or Writer. Body is not validated; parallel upserts are non-transactional.                                     |
-| `GET /api/resources/:id/fields`              | Pawthy bearer            | Any effective Guardian; returns names.                                                                              |
-| `POST /api/resources/:id/fields`             | Pawthy bearer            | Any effective Guardian; returns the newly created field including its value.                                        |
-| `GET /api/resources/:id/fields/:name`        | Pawthy bearer            | Any effective Guardian; returns plaintext value.                                                                    |
-| `DELETE /api/resources/:id/fields/:name`     | Pawthy bearer            | Any effective Guardian.                                                                                             |
-| `GET /api/resources/:id/2fa`                 | Pawthy bearer            | Any effective Guardian; returns a live TOTP code.                                                                   |
-| `POST /api/resources/:id/2fa/link`           | Pawthy bearer            | Any effective Guardian; account ownership is not checked at this layer.                                             |
-| `DELETE /api/resources/:id/2fa/link`         | Pawthy bearer            | Any effective Guardian.                                                                                             |
+| Route                                                      | Current authentication   | Current authorization and exposure                                                                                  |
+| ---------------------------------------------------------- | ------------------------ | ------------------------------------------------------------------------------------------------------------------- |
+| `GET /health`                                              | Public                   | Returns timestamp and Discord connection state.                                                                     |
+| `POST /api/requests`                                       | Resource API key in body | API key must resolve to the supplied resource. Context, callback URL, expiry, and channel ID are caller-controlled. |
+| `GET /api/requests/:id`                                    | Public                   | UUID possession reveals status, resource ID, arbitrary context, timestamps, and resolver Discord ID.                |
+| `POST /api/auth/device/code`                               | Public                   | Creates a 30-minute device session. No rate limit.                                                                  |
+| `POST /api/auth/token`                                     | Device-code possession   | Mints an unscoped 90-day Pawthy bearer after Discord approval.                                                      |
+| `POST /api/projects`                                       | Pawthy bearer            | Any authenticated user creates a project and becomes Owner.                                                         |
+| `GET /api/projects`                                        | Pawthy bearer            | Returns owned projects only; Writer and Reader projects are omitted.                                                |
+| `GET /api/projects/:projectId`                             | Pawthy bearer            | Project Owner only.                                                                                                 |
+| `POST /api/projects/:projectId/environments`               | Pawthy bearer            | Project Owner only.                                                                                                 |
+| `GET /api/projects/:projectId/environments`                | Pawthy bearer            | Project Owner only.                                                                                                 |
+| `GET /api/projects/:projectId/environments/:envId/secrets` | Pawthy bearer            | Owner, Writer, Reader, or effective Guardian receives all values. Others create/reuse approval.                     |
+| `PUT /api/projects/:projectId/environments/:envId/secrets` | Pawthy bearer            | Owner or Writer. Body is not validated; parallel upserts are non-transactional.                                     |
+| `GET /api/resources/:id/fields`                            | Pawthy bearer            | Any effective Guardian; returns names.                                                                              |
+| `POST /api/resources/:id/fields`                           | Pawthy bearer            | Any effective Guardian; returns the newly created field including its value.                                        |
+| `GET /api/resources/:id/fields/:name`                      | Pawthy bearer            | Any effective Guardian; returns plaintext value.                                                                    |
+| `DELETE /api/resources/:id/fields/:name`                   | Pawthy bearer            | Any effective Guardian.                                                                                             |
+| `GET /api/resources/:id/2fa`                               | Pawthy bearer            | Any effective Guardian; returns a live TOTP code.                                                                   |
+| `POST /api/resources/:id/2fa/link`                         | Pawthy bearer            | Any effective Guardian; account ownership is not checked at this layer.                                             |
+| `DELETE /api/resources/:id/2fa/link`                       | Pawthy bearer            | Any effective Guardian.                                                                                             |
 
 Route implementation: `apps/purrmission-bot/src/http/server.ts:46-723`.
 
@@ -384,7 +384,8 @@ minimum capability vocabulary is:
 
 The evaluator input MUST include:
 
-- authenticated Discord user ID and authentication kind;
+- a typed principal containing principal type, non-secret principal-record ID, authentication
+  kind, and optional actor Discord user ID;
 - capability;
 - project, environment, resource, and target IDs as applicable;
 - approval/grant ID when grant-backed;
@@ -889,6 +890,7 @@ DTO never carries authority for arbitrary descendants.
 | `/requests`                                        | Authenticated; returns actor's requests only                            |
 | `/audit`                                           | At least one authorized audit scope                                     |
 | `/account/sessions`                                | `session.view-own`                                                      |
+| `/account/cli-tokens`                              | `token.manage-own`; returns only the actor's Pawthy token metadata      |
 
 Direct navigation to a gated route must fetch authorization from the server. Client router state,
 cached capabilities, hidden links, and guessed IDs never bypass the API check.
@@ -896,6 +898,10 @@ cached capabilities, hidden links, and guessed IDs never bypass the API check.
 Guardian-only approval context belongs in the resource-scoped approval DTO, not a project-wide
 Guardian route. A Guardian who lacks `guardian.view` sees only their own assignment and safe
 quorum/policy context through `guardian.context.read`.
+
+The CLI-token inventory returns token record ID, safe label, creation, expiry, last-used, and
+revocation metadata only. Revocation is an unsafe method with CSRF/Origin protection for cookie
+sessions and never returns the token plaintext, prefix, hash, or digest.
 
 ### 8.3 Control gates
 
@@ -927,6 +933,7 @@ quorum/policy context through `guardian.context.read`.
 | View request status/cancel       | `request.view-own` or `request.cancel-own`, as applicable                                                 |
 | View/export audit                | Exact `audit.*.read` scope; export additionally requires `audit.export` on the same object                |
 | View/revoke own sessions         | `session.view-own` or `session.revoke-own`                                                                |
+| List/revoke own Pawthy tokens    | `token.manage-own`; token plaintext and hashes are never returned                                         |
 
 Hide controls when the exact-object capability is absent and approval is unavailable. When the
 evaluator says approval is available, show a request-access control instead of the protected
