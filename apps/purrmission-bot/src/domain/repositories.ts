@@ -59,7 +59,11 @@ export interface ResourceRepository {
 
   update(
     id: string,
-    data: { totpAccountId?: string | null; totpDelegationEnvelope?: TOTPLinkEnvelope | null },
+    data: {
+      totpAccountId?: string | null;
+      totpDelegationEnvelope?: TOTPLinkEnvelope | null;
+      version?: string;
+    },
     tx?: Prisma.TransactionClient
   ): Promise<Resource>;
 
@@ -305,7 +309,11 @@ export class PrismaResourceRepository implements ResourceRepository {
 
   async update(
     id: string,
-    data: { totpAccountId?: string | null; totpDelegationEnvelope?: TOTPLinkEnvelope | null },
+    data: {
+      totpAccountId?: string | null;
+      totpDelegationEnvelope?: TOTPLinkEnvelope | null;
+      version?: string;
+    },
     tx?: Prisma.TransactionClient
   ): Promise<Resource> {
     const client = tx || this.prisma;
@@ -314,7 +322,7 @@ export class PrismaResourceRepository implements ResourceRepository {
       data: {
         totpAccountId: data.totpAccountId,
         totpDelegationEnvelope: data.totpDelegationEnvelope as any,
-        version: randomUUID(),
+        version: data.version || randomUUID(),
       },
     });
     return this.mapPrismaToDomain(updated);

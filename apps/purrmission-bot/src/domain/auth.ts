@@ -2,7 +2,7 @@ import { randomBytes, randomUUID, createHash } from 'node:crypto';
 import { AuthRepository, CredentialRepository } from './repositories.js';
 import { ApiToken, Credential, Principal } from './models.js';
 import { logger } from '../logging/logger.js';
-import { computeKeyedDigest } from './crypto.js';
+import { computeKeyedDigest, computeAllKeyedDigests } from './crypto.js';
 import { rateLimiter } from '../infra/rateLimit.js';
 
 export class InvalidGrantError extends Error {
@@ -222,20 +222,27 @@ export class AuthService {
    * Validates a token and returns a fully-constructed Principal.
    */
   async validateToken(token: string, clientIp?: string): Promise<Principal | null> {
-    if (clientIp && !rateLimiter.check(`credential-validation-failure-check:${clientIp}`)) {
+    if (clientIp && rateLimiter.isLimited(`credential-validation-failure-check:${clientIp}`)) {
       logger.warn('Token validation throttled due to rate-limiting failures', { clientIp });
       return null;
     }
 
     // 1. Try digested credential lookup (PAWTHY_TOKEN)
     if (this.credentialRepo) {
-      let digest = computeKeyedDigest(token, 'PAWTHY_TOKEN');
-      let credential = await this.credentialRepo.findByDigest(digest);
+      let credential = null;
+      const pawthyDigests = computeAllKeyedDigests(token, 'PAWTHY_TOKEN');
+      for (const digest of pawthyDigests) {
+        credential = await this.credentialRepo.findByDigest(digest);
+        if (credential) break;
+      }
 
       // If not found, try as SERVICE_CREDENTIAL
       if (!credential) {
-        digest = computeKeyedDigest(token, 'SERVICE_CREDENTIAL');
-        credential = await this.credentialRepo.findByDigest(digest);
+        const serviceDigests = computeAllKeyedDigests(token, 'SERVICE_CREDENTIAL');
+        for (const digest of serviceDigests) {
+          credential = await this.credentialRepo.findByDigest(digest);
+          if (credential) break;
+        }
       }
 
       if (

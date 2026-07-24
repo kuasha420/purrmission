@@ -67,4 +67,10 @@ export function verifyKeyedDigest(
     }
   }
   return false;
+} /**
+ * Computes all possible keyed digests for a plaintext key across all keys in rotation.
+ */
+export function computeAllKeyedDigests(plaintext: string, purpose: string): string[] {
+  const derivedKeys = KeyManager.getAllKeys(purpose);
+  return derivedKeys.map((key) => crypto.createHmac('sha256', key).update(plaintext).digest('hex'));
 }

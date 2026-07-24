@@ -1030,7 +1030,11 @@ export class ResourceService {
         await repositories.totp.useLinkConsent(consentId, tx);
         await repositories.resources.update(
           resourceId,
-          { totpAccountId, totpDelegationEnvelope: delegationEnvelope },
+          {
+            totpAccountId,
+            totpDelegationEnvelope: delegationEnvelope,
+            version: delegationEnvelope.linkVersion,
+          },
           tx
         );
 

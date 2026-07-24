@@ -76,7 +76,11 @@ export class InMemoryResourceRepository implements ResourceRepository {
 
   async update(
     id: string,
-    data: { totpAccountId?: string | null; totpDelegationEnvelope?: TOTPLinkEnvelope | null }
+    data: {
+      totpAccountId?: string | null;
+      totpDelegationEnvelope?: TOTPLinkEnvelope | null;
+      version?: string;
+    }
   ): Promise<Resource> {
     const resource = this.resources.get(id);
     if (!resource) {
@@ -90,7 +94,7 @@ export class InMemoryResourceRepository implements ResourceRepository {
         data.totpDelegationEnvelope === null
           ? undefined
           : (data.totpDelegationEnvelope ?? resource.totpDelegationEnvelope),
-      version: crypto.randomUUID(),
+      version: data.version || crypto.randomUUID(),
     };
     this.resources.set(id, updated);
     return updated;
