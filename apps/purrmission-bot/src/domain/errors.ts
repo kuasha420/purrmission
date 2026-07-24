@@ -17,3 +17,9 @@ export class ResourceNotFoundError extends DomainError {
     super(message);
   }
 }
+
+export class ValidationError extends DomainError {
+  constructor(message: string) {
+    super(message);
+  }
+}

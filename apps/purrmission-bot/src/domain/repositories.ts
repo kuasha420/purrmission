@@ -48,6 +48,8 @@ import type {
   CreateOutboxEventInput,
   TOTPAccountMetadata,
   ResourceFieldMetadata,
+  CallbackDestination,
+  CreateCallbackDestinationInput,
 } from './models.js';
 
 export interface ResourceRepository {
@@ -910,6 +912,7 @@ export interface Repositories {
   outbox: OutboxRepository;
   credentials: CredentialRepository;
   approvalGrants: ApprovalGrantRepository;
+  callbackDestinations: CallbackDestinationRepository;
 }
 
 /**
@@ -1038,6 +1041,7 @@ export class PrismaOutboxRepository implements OutboxRepository {
     const client = tx || this.prisma;
     const created = await client.outboxEvent.create({
       data: {
+        id: input.id || undefined,
         eventType: input.eventType,
         payload: input.payload as Prisma.InputJsonValue,
       },
@@ -1496,7 +1500,10 @@ export interface ProjectRepository {
   findById(id: string): Promise<Project | null>;
   listProjectsByOwner(ownerId: string): Promise<Project[]>;
 
-  createEnvironment(input: CreateEnvironmentInput): Promise<Environment>;
+  createEnvironment(
+    input: CreateEnvironmentInput,
+    tx?: Prisma.TransactionClient
+  ): Promise<Environment>;
   listEnvironments(projectId: string): Promise<Environment[]>;
   findEnvironment(projectId: string, slug: string): Promise<Environment | null>;
   getEnvironmentById(projectId: string, envId: string): Promise<Environment | null>;
@@ -1710,9 +1717,13 @@ export class PrismaProjectRepository implements ProjectRepository {
     }));
   }
 
-  async createEnvironment(input: CreateEnvironmentInput): Promise<Environment> {
+  async createEnvironment(
+    input: CreateEnvironmentInput,
+    tx?: Prisma.TransactionClient
+  ): Promise<Environment> {
     try {
-      const env = await this.prisma.environment.create({
+      const client = tx || this.prisma;
+      const env = await client.environment.create({
         data: {
           name: input.name,
           slug: input.slug,
@@ -1945,6 +1956,78 @@ export class PrismaCredentialRepository implements CredentialRepository {
       revokedAt: row.revokedAt,
       lastUsedAt: row.lastUsedAt,
       version: row.version,
+    };
+  }
+}
+
+export interface CallbackDestinationRepository {
+  create(
+    input: CreateCallbackDestinationInput,
+    tx?: Prisma.TransactionClient
+  ): Promise<CallbackDestination>;
+  findById(id: string): Promise<CallbackDestination | null>;
+  findByResourceId(resourceId: string): Promise<CallbackDestination[]>;
+  updateEnabled(id: string, enabled: boolean, tx?: Prisma.TransactionClient): Promise<void>;
+  delete(id: string, tx?: Prisma.TransactionClient): Promise<void>;
+}
+
+export class PrismaCallbackDestinationRepository implements CallbackDestinationRepository {
+  constructor(private readonly prisma: PrismaClient) {}
+
+  async create(
+    input: CreateCallbackDestinationInput,
+    tx?: Prisma.TransactionClient
+  ): Promise<CallbackDestination> {
+    const client = tx || this.prisma;
+    const encryptedSecret = encryptValue(input.secret);
+    const row = await client.callbackDestination.create({
+      data: {
+        resourceId: input.resourceId,
+        url: input.url,
+        secret: encryptedSecret,
+      },
+    });
+    return this.mapRow(row);
+  }
+
+  async findById(id: string): Promise<CallbackDestination | null> {
+    const row = await this.prisma.callbackDestination.findUnique({
+      where: { id },
+    });
+    return row ? this.mapRow(row) : null;
+  }
+
+  async findByResourceId(resourceId: string): Promise<CallbackDestination[]> {
+    const rows = await this.prisma.callbackDestination.findMany({
+      where: { resourceId },
+    });
+    return rows.map((r) => this.mapRow(r));
+  }
+
+  async updateEnabled(id: string, enabled: boolean, tx?: Prisma.TransactionClient): Promise<void> {
+    const client = tx || this.prisma;
+    await client.callbackDestination.update({
+      where: { id },
+      data: { enabled },
+    });
+  }
+
+  async delete(id: string, tx?: Prisma.TransactionClient): Promise<void> {
+    const client = tx || this.prisma;
+    await client.callbackDestination.delete({
+      where: { id },
+    });
+  }
+
+  private mapRow(row: any): CallbackDestination {
+    return {
+      id: row.id,
+      resourceId: row.resourceId,
+      url: row.url,
+      secret: decryptValue(row.secret),
+      enabled: row.enabled,
+      createdAt: row.createdAt,
+      updatedAt: row.updatedAt,
     };
   }
 }

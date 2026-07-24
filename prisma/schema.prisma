@@ -37,9 +37,10 @@ model Resource {
   totpDelegationEnvelope Json?
   version                String       @default(uuid())
 
-  guardians        Guardian[]
-  approvalRequests ApprovalRequest[]
-  fields           ResourceField[]
+  guardians            Guardian[]
+  approvalRequests     ApprovalRequest[]
+  fields               ResourceField[]
+  callbackDestinations CallbackDestination[]
 
   // Backlink from Environment (one-to-one)
   environment Environment?
@@ -329,4 +330,18 @@ model Credential {
 
   @@index([subjectId])
   @@index([digest])
+}
+
+model CallbackDestination {
+  id         String   @id @default(uuid())
+  resourceId String
+  url        String
+  secret     String
+  enabled    Boolean  @default(true)
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  resource   Resource @relation(fields: [resourceId], references: [id], onDelete: Cascade)
+
+  @@index([resourceId])
 }

@@ -44,6 +44,13 @@ describe('System API E2E Tests', () => {
   const mockUpsertField = {
     fn: async (_resourceId: string, _key: string, _value: string): Promise<void> => {},
   };
+  const mockSetSecrets = {
+    fn: async (
+      _resourceId: string,
+      _secrets: Record<string, string>,
+      _principal: any
+    ): Promise<void> => {},
+  };
 
   const servicesMock = {
     resource: {
@@ -52,6 +59,8 @@ describe('System API E2E Tests', () => {
       listFields: (resourceId: string) => mockListFields.fn(resourceId),
       upsertField: (resourceId: string, key: string, value: string) =>
         mockUpsertField.fn(resourceId, key, value),
+      setSecrets: (resourceId: string, secrets: Record<string, string>, principal: any) =>
+        mockSetSecrets.fn(resourceId, secrets, principal),
     },
     approval: {
       createApprovalRequest: (input: unknown) => mockCreateApprovalRequest.fn(input),
@@ -369,9 +378,11 @@ describe('System API E2E Tests', () => {
       mockGetProject.fn = async () => ({ id: 'p-1', ownerId: 'user-owner', name: 'MyProject' });
       mockGetEnvironmentById.fn = async () => ({ name: 'Production', resourceId: 'res-1' });
 
-      let upsertedCount = 0;
-      mockUpsertField.fn = async () => {
-        upsertedCount++;
+      let setSecretsCalled = false;
+      let setSecretsPayload: Record<string, string> = {};
+      mockSetSecrets.fn = async (_resourceId, secrets, _principal) => {
+        setSecretsCalled = true;
+        setSecretsPayload = secrets;
       };
 
       const response = await server.inject({
@@ -386,7 +397,8 @@ describe('System API E2E Tests', () => {
       });
 
       assert.strictEqual(response.statusCode, 200);
-      assert.strictEqual(upsertedCount, 2);
+      assert.strictEqual(setSecretsCalled, true);
+      assert.deepStrictEqual(setSecretsPayload, { FOO: 'bar', BAZ: 'qux' });
     });
   });
 });
