@@ -1979,11 +1979,12 @@ export class PrismaCallbackDestinationRepository implements CallbackDestinationR
     tx?: Prisma.TransactionClient
   ): Promise<CallbackDestination> {
     const client = tx || this.prisma;
+    const encryptedSecret = encryptValue(input.secret);
     const row = await client.callbackDestination.create({
       data: {
         resourceId: input.resourceId,
         url: input.url,
-        secret: input.secret,
+        secret: encryptedSecret,
       },
     });
     return this.mapRow(row);
@@ -2023,7 +2024,7 @@ export class PrismaCallbackDestinationRepository implements CallbackDestinationR
       id: row.id,
       resourceId: row.resourceId,
       url: row.url,
-      secret: row.secret,
+      secret: decryptValue(row.secret),
       enabled: row.enabled,
       createdAt: row.createdAt,
       updatedAt: row.updatedAt,

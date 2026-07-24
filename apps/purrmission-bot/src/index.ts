@@ -19,6 +19,7 @@ import {
   PrismaCallbackDestinationRepository,
 } from './domain/repositories.js';
 import { createServices } from './domain/services.js';
+import { OutboxWorker } from './domain/outbox_worker.js';
 import { createDiscordClient } from './discord/client.js';
 import { startHttpServer } from './http/server.js';
 import { getPrismaClient } from './infra/prismaClient.js';
@@ -82,6 +83,10 @@ async function main(): Promise<void> {
     services,
     discordClient,
   });
+
+  logger.info('Starting Outbox event worker...');
+  const outboxWorker = new OutboxWorker(repositories, discordClient);
+  outboxWorker.start();
 
   // Announce online status
   const statusService = new StatusService();

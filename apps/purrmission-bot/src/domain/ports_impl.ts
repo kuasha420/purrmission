@@ -253,6 +253,15 @@ export class DomainPortsImpl implements DomainPorts {
       throw new ForbiddenError('Only the project owner can delete callbacks');
     }
 
+    const callback =
+      await this.resourceService.deps.repositories.callbackDestinations.findById(callbackId);
+    if (!callback) {
+      throw new NotFoundError('Callback destination not found');
+    }
+    if (callback.resourceId !== resourceId) {
+      throw new ForbiddenError('Callback destination does not belong to the requested resource');
+    }
+
     await this.resourceService.deps.repositories.callbackDestinations.delete(callbackId);
   }
 

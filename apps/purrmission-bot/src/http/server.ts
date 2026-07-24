@@ -733,12 +733,14 @@ export function createHttpServer(deps: HttpServerDeps): FastifyInstance {
 
       const resourceId = environment.resourceId;
 
-      // Upsert fields in parallel to improve performance when many secrets are provided
-      await Promise.all(
-        Object.entries(secrets).map(([key, value]) =>
-          services.resource.upsertField(resourceId, key, value)
-        )
-      );
+      const principal = (req as any).principal || {
+        type: 'DISCORD_USER',
+        id: userId,
+        authKind: 'DISCORD',
+        actorDiscordId: userId,
+      };
+
+      await services.resource.setSecrets(resourceId, secrets, principal);
 
       return { success: true };
     }
