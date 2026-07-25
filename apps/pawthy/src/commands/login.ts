@@ -89,6 +89,11 @@ export const loginCommand = new Command('login')
             } else if (errorCode === 'access_denied') {
               console.error(chalk.red('\nAccess denied by user.'));
               process.exit(1);
+            } else if (errorCode === 'invalid_grant') {
+              console.error(
+                chalk.red('\nInvalid or replayed authorization request. Please try again.')
+              );
+              process.exit(1);
             } else {
               console.error(chalk.red(`\nAuthentication failed: ${errorCode || 'Unknown error'}`));
               process.exit(1);

@@ -1,4 +1,4 @@
-import type { Principal, Project, Environment, ApprovalRequest } from './models.js';
+import type { Principal, Project, Environment, ApprovalRequest, ApprovalGrant } from './models.js';
 
 // ---------------------------------------------------------------------------
 // Shared Boundary Errors
@@ -173,7 +173,7 @@ export interface DomainPorts {
     action: string,
     targetKey?: string | null,
     correlationId?: string
-  ): Promise<{ success: boolean; request?: ApprovalRequest }>;
+  ): Promise<{ success: boolean; request?: ApprovalRequest; error?: string }>;
   recordApprovalDecision(
     principal: Principal,
     requestId: string,
@@ -185,4 +185,9 @@ export interface DomainPorts {
     requestId: string,
     correlationId?: string
   ): Promise<ApprovalRequest | null>;
+  getApprovalGrantByRequestId(
+    principal: Principal,
+    requestId: string,
+    correlationId?: string
+  ): Promise<ApprovalGrant | null>;
 }

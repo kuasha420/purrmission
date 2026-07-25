@@ -263,7 +263,9 @@ export const initCommand = new Command('init')
     } catch (error) {
       if (axios.isAxiosError(error)) {
         if (error.response?.status === 401) {
-          console.error(chalk.red('Session expired. Please run `pawthy login` again.'));
+          console.error(chalk.red('Session expired or revoked. Please run `pawthy login` again.'));
+        } else if (error.response?.status === 403) {
+          console.error(chalk.red('Access forbidden: Insufficient permissions or wrong audience.'));
         } else {
           console.error(chalk.red(`Failed to fetch data: ${error.message}`));
         }

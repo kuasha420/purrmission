@@ -8,10 +8,8 @@
  */
 
 import crypto from 'node:crypto';
-import type {
+import {
   ApprovalRequest,
-  ApprovalDecision,
-  DecisionResult,
   Resource,
   Guardian,
   TOTPAccount,
@@ -22,6 +20,9 @@ import type {
   TOTPLinkEnvelope,
   Credential,
   ApprovalGrant,
+  Principal,
+  ApprovalDecision,
+  DecisionResult,
 } from './models.js';
 import type { Repositories } from './repositories.js';
 import { logger } from '../logging/logger.js';
@@ -34,7 +35,6 @@ import {
   isEffectiveGuardian,
   isEffectiveOwner,
   hasCapability,
-  Principal,
 } from './policy.js';
 import { getPrismaClient } from '../infra/prismaClient.js';
 import { generateTOTPCode } from './totp.js';
@@ -1249,7 +1249,13 @@ export class ResourceService {
     const { repositories } = this.deps;
     const userPrincipal: Principal =
       typeof principal === 'string'
-        ? { type: 'DISCORD_USER', id: principal, authKind: 'DISCORD', actorDiscordId: principal }
+        ? {
+            type: 'DISCORD_USER',
+            id: principal,
+            subjectId: principal,
+            authKind: 'DISCORD',
+            actorDiscordId: principal,
+          }
         : principal;
 
     const actorId = userPrincipal.id;
@@ -1378,6 +1384,7 @@ export class ResourceService {
     const principal: Principal = {
       type: 'DISCORD_USER',
       id: actorId,
+      subjectId: actorId,
       authKind: 'DISCORD',
       actorDiscordId: actorId,
     };

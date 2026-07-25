@@ -71,7 +71,7 @@ describe('System API E2E Tests', () => {
         mockFindActiveApproval.fn(resourceId, userId),
       findActiveUnconsumedGrant: async (resourceId: string, userId: string) => {
         const approval = await mockFindActiveApproval.fn(resourceId, userId);
-        if (approval && approval.status === 'APPROVED') {
+        if (approval && (approval as any).status === 'APPROVED') {
           return { id: 'mock-grant-id', resourceId, userId };
         }
         return null;
@@ -90,9 +90,9 @@ describe('System API E2E Tests', () => {
     ports: {
       getSecrets: async (principal: any, projectId: string, envId: string, grantId?: string) => {
         const userId = principal.subjectId ?? principal.id;
-        const project = await mockGetProject.fn(projectId);
+        const project: any = await mockGetProject.fn(projectId);
         if (!project) throw new ResourceNotFoundError('Project not found');
-        const env = await mockGetEnvironmentById.fn(projectId, envId);
+        const env: any = await mockGetEnvironmentById.fn(projectId, envId);
         if (!env) throw new ResourceNotFoundError('Environment not found');
 
         // 1. Owner access
