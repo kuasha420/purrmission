@@ -13,7 +13,7 @@ import {
   ButtonStyle,
 } from 'discord.js';
 import type { Services } from '../../domain/services.js';
-import type { ApprovalDecision, AccessRequestContext } from '../../domain/models.js';
+import type { ApprovalDecision, AccessRequestContext, Principal } from '../../domain/models.js';
 import type { Repositories } from '../../domain/repositories.js';
 import { generateTOTPCode } from '../../domain/totp.js';
 import { logger } from '../../logging/logger.js';
@@ -105,12 +105,30 @@ export async function handleApprovalButton(
   await interaction.deferUpdate();
 
   try {
-    // Record the decision
-    const result = await services.approval.recordDecision(requestId, action, userId);
+    const principal: Principal = {
+      id: userId,
+      type: 'DISCORD_USER',
+      subjectId: userId,
+      authKind: 'DISCORD',
+      scopes: [],
+      audience: 'discord',
+    };
+
+    // Record the decision via the ports layer
+    const result = await services.ports.recordApprovalDecision(principal, requestId, action);
 
     if (!result.success) {
       await interaction.followUp({
-        content: `❌ ${result.error}`,
+        content: `❌ Request decision recording failed.`,
+        ephemeral: true,
+      });
+      return;
+    }
+
+    const request = await services.ports.getApprovalRequest(principal, requestId);
+    if (!request) {
+      await interaction.followUp({
+        content: `❌ Could not retrieve approval request details.`,
         ephemeral: true,
       });
       return;
@@ -152,12 +170,12 @@ export async function handleApprovalButton(
     });
 
     // If approved, reveal the data to the requester
-    if (action === 'APPROVE' && result.request) {
-      const context = result.request.context;
+    if (action === 'APPROVE') {
+      const context = request.context;
       if (isAccessRequestContext(context)) {
         await revealAccessToRequester(
           context,
-          result.request.resourceId,
+          request.resourceId,
           repositories,
           services,
           discordClient
@@ -166,8 +184,8 @@ export async function handleApprovalButton(
     }
 
     // If denied, notify the requester via DM
-    if (action === 'DENY' && result.request) {
-      const context = result.request.context;
+    if (action === 'DENY') {
+      const context = request.context;
       if (isAccessRequestContext(context)) {
         try {
           const user = await discordClient.users.fetch(context.requesterId);
@@ -180,15 +198,6 @@ export async function handleApprovalButton(
           });
         }
       }
-    }
-
-    // Handle callback if configured
-    if (result.action?.type === 'CALL_CALLBACK_URL') {
-      logger.info('Callback URL configured', {
-        url: result.action.url,
-        status: result.action.status,
-      });
-      // TODO: Implement actual HTTP callback
     }
 
     logger.info('Approval button processed', { requestId, action, userId });
