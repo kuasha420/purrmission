@@ -72,35 +72,120 @@ export const pullCommand = new Command('pull')
 
     const envPath = path.resolve(process.cwd(), file);
 
+    // Whitelisting / selective keys sync (Issue #80)
+    const keysWhitelist = getKeysWhitelist(options.keys, config);
+    const keysParam = keysWhitelist ? Array.from(keysWhitelist).join(',') : undefined;
+
     try {
       console.log(chalk.dim('Fetching secrets from Purrmission...'));
 
       // 1. Fetch Secrets
+      const url = new URL(`${apiUrl}/api/projects/${projectId}/environments/${envId}/secrets`);
+      if (keysParam) {
+        url.searchParams.set('keys', keysParam);
+      }
+
       const res = await axios.get<{
         secrets?: Record<string, string>;
         status?: string;
         message?: string;
-      }>(`${apiUrl}/api/projects/${projectId}/environments/${envId}/secrets`, {
+        requestId?: string;
+      }>(url.toString(), {
         headers: { Authorization: `Bearer ${token}` },
         validateStatus: (status) => status >= 200 && status < 300,
       });
 
+      let secrets: Record<string, string> = {};
+
       if (res.status === 202) {
-        console.log(`\n${chalk.yellow('⏳ Access Pending Approval')}`);
-        console.log(chalk.white(res.data.message));
-        console.log(
-          chalk.dim(
-            '\nPlease run this command again once your request has been approved in Discord.'
-          )
+        const { requestId } = res.data;
+        console.log(`\n⏳ ${chalk.yellow('Access Pending Approval')}`);
+        console.log(chalk.white(`Request ID: ${requestId}`));
+        console.log('Polling for approval...');
+
+        const pollInterval = 5000;
+        const timeout = 5 * 60 * 1000; // 5 minutes
+        const start = Date.now();
+        let approved = false;
+        let finalGrantId = '';
+
+        while (Date.now() - start < timeout) {
+          await new Promise((resolve) => setTimeout(resolve, pollInterval));
+
+          try {
+            const statusRes = await axios.get<{
+              status: string;
+              grantId?: string;
+            }>(`${apiUrl}/api/requests/${requestId}`, {
+              headers: { Authorization: `Bearer ${token}` },
+            });
+
+            const { status, grantId } = statusRes.data;
+
+            if (status === 'APPROVED') {
+              console.log(chalk.green('\n✅ Approval granted! Fetching secrets...'));
+              approved = true;
+              finalGrantId = grantId || '';
+              break;
+            } else if (status === 'DENIED') {
+              console.error(chalk.red('\n❌ Access request was denied by a guardian.'));
+              process.exit(1);
+            } else if (status === 'EXPIRED') {
+              console.error(chalk.red('\n❌ Access request has expired.'));
+              process.exit(1);
+            } else if (status === 'REVOKED') {
+              console.error(chalk.red('\n❌ Access request has been revoked.'));
+              process.exit(1);
+            } else if (status === 'PENDING') {
+              process.stdout.write('.');
+            } else {
+              console.log(chalk.white(`\nState: ${status}`));
+            }
+          } catch (pollErr) {
+            if (axios.isAxiosError(pollErr) && pollErr.response) {
+              const s = pollErr.response.status;
+              if (s === 401) {
+                console.error(chalk.red('\nSession expired or unauthorized.'));
+                process.exit(1);
+              } else if (s === 403) {
+                console.error(
+                  chalk.red('\nAccess forbidden: Insufficient permissions or wrong audience.')
+                );
+                process.exit(1);
+              } else if (s === 404) {
+                console.error(chalk.red('\nRequest not found.'));
+                process.exit(1);
+              }
+            }
+            process.stdout.write('?');
+          }
+        }
+
+        if (!approved) {
+          console.error(chalk.red('\nAuthentication/Approval timed out. Please try again.'));
+          process.exit(1);
+        }
+
+        // Fetch secrets using the grant ID
+        const secretsUrl = new URL(
+          `${apiUrl}/api/projects/${projectId}/environments/${envId}/secrets`
         );
-        process.exit(1);
-        return;
+        if (finalGrantId) {
+          secretsUrl.searchParams.set('grantId', finalGrantId);
+        }
+        if (keysParam) {
+          secretsUrl.searchParams.set('keys', keysParam);
+        }
+
+        const secretsRes = await axios.get<{
+          secrets?: Record<string, string>;
+        }>(secretsUrl.toString(), {
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        secrets = secretsRes.data.secrets || {};
+      } else {
+        secrets = res.data.secrets || {};
       }
-
-      let secrets = res.data.secrets || {};
-
-      // Whitelisting / selective keys sync (Issue #80)
-      const keysWhitelist = getKeysWhitelist(options.keys, config);
 
       if (keysWhitelist) {
         const ignoredKeys: string[] = [];
@@ -166,13 +251,9 @@ export const pullCommand = new Command('pull')
     } catch (error) {
       if (axios.isAxiosError(error)) {
         if (error.response?.status === 401) {
-          console.error(chalk.red('Session expired. Please run `pawthy login` again.'));
+          console.error(chalk.red('Session expired or revoked. Please run `pawthy login` again.'));
         } else if (error.response?.status === 403) {
-          console.error(
-            chalk.red(
-              'Access denied. You do not have permission to view secrets in this environment.'
-            )
-          );
+          console.error(chalk.red('Access forbidden: Insufficient permissions or wrong audience.'));
         } else if (error.response?.status === 404) {
           console.error(chalk.red('Project or Environment not found. It may have been deleted.'));
         } else {

@@ -7,7 +7,7 @@ import type {
   CallbackDestinationDTO,
 } from './ports.js';
 import { ForbiddenError, NotFoundError } from './ports.js';
-import type { Principal, Project, Environment, ApprovalRequest } from './models.js';
+import type { Principal, Project, Environment, ApprovalRequest, ApprovalGrant } from './models.js';
 import { ProjectService } from './project.js';
 import { ResourceService, ApprovalService } from './services.js';
 
@@ -323,5 +323,15 @@ export class DomainPortsImpl implements DomainPorts {
     }
 
     return request;
+  }
+
+  async getApprovalGrantByRequestId(
+    principal: Principal,
+    requestId: string
+  ): Promise<ApprovalGrant | null> {
+    const request = await this.getApprovalRequest(principal, requestId);
+    if (!request) return null;
+
+    return this.approvalService.deps.repositories.approvalGrants.findByRequestId(requestId);
   }
 }

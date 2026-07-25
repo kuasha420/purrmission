@@ -242,6 +242,14 @@ export function createHttpServer(deps: HttpServerDeps): FastifyInstance {
           });
         }
 
+        let grantId: string | null = null;
+        if (approvalRequest.status === 'APPROVED') {
+          const grant = await services.ports.getApprovalGrantByRequestId(principal, id);
+          if (grant) {
+            grantId = grant.id;
+          }
+        }
+
         return {
           requestId: approvalRequest.id,
           resourceId: approvalRequest.resourceId,
@@ -250,6 +258,7 @@ export function createHttpServer(deps: HttpServerDeps): FastifyInstance {
           expiresAt: approvalRequest.expiresAt.toISOString(),
           resolvedBy: approvalRequest.resolvedBy ?? null,
           resolvedAt: approvalRequest.resolvedAt?.toISOString() ?? null,
+          grantId,
         };
       } catch (err) {
         if (err instanceof ForbiddenError) {
@@ -306,7 +315,9 @@ export function createHttpServer(deps: HttpServerDeps): FastifyInstance {
         return {
           access_token: result.token,
           token_type: 'Bearer',
-          expires_in: Math.round((result.apiToken.expiresAt.getTime() - Date.now()) / 1000),
+          expires_in: result.apiToken.expiresAt
+            ? Math.round((result.apiToken.expiresAt.getTime() - Date.now()) / 1000)
+            : 0,
         };
       } catch (e: unknown) {
         if (e instanceof SlowDownError) {
@@ -550,7 +561,7 @@ export function createHttpServer(deps: HttpServerDeps): FastifyInstance {
     },
     async (req, rep) => {
       const { projectId, envId } = req.params as { projectId: string; envId: string };
-      const { grantId } = (req.query || {}) as { grantId?: string };
+      const { grantId, keys } = (req.query || {}) as { grantId?: string; keys?: string };
       const userId = req.user.id;
 
       const project = await services.project.getProject(projectId);
@@ -573,19 +584,25 @@ export function createHttpServer(deps: HttpServerDeps): FastifyInstance {
             resourceId,
             userId,
             'secrets.read',
-            null
+            keys || null
           );
           if (activeGrant) {
             resolvedGrantId = activeGrant.id;
           }
         }
 
-        const secrets = await services.ports.getSecrets(
-          principal,
-          projectId,
-          envId,
-          resolvedGrantId
-        );
+        let secrets = await services.ports.getSecrets(principal, projectId, envId, resolvedGrantId);
+
+        if (keys) {
+          const filterKeys = new Set(
+            keys
+              .split(',')
+              .map((k) => k.trim())
+              .filter(Boolean)
+          );
+          secrets = Object.fromEntries(Object.entries(secrets).filter(([k]) => filterKeys.has(k)));
+        }
+
         return { secrets };
       } catch (err) {
         if (err instanceof ForbiddenError) {
@@ -593,7 +610,8 @@ export function createHttpServer(deps: HttpServerDeps): FastifyInstance {
           const approval = await services.approval.findActiveApproval(
             resourceId,
             userId,
-            'secrets.read'
+            'secrets.read',
+            keys || null
           );
 
           if (approval) {
@@ -617,7 +635,8 @@ export function createHttpServer(deps: HttpServerDeps): FastifyInstance {
           const result = await services.ports.createApprovalRequest(
             principal,
             resourceId,
-            'secrets.read'
+            'secrets.read',
+            keys || null
           );
           if (!result.success || !result.request) {
             throw new Error(

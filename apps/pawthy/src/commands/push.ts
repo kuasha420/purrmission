@@ -172,7 +172,7 @@ export const pushCommand = new Command('push')
     } catch (error) {
       if (axios.isAxiosError(error)) {
         if (error.response?.status === 401) {
-          console.error(chalk.red('Session expired. Please run `pawthy login` again.'));
+          console.error(chalk.red('Session expired or revoked. Please run `pawthy login` again.'));
         } else if (error.response?.status === 403) {
           const targetEnv = envId || 'this environment';
           console.error(
@@ -182,6 +182,15 @@ export const pushCommand = new Command('push')
           );
         } else if (error.response?.status === 404) {
           console.error(chalk.red('Project or Environment not found. It may have been deleted.'));
+        } else if (error.response?.status === 409) {
+          console.error(chalk.red('Conflict detected: Remote secret version has changed.'));
+        } else if (error.response?.status === 400) {
+          const data = error.response.data as any;
+          const message = data?.error || data?.message || 'Invalid data';
+          const details = data?.details
+            ? `\nDetails: ${JSON.stringify(data.details, null, 2)}`
+            : '';
+          console.error(chalk.red(`Validation failed: ${message}${details}`));
         } else {
           console.error(chalk.red(`Failed to push secrets: ${error.message}`));
         }
