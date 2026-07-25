@@ -1,13 +1,14 @@
 # Purrmission RBAC and Observability Knowledgebase
 
-- Status: Phase 1 technical specification; prerequisite remediation in progress
+- Status: **Complete and verified**
 - Preparation issue: [#107](https://github.com/kuasha420/purrmission/issues/107) (complete)
-- Prerequisite epic: [#116](https://github.com/kuasha420/purrmission/issues/116)
+- Prerequisite epic: [#116](https://github.com/kuasha420/purrmission/issues/116) (complete)
 - Execution graph:
   [Pre-Dashboard RBAC Prerequisite Execution Graph](../epics/rbac-prerequisite-execution-graph.md)
-- Readiness gate: [#126](https://github.com/kuasha420/purrmission/issues/126)
-- Dashboard readiness: Blocked until #126 records Go
-- Baseline audited revision: `9eedd4d` (`master`, 2026-07-24)
+- Readiness gate: [#126](https://github.com/kuasha420/purrmission/issues/126) (complete)
+- Conformance Report: [2026-07-26 Prerequisite Conformance Report](../reports/2026-07-26-prerequisite-conformance-report.md)
+- Dashboard readiness: **Go** (Purrmission is ready to file and define, not automatically deploy, the Discord OAuth/session and Web Dashboard backend/frontend phases)
+- Baseline audited revision: `19eea3b` (`master`, 2026-07-26)
 - Applies to: Discord commands, the Fastify API, Pawthy, and the future
   `apps/purrmission-web`
 
