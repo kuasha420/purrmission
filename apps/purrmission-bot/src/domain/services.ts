@@ -814,12 +814,6 @@ export class ResourceService {
       return repositories.resources.findById(credential.subjectId);
     }
 
-    // 2. Dual-read fallback: check legacy plaintext apiKey in Resources table
-    const legacyResource = await repositories.resources.findByApiKey(apiKey);
-    if (legacyResource) {
-      return legacyResource;
-    }
-
     return null;
   }
 

@@ -108,13 +108,6 @@ describe('System API E2E Tests', () => {
           return Object.fromEntries((fields as any[]).map((f) => [f.name, f.value]));
         }
 
-        // 3. Guardian access
-        const isGuardian = await mockIsGuardian.fn(env.resourceId, userId);
-        if (isGuardian) {
-          const fields = await mockListFields.fn(env.resourceId);
-          return Object.fromEntries((fields as any[]).map((f) => [f.name, f.value]));
-        }
-
         // 4. Grant access
         if (grantId) {
           const fields = await mockListFields.fn(env.resourceId);
