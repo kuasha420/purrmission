@@ -182,7 +182,6 @@ export function createHttpServer(deps: HttpServerDeps): FastifyInstance {
     const result = await services.approval.createApprovalRequest({
       resourceId: body.resourceId,
       context: body.context,
-      callbackUrl: body.callbackUrl,
       expiresInMs: body.expiresInMs,
       requesterId: resource.id,
       requesterType: 'SERVICE',

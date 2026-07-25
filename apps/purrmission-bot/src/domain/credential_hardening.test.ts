@@ -60,10 +60,9 @@ describe('Credential Lifecycle Hardening', () => {
         version: 'v1',
       });
 
-      // 1. Dual-read fallback: check legacy plaintext key works
+      // 1. Dual-read fallback: check legacy plaintext key fails closed (R8A/R8D cleanup)
       const foundLegacy = await services.resource.verifyApiKey('legacy_plain_key');
-      assert.ok(foundLegacy);
-      assert.strictEqual(foundLegacy.id, resource.id);
+      assert.strictEqual(foundLegacy, null);
 
       // 2. Mint new hardened API key
       const ownerId = 'user-owner';
