@@ -7,7 +7,17 @@
 - Baseline delivery: [#107](https://github.com/kuasha420/purrmission/issues/107) /
   [#115](https://github.com/kuasha420/purrmission/pull/115)
 - Final readiness gate: [#126](https://github.com/kuasha420/purrmission/issues/126)
-- Last assessed: 2026-07-24
+- Current checkpoint: **No-go** at `e4269cea4d6f`; independent verification and remediation
+  routing are recorded in the
+  [2026-07-26 prerequisite conformance report](../reports/2026-07-26-prerequisite-conformance-report.md)
+  and [#138](https://github.com/kuasha420/purrmission/pull/138)
+- Last assessed: 2026-07-26
+
+All implementation nodes and both gates were reopened after the No-go result. Reopening records
+ownership; it does not make every node ready at once. The immediately claimable prerequisite lane is
+#117. Issue #105 remains independently claimable on the parallel production-safety lane. Every
+other node must wait for the incoming dependencies in Section 3 to be post-merge verified and
+closed again.
 
 ## 1. Goal and authority
 
