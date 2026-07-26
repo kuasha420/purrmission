@@ -1,4 +1,11 @@
-import type { Principal, Project, Environment, ApprovalRequest, ApprovalGrant } from './models.js';
+import type {
+  Principal,
+  Project,
+  ProjectMember,
+  Environment,
+  ApprovalRequest,
+  ApprovalGrant,
+} from './models.js';
 
 // ---------------------------------------------------------------------------
 // Shared Boundary Errors
@@ -59,7 +66,7 @@ export interface CreateProjectDTO {
 export interface AddMemberDTO {
   projectId: string;
   memberUserId: string;
-  role: 'OWNER' | 'WRITER' | 'READER';
+  role: 'WRITER' | 'READER';
 }
 
 export interface CreateEnvironmentDTO {
@@ -109,7 +116,7 @@ export interface DomainPorts {
     principal: Principal,
     projectId: string,
     correlationId?: string
-  ): Promise<any[]>;
+  ): Promise<ProjectMember[]>;
 
   // Environments
   createEnvironment(

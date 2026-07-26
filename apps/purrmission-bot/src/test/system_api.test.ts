@@ -5,6 +5,7 @@ import type { FastifyInstance } from 'fastify';
 import type { Services } from '../domain/services.js';
 import { ForbiddenError } from '../domain/auth.js';
 import { ResourceNotFoundError } from '../domain/errors.js';
+import type { Principal } from '../domain/models.js';
 import { createHttpServer } from '../http/server.js';
 
 // Minimal mock Discord client
@@ -31,6 +32,9 @@ describe('System API E2E Tests', () => {
   const mockFindActiveApproval = {
     fn: async (_resourceId: string, _userId: string): Promise<unknown> => null,
   };
+  const mockFindActiveGrant = {
+    fn: async (_resourceId: string, _userId: string): Promise<unknown> => null,
+  };
   const mockValidateToken = { fn: async (_token: string): Promise<unknown> => null };
   const mockGetProject = { fn: async (_projectId: string): Promise<unknown> => null };
   const mockGetEnvironmentById = {
@@ -42,7 +46,9 @@ describe('System API E2E Tests', () => {
   const mockIsGuardian = {
     fn: async (_resourceId: string, _userId: string): Promise<boolean> => false,
   };
-  const mockListFields = { fn: async (_resourceId: string): Promise<unknown[]> => [] };
+  const mockListFields = {
+    fn: async (_resourceId: string): Promise<Array<{ name: string; value: string }>> => [],
+  };
   const mockUpsertField = {
     fn: async (_resourceId: string, _key: string, _value: string): Promise<void> => {},
   };
@@ -50,9 +56,21 @@ describe('System API E2E Tests', () => {
     fn: async (
       _resourceId: string,
       _secrets: Record<string, string>,
-      _principal: any
+      _principal: Principal
     ): Promise<void> => {},
   };
+
+  const pawthyPrincipal = (subjectId: string): Principal => ({
+    type: 'PAWTHY_TOKEN',
+    id: `token-${subjectId}`,
+    subjectId,
+    authKind: 'PAWTHY',
+    actorDiscordId: subjectId,
+    scopes: ['secret.value.read', 'secret.write'],
+    audience: 'cli',
+    createdAt: new Date(),
+    lastUsedAt: new Date(),
+  });
 
   const servicesMock = {
     resource: {
@@ -61,7 +79,7 @@ describe('System API E2E Tests', () => {
       listFields: (resourceId: string) => mockListFields.fn(resourceId),
       upsertField: (resourceId: string, key: string, value: string) =>
         mockUpsertField.fn(resourceId, key, value),
-      setSecrets: (resourceId: string, secrets: Record<string, string>, principal: any) =>
+      setSecrets: (resourceId: string, secrets: Record<string, string>, principal: Principal) =>
         mockSetSecrets.fn(resourceId, secrets, principal),
     },
     approval: {
@@ -69,13 +87,8 @@ describe('System API E2E Tests', () => {
       getApprovalRequest: (id: string) => mockGetApprovalRequest.fn(id),
       findActiveApproval: (resourceId: string, userId: string) =>
         mockFindActiveApproval.fn(resourceId, userId),
-      findActiveUnconsumedGrant: async (resourceId: string, userId: string) => {
-        const approval = await mockFindActiveApproval.fn(resourceId, userId);
-        if (approval && (approval as any).status === 'APPROVED') {
-          return { id: 'mock-grant-id', resourceId, userId };
-        }
-        return null;
-      },
+      findActiveUnconsumedGrant: (resourceId: string, userId: string) =>
+        mockFindActiveGrant.fn(resourceId, userId),
       consumeGrant: async () => true,
     },
     auth: {
@@ -88,46 +101,53 @@ describe('System API E2E Tests', () => {
       getMemberRole: (projectId: string, userId: string) => mockGetMemberRole.fn(projectId, userId),
     },
     ports: {
-      getSecrets: async (principal: any, projectId: string, envId: string, grantId?: string) => {
-        const userId = principal.subjectId ?? principal.id;
-        const project: any = await mockGetProject.fn(projectId);
+      getSecrets: async (
+        principal: Principal,
+        projectId: string,
+        envId: string,
+        grantId?: string
+      ) => {
+        const userId = principal.subjectId;
+        const project = (await mockGetProject.fn(projectId)) as { ownerId: string } | null;
         if (!project) throw new ResourceNotFoundError('Project not found');
-        const env: any = await mockGetEnvironmentById.fn(projectId, envId);
+        const env = (await mockGetEnvironmentById.fn(projectId, envId)) as {
+          resourceId: string;
+        } | null;
         if (!env) throw new ResourceNotFoundError('Environment not found');
 
         // 1. Owner access
         if (project.ownerId === userId) {
           const fields = await mockListFields.fn(env.resourceId);
-          return Object.fromEntries((fields as any[]).map((f) => [f.name, f.value]));
+          return Object.fromEntries(fields.map((field) => [field.name, field.value]));
         }
 
         // 2. Member role access
         const role = await mockGetMemberRole.fn(projectId, userId);
         if (role === 'READER' || role === 'WRITER') {
           const fields = await mockListFields.fn(env.resourceId);
-          return Object.fromEntries((fields as any[]).map((f) => [f.name, f.value]));
+          return Object.fromEntries(fields.map((field) => [field.name, field.value]));
         }
 
         // 4. Grant access
         if (grantId) {
           const fields = await mockListFields.fn(env.resourceId);
-          return Object.fromEntries((fields as any[]).map((f) => [f.name, f.value]));
+          return Object.fromEntries(fields.map((field) => [field.name, field.value]));
         }
 
         // Fallback: throw ForbiddenError
         throw new ForbiddenError('Access denied: Secrets access not approved');
       },
-      createApprovalRequest: async (principal: any, resourceId: string, action: string) => {
+      createApprovalRequest: async (principal: Principal, resourceId: string, action: string) => {
         const result = await mockCreateApprovalRequest.fn({
           resourceId,
-          requesterId: principal.subjectId ?? principal.id,
+          requesterId: principal.subjectId,
           requesterType: principal.type,
           authKind: principal.authKind,
           action,
         });
         return result;
       },
-      getApprovalRequest: async (principal: any, requestId: string) => {
+      getApprovalRequest: async (_principal: Principal, requestId: string) => {
         return mockGetApprovalRequest.fn(requestId);
       },
     },
@@ -139,6 +159,7 @@ describe('System API E2E Tests', () => {
     mockCreateApprovalRequest.fn = async () => ({ success: false });
     mockGetApprovalRequest.fn = async () => null;
     mockFindActiveApproval.fn = async () => null;
+    mockFindActiveGrant.fn = async () => null;
     mockValidateToken.fn = async () => null;
     mockGetProject.fn = async () => null;
     mockGetEnvironmentById.fn = async () => null;
@@ -270,7 +291,7 @@ describe('System API E2E Tests', () => {
     });
 
     it('should return 200 with secrets when requester is the project owner', async () => {
-      mockValidateToken.fn = async () => ({ userId: 'user-owner' });
+      mockValidateToken.fn = async () => pawthyPrincipal('user-owner');
       mockGetProject.fn = async () => ({ ownerId: 'user-owner', name: 'MyProject' });
       mockGetEnvironmentById.fn = async () => ({ name: 'Production', resourceId: 'res-1' });
       mockListFields.fn = async () => [
@@ -294,7 +315,7 @@ describe('System API E2E Tests', () => {
     });
 
     it('should return 202 pending when approval is required and is currently pending', async () => {
-      mockValidateToken.fn = async () => ({ userId: 'user-requester' });
+      mockValidateToken.fn = async () => pawthyPrincipal('user-requester');
       mockGetProject.fn = async () => ({ ownerId: 'user-owner', name: 'MyProject' });
       mockGetEnvironmentById.fn = async () => ({ name: 'Production', resourceId: 'res-1' });
       mockGetMemberRole.fn = async () => null; // not a project member
@@ -317,8 +338,8 @@ describe('System API E2E Tests', () => {
       assert.strictEqual(data.requestId, 'req-1');
     });
 
-    it('should return 200 with secrets when approval has been approved', async () => {
-      mockValidateToken.fn = async () => ({ userId: 'user-requester' });
+    it('should return 200 with secrets only when an exact grant exists', async () => {
+      mockValidateToken.fn = async () => pawthyPrincipal('user-requester');
       mockGetProject.fn = async () => ({ ownerId: 'user-owner', name: 'MyProject' });
       mockGetEnvironmentById.fn = async () => ({ name: 'Production', resourceId: 'res-1' });
       mockGetMemberRole.fn = async () => null;
@@ -326,6 +347,12 @@ describe('System API E2E Tests', () => {
       mockFindActiveApproval.fn = async () => ({
         id: 'req-1',
         status: 'APPROVED',
+      });
+      mockFindActiveGrant.fn = async () => ({
+        id: 'grant-1',
+        requestId: 'req-1',
+        resourceId: 'res-1',
+        requesterId: 'user-requester',
       });
       mockListFields.fn = async () => [{ name: 'SECRET_KEY', value: 'approved-value' }];
 
@@ -344,7 +371,7 @@ describe('System API E2E Tests', () => {
     });
 
     it('should automatically trigger a new approval request and return 202 when no active request exists', async () => {
-      mockValidateToken.fn = async () => ({ userId: 'user-requester' });
+      mockValidateToken.fn = async () => pawthyPrincipal('user-requester');
       mockGetProject.fn = async () => ({ ownerId: 'user-owner', name: 'MyProject' });
       mockGetEnvironmentById.fn = async () => ({ name: 'Production', resourceId: 'res-1' });
       mockGetMemberRole.fn = async () => null;
@@ -381,7 +408,7 @@ describe('System API E2E Tests', () => {
     });
 
     it('should return 401 when access is explicitly denied', async () => {
-      mockValidateToken.fn = async () => ({ userId: 'user-requester' });
+      mockValidateToken.fn = async () => pawthyPrincipal('user-requester');
       mockGetProject.fn = async () => ({ ownerId: 'user-owner', name: 'MyProject' });
       mockGetEnvironmentById.fn = async () => ({ name: 'Production', resourceId: 'res-1' });
       mockGetMemberRole.fn = async () => null;
@@ -406,7 +433,7 @@ describe('System API E2E Tests', () => {
 
   describe('PUT /api/projects/:projectId/environments/:envId/secrets', () => {
     it('should return 403 Forbidden when authenticated user lacks write permissions', async () => {
-      mockValidateToken.fn = async () => ({ userId: 'user-reader' });
+      mockValidateToken.fn = async () => pawthyPrincipal('user-reader');
       mockGetProject.fn = async () => ({ id: 'p-1', ownerId: 'user-owner', name: 'MyProject' });
       mockGetMemberRole.fn = async () => 'READER'; // READER is read-only, lacks WRITER/OWNER
 
@@ -428,7 +455,7 @@ describe('System API E2E Tests', () => {
     });
 
     it('should return 200 OK when authenticated user is project owner or writer', async () => {
-      mockValidateToken.fn = async () => ({ userId: 'user-owner' });
+      mockValidateToken.fn = async () => pawthyPrincipal('user-owner');
       mockGetProject.fn = async () => ({ id: 'p-1', ownerId: 'user-owner', name: 'MyProject' });
       mockGetEnvironmentById.fn = async () => ({ name: 'Production', resourceId: 'res-1' });
 

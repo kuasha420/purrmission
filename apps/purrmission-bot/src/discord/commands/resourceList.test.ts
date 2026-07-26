@@ -41,6 +41,12 @@ describe('handleResourceCommand - list', () => {
             return findManyByIdsOverrides;
           },
         } as any,
+        projects: {
+          findEnvironmentByResourceId: async () => null,
+          findById: async () => null,
+          listProjectsByOwner: async () => [],
+          listEnvironments: async () => [],
+        } as any,
       } as any,
     } as unknown as CommandContext;
   });
