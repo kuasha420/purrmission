@@ -36,10 +36,12 @@ async function runReconciliation() {
   const guardianGroups = new Map<string, typeof guardians>();
   for (const g of guardians) {
     const key = JSON.stringify([g.resourceId, g.discordUserId]);
-    if (!guardianGroups.has(key)) {
-      guardianGroups.set(key, []);
+    let group = guardianGroups.get(key);
+    if (!group) {
+      group = [];
+      guardianGroups.set(key, group);
     }
-    guardianGroups.get(key)?.push(g);
+    group.push(g);
   }
 
   const duplicatesToDelete: string[] = [];

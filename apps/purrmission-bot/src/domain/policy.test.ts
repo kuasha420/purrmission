@@ -530,6 +530,25 @@ describe('Principal and exact-object capability policy', () => {
     }
   });
 
+  it('fails closed when an Environment does not belong to the supplied Project', async () => {
+    const result = await hasCapability(
+      capabilityRepositories(),
+      createDiscordPrincipal(OWNER_ID),
+      'environment.view',
+      {
+        projectId: PROJECT_ID,
+        environmentId: 'environment-from-another-project',
+      }
+    );
+
+    assert.equal(result.allowed, false);
+    assert.equal(result.reasonCode, 'TARGET_SCOPE_MISMATCH');
+    assert.deepEqual(result.target, {
+      type: 'ENVIRONMENT',
+      id: 'environment-from-another-project',
+    });
+  });
+
   it('uses typed requesterId rather than legacy JSON context for own-request checks', async () => {
     const principal = createDiscordPrincipal(REQUESTER_ID);
     const legacySpoof = approvalRequest('different-user', {
@@ -683,6 +702,44 @@ describe('Principal and exact-object capability policy', () => {
     );
     assert.equal(allowed.allowed, true);
     assert.deepEqual(allowed.authoritySources, ['SCOPED_CREDENTIAL']);
+
+    const wrongTargetReadScope = await hasCapability(
+      capabilityRepositories(),
+      { ...service, scopes: ['audit.export', 'audit.own.read'] },
+      'audit.export',
+      { projectId: PROJECT_ID, requiredAudience: 'internal' }
+    );
+    assert.equal(wrongTargetReadScope.allowed, false);
+    assert.equal(wrongTargetReadScope.reasonCode, 'INSUFFICIENT_SCOPES');
+
+    const ownTarget = await hasCapability(
+      capabilityRepositories(),
+      { ...service, scopes: ['audit.export', 'audit.own.read'] },
+      'audit.export',
+      { subjectId: service.subjectId, requiredAudience: 'internal' }
+    );
+    assert.equal(ownTarget.allowed, true);
+    assert.deepEqual(ownTarget.target, { type: 'SUBJECT', id: service.subjectId });
+  });
+
+  it('validates Environment/Project relationships before scoped service authorization', async () => {
+    const service: Principal = {
+      type: 'SERVICE',
+      id: 'service-credential',
+      subjectId: 'ci-service',
+      authKind: 'SERVICE',
+      scopes: ['environment.view'],
+      audience: 'internal',
+    };
+
+    const result = await hasCapability(capabilityRepositories(), service, 'environment.view', {
+      projectId: PROJECT_ID,
+      environmentId: 'environment-from-another-project',
+      requiredAudience: 'internal',
+    });
+
+    assert.equal(result.allowed, false);
+    assert.equal(result.reasonCode, 'TARGET_SCOPE_MISMATCH');
   });
 });
 

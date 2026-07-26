@@ -278,6 +278,23 @@ function resolvePolicyTarget(context: CapabilityContext): PolicyTarget {
   return { type: 'GLOBAL' };
 }
 
+function auditReadCapabilitiesForTarget(target: PolicyTarget): Capability[] {
+  switch (target.type) {
+    case 'PROJECT':
+    case 'ENVIRONMENT':
+      return ['audit.full.read', 'audit.operational.read'];
+    case 'RESOURCE':
+    case 'SECRET':
+    case 'APPROVAL_REQUEST':
+    case 'APPROVAL_GRANT':
+      return ['audit.queue.read'];
+    case 'SUBJECT':
+      return ['audit.own.read'];
+    default:
+      return [];
+  }
+}
+
 export async function hasCapability(
   repositories: CapabilityRepositories,
   principal: Principal,
@@ -352,26 +369,6 @@ export async function hasCapability(
     if (!principal.scopes.includes(capability)) {
       return deny('INSUFFICIENT_SCOPES', 'Credential lacks the required capability scope.');
     }
-    if (
-      capability === 'audit.export' &&
-      !principal.scopes.some((scope) =>
-        [
-          'audit.full.read',
-          'audit.operational.read',
-          'audit.queue.read',
-          'audit.own.read',
-        ].includes(scope)
-      )
-    ) {
-      return deny(
-        'INSUFFICIENT_SCOPES',
-        'Audit export also requires an audit read scope on the same authorization context.'
-      );
-    }
-    // For SERVICE type, authorization is purely capability-scope based (no human user role)
-    if (principal.type === 'SERVICE') {
-      return allow('SERVICE', 'Scoped service credential permits this operation.');
-    }
   } else if (principal.type === 'SERVICE' || principal.type === 'RESOURCE_API_KEY') {
     return deny('INSUFFICIENT_SCOPES', 'Credential has no capability scopes.');
   }
@@ -384,13 +381,21 @@ export async function hasCapability(
   let projectId = context.projectId;
   let resourceId = context.resourceId;
 
+  if (context.environmentId && !projectId) {
+    return deny(
+      'MISSING_CONTEXT',
+      'Environment authorization requires its containing Project context.'
+    );
+  }
+
   if (context.environmentId && projectId && repositories.projects) {
     const env = await repositories.projects.getEnvironmentById(projectId, context.environmentId);
-    if (env) {
-      projectId = env.projectId;
-      if (env.resourceId) {
-        resourceId = env.resourceId;
-      }
+    if (!env) {
+      return deny('TARGET_SCOPE_MISMATCH', 'Environment does not belong to the requested Project.');
+    }
+    projectId = env.projectId;
+    if (env.resourceId) {
+      resourceId = env.resourceId;
     }
   }
 
@@ -430,6 +435,13 @@ export async function hasCapability(
   isProjectOwner = pOwnerId !== null;
   const isProjectLinked = !!projectId;
   const isResourceOwner = isProjectOwner || (!isProjectLinked && explicitGuardianRole === 'OWNER');
+
+  // Non-audit service operations are authorized by their explicit credential scope after exact
+  // target relationships above have been validated. Audit scopes require additional target-shape
+  // checks in their capability cases, and export must re-evaluate a read capability on this target.
+  if (principal.type === 'SERVICE' && !capability.startsWith('audit.')) {
+    return allow('SERVICE', 'Scoped service credential permits this operation.');
+  }
 
   switch (capability) {
     // --- PROJECT CAPABILITIES ---
@@ -657,35 +669,91 @@ export async function hasCapability(
 
     // --- AUDIT CAPABILITIES ---
     case 'audit.full.read':
+      if (principal.type === 'SERVICE') {
+        if (!projectId) {
+          return deny('MISSING_CONTEXT', 'Full audit read requires an exact Project target.');
+        }
+        return allow('SERVICE', 'Scoped service credential permits full Project audit reads.');
+      }
       if (isProjectOwner) return allow('OWNER', 'Project Owner has full audit read access');
       return deny('NO_ROLE', 'Only Project Owner has full audit read access');
 
     case 'audit.operational.read':
+      if (principal.type === 'SERVICE') {
+        if (!projectId) {
+          return deny(
+            'MISSING_CONTEXT',
+            'Operational audit read requires an exact Project target.'
+          );
+        }
+        return allow(
+          'SERVICE',
+          'Scoped service credential permits operational Project audit reads.'
+        );
+      }
       if (isProjectOwner) return allow('OWNER', 'Project Owner has operational audit read access');
       if (pMemberRole === 'WRITER')
         return allow('WRITER', 'Project Writer has operational audit read access');
       return deny('NO_ROLE', 'Only Owner or Writer has operational audit read access');
 
     case 'audit.queue.read':
+      if (principal.type === 'SERVICE') {
+        if (!resourceId && !context.requestId) {
+          return deny(
+            'MISSING_CONTEXT',
+            'Queue audit read requires an exact Resource or approval-request target.'
+          );
+        }
+        return allow('SERVICE', 'Scoped service credential permits approval-queue audit reads.');
+      }
       if (isResourceOwner) return allow('OWNER', 'Resource Owner has audit queue read access');
       if (explicitGuardianRole === 'GUARDIAN')
         return allow('GUARDIAN', 'Guardian has audit queue read access');
       return deny('NO_ROLE', 'No role to read audit queue');
 
     case 'audit.own.read':
-      if (context.subjectId && context.subjectId !== authorizationSubjectId(principal)) {
+      if (!context.subjectId) {
+        return deny('MISSING_CONTEXT', 'Own-audit read requires an exact Subject target.');
+      }
+      if (context.subjectId !== authorizationSubjectId(principal)) {
         return deny(
           'AUTH_SUBJECT_MISMATCH',
           'Audit subject does not match the authenticated user.'
         );
       }
+      if (principal.type === 'SERVICE') {
+        return allow('SERVICE', 'Scoped service credential may read its own audit events.');
+      }
       return allow('READER', 'Authenticated user may read their own audit events.', [
         'AUTHENTICATED_SUBJECT',
       ]);
 
-    case 'audit.export':
-      if (isProjectOwner) return allow('OWNER', 'Project Owner can export audits');
-      return deny('NO_ROLE', 'Only Project Owner can export audits');
+    case 'audit.export': {
+      if (principal.type !== 'SERVICE' && !isProjectOwner) {
+        return deny('NO_ROLE', 'Only Project Owner can export audits');
+      }
+
+      const readCapabilities = auditReadCapabilitiesForTarget(target);
+      if (readCapabilities.length === 0) {
+        return deny('MISSING_CONTEXT', 'Audit export requires an exact auditable target.');
+      }
+
+      for (const readCapability of readCapabilities) {
+        const readResult = await hasCapability(repositories, principal, readCapability, context);
+        if (readResult.allowed) {
+          return allow(
+            principal.type === 'SERVICE' ? 'SERVICE' : 'OWNER',
+            'Audit export is permitted by export and read authority on the same target.',
+            readResult.authoritySources
+          );
+        }
+      }
+
+      return deny(
+        principal.scopes ? 'INSUFFICIENT_SCOPES' : 'NO_ROLE',
+        'Audit export requires audit read authority on the same target.'
+      );
+    }
 
     case 'token.manage-own':
       if (principal.type !== 'DISCORD_USER' && principal.type !== 'PAWTHY_TOKEN') {

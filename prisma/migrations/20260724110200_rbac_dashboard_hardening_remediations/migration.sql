@@ -216,3 +216,6 @@ CREATE INDEX "Credential_subjectId_idx" ON "Credential"("subjectId");
 
 -- CreateIndex
 CREATE INDEX "Credential_digest_idx" ON "Credential"("digest");
+
+-- CreateIndex
+CREATE UNIQUE INDEX "Guardian_resourceId_discordUserId_key" ON "Guardian"("resourceId", "discordUserId");

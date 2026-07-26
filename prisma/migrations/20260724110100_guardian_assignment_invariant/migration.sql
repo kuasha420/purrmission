@@ -24,5 +24,7 @@ WHERE EXISTS (
       )
 );
 
-CREATE UNIQUE INDEX "Guardian_resourceId_discordUserId_key"
-ON "Guardian"("resourceId", "discordUserId");
+-- Index creation deliberately remains in the already-published
+-- 20260724110200_rbac_dashboard_hardening_remediations migration. Keeping that migration
+-- byte-for-byte stable avoids checksum drift for databases that have already applied it, while
+-- this earlier reconciliation remains safe to apply afterward on those databases.
