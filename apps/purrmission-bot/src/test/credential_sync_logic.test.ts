@@ -1,6 +1,7 @@
 import { describe, it, beforeEach } from 'node:test';
 import assert from 'node:assert';
 import { createServices, Services } from '../domain/services.js';
+import { createDiscordPrincipal } from '../domain/principal.js';
 import {
   ProjectRepository,
   ResourceRepository,
@@ -440,7 +441,7 @@ describe('Credential Sync Logic Smoke Test', () => {
     assert.strictEqual(activeApproval.status, 'PENDING');
 
     // 4d. Owner Approves
-    await services.approval.recordDecision(reqId, 'APPROVE', ownerId);
+    await services.approval.recordDecision(reqId, 'APPROVE', createDiscordPrincipal(ownerId));
 
     // Verify Approved State
     activeApproval = await services.approval.findActiveApproval(resource.id, guardianId);

@@ -2,8 +2,8 @@ import { test, describe, beforeEach } from 'node:test';
 import assert from 'node:assert';
 import { createInMemoryRepositories } from './repositories.mock.js';
 import { createServices } from './services.js';
-import { Principal } from './auth.js';
 import { AccessDeniedError } from './auth.js';
+import { createDiscordPrincipal } from './principal.js';
 
 describe('Approval Request V2, Immutable Grants, and Atomic Consumption', () => {
   let repos: ReturnType<typeof createInMemoryRepositories>;
@@ -92,7 +92,7 @@ describe('Approval Request V2, Immutable Grants, and Atomic Consumption', () => 
       const decision = await services.approval.recordDecision(
         res.request.id,
         'APPROVE',
-        'guardian-1'
+        createDiscordPrincipal('guardian-1')
       );
 
       assert.strictEqual(decision.success, false);
@@ -119,7 +119,7 @@ describe('Approval Request V2, Immutable Grants, and Atomic Consumption', () => 
       const decision = await services.approval.recordDecision(
         res.request.id,
         'APPROVE',
-        'guardian-1'
+        createDiscordPrincipal('guardian-1')
       );
       assert.ok(decision.success);
 
@@ -128,13 +128,7 @@ describe('Approval Request V2, Immutable Grants, and Atomic Consumption', () => 
       assert.ok(grant);
       assert.strictEqual(grant.consumedAt, null);
 
-      const principal: Principal = {
-        type: 'DISCORD_USER',
-        id: 'user-1',
-        subjectId: 'user-1',
-        authKind: 'DISCORD',
-        actorDiscordId: 'user-1',
-      };
+      const principal = createDiscordPrincipal('user-1');
 
       // Consume the grant
       await services.approval.consumeGrant(grant.id, principal, 'secrets.read', 'v1', 'v1');
@@ -146,7 +140,7 @@ describe('Approval Request V2, Immutable Grants, and Atomic Consumption', () => 
       // Attempt to consume again should fail
       await assert.rejects(
         services.approval.consumeGrant(grant.id, principal, 'secrets.read', 'v1', 'v1'),
-        (err: any) =>
+        (err: unknown) =>
           err instanceof AccessDeniedError && err.message.includes('already been consumed')
       );
     });
@@ -163,35 +157,30 @@ describe('Approval Request V2, Immutable Grants, and Atomic Consumption', () => 
       });
 
       assert.ok(res.success);
+      assert.ok(res.request);
       const decision = await services.approval.recordDecision(
-        res.request!.id,
+        res.request.id,
         'APPROVE',
-        'guardian-1'
+        createDiscordPrincipal('guardian-1')
       );
       assert.ok(decision.success);
 
-      const grant = await repos.approvalGrants.findByRequestId(res.request!.id);
+      const grant = await repos.approvalGrants.findByRequestId(res.request.id);
       assert.ok(grant);
 
-      const principal: Principal = {
-        type: 'DISCORD_USER',
-        id: 'user-1',
-        subjectId: 'user-1',
-        authKind: 'DISCORD',
-        actorDiscordId: 'user-1',
-      };
+      const principal = createDiscordPrincipal('user-1');
 
       // Reject consumption with mismatched targetVersion
       await assert.rejects(
         services.approval.consumeGrant(grant.id, principal, 'secrets.read', 'v2', 'v1'),
-        (err: any) =>
+        (err: unknown) =>
           err instanceof AccessDeniedError && err.message.includes('Target state version mismatch')
       );
 
       // Reject consumption with mismatched policyVersion
       await assert.rejects(
         services.approval.consumeGrant(grant.id, principal, 'secrets.read', 'v1', 'v2'),
-        (err: any) =>
+        (err: unknown) =>
           err instanceof AccessDeniedError && err.message.includes('Policy version mismatch')
       );
     });
@@ -214,14 +203,15 @@ describe('Approval Request V2, Immutable Grants, and Atomic Consumption', () => 
       const decision = await services.approval.recordDecision(
         res.request.id,
         'APPROVE',
-        'guardian-1'
+        createDiscordPrincipal('guardian-1')
       );
       assert.ok(decision.success);
 
       // Get latest rotated resource details and create delegation consent
       const resource = await repos.resources.findById('res-1');
       assert.ok(resource);
-      const totpAccountId = resource.totpAccountId!;
+      assert.ok(resource.totpAccountId);
+      const totpAccountId = resource.totpAccountId;
       const account = await repos.totp.findById(totpAccountId);
       assert.ok(account);
 
@@ -237,13 +227,7 @@ describe('Approval Request V2, Immutable Grants, and Atomic Consumption', () => 
         expiresAt: new Date(Date.now() + 10 * 60 * 1000),
       });
 
-      const principal: Principal = {
-        type: 'DISCORD_USER',
-        id: requesterId,
-        subjectId: requesterId,
-        authKind: 'DISCORD',
-        actorDiscordId: requesterId,
-      };
+      const principal = createDiscordPrincipal(requesterId);
 
       // Reveal should succeed
       const code = await services.resource.revealTOTPCode('res-1', principal);
@@ -278,13 +262,14 @@ describe('Approval Request V2, Immutable Grants, and Atomic Consumption', () => 
       const decision = await services.approval.recordDecision(
         res.request.id,
         'APPROVE',
-        'guardian-1'
+        createDiscordPrincipal('guardian-1')
       );
       assert.ok(decision.success);
 
       const resource = await repos.resources.findById('res-1');
       assert.ok(resource);
-      const totpAccountId = resource.totpAccountId!;
+      assert.ok(resource.totpAccountId);
+      const totpAccountId = resource.totpAccountId;
 
       // Create delegation consent directly in repo with stale seed version
       await repos.totp.createDelegationConsent({
@@ -298,18 +283,12 @@ describe('Approval Request V2, Immutable Grants, and Atomic Consumption', () => 
         expiresAt: new Date(Date.now() + 10 * 60 * 1000),
       });
 
-      const principal: Principal = {
-        type: 'DISCORD_USER',
-        id: requesterId,
-        subjectId: requesterId,
-        authKind: 'DISCORD',
-        actorDiscordId: requesterId,
-      };
+      const principal = createDiscordPrincipal(requesterId);
 
       // Reveal should fail closed
       await assert.rejects(
         services.resource.revealTOTPCode('res-1', principal),
-        (err: any) =>
+        (err: unknown) =>
           err instanceof AccessDeniedError && err.message.includes('seed version has changed')
       );
     });

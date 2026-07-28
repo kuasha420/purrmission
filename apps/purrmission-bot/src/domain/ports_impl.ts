@@ -25,12 +25,12 @@ export class DomainPortsImpl implements DomainPorts {
     }
     return this.projectService.createProject({
       name: dto.name,
-      ownerId: principal.id,
+      ownerId: principal.subjectId,
     });
   }
 
   async listProjects(principal: Principal): Promise<Project[]> {
-    return this.projectService.listProjects(principal.id);
+    return this.projectService.listProjects(principal.subjectId);
   }
 
   async getProject(principal: Principal, projectId: string): Promise<Project | null> {
@@ -38,8 +38,8 @@ export class DomainPortsImpl implements DomainPorts {
     if (!project) return null;
 
     // Check membership/owner
-    const isOwner = project.ownerId === principal.id;
-    const role = await this.projectService.getMemberRole(projectId, principal.id);
+    const isOwner = project.ownerId === principal.subjectId;
+    const role = await this.projectService.getMemberRole(projectId, principal.subjectId);
     if (!isOwner && !role) {
       throw new ForbiddenError('Not a member of the project');
     }
@@ -50,11 +50,16 @@ export class DomainPortsImpl implements DomainPorts {
     const project = await this.getProject(principal, dto.projectId);
     if (!project) throw new NotFoundError('Project not found');
 
-    if (project.ownerId !== principal.id) {
+    if (project.ownerId !== principal.subjectId) {
       throw new ForbiddenError('Only the project owner can add members');
     }
 
-    await this.projectService.addMember(dto.projectId, dto.memberUserId, dto.role, principal.id);
+    await this.projectService.addMember(
+      dto.projectId,
+      dto.memberUserId,
+      dto.role,
+      principal.subjectId
+    );
   }
 
   async removeProjectMember(
@@ -65,14 +70,14 @@ export class DomainPortsImpl implements DomainPorts {
     const project = await this.getProject(principal, projectId);
     if (!project) throw new NotFoundError('Project not found');
 
-    if (project.ownerId !== principal.id) {
+    if (project.ownerId !== principal.subjectId) {
       throw new ForbiddenError('Only the project owner can remove members');
     }
 
     await this.projectService.removeMember(projectId, memberUserId);
   }
 
-  async listProjectMembers(principal: Principal, projectId: string): Promise<any[]> {
+  async listProjectMembers(principal: Principal, projectId: string) {
     await this.getProject(principal, projectId);
     return this.projectService.listMembers(projectId);
   }
@@ -82,7 +87,7 @@ export class DomainPortsImpl implements DomainPorts {
     const project = await this.getProject(principal, dto.projectId);
     if (!project) throw new NotFoundError('Project not found');
 
-    if (project.ownerId !== principal.id) {
+    if (project.ownerId !== principal.subjectId) {
       throw new ForbiddenError('Only the project owner can create environments');
     }
 
@@ -121,9 +126,9 @@ export class DomainPortsImpl implements DomainPorts {
     if (!env || !env.resourceId) throw new NotFoundError('Environment not found');
 
     // Access check: Owner/Writer can view directly.
-    let authorized = project.ownerId === principal.id;
+    let authorized = project.ownerId === principal.subjectId;
     if (!authorized) {
-      const role = await this.projectService.getMemberRole(projectId, principal.id);
+      const role = await this.projectService.getMemberRole(projectId, principal.subjectId);
       authorized = role === 'WRITER' || role === 'READER';
     }
 
@@ -163,9 +168,9 @@ export class DomainPortsImpl implements DomainPorts {
     if (!env || !env.resourceId) throw new NotFoundError('Environment not found');
 
     // Write access check: Owner/Writer
-    let authorized = project.ownerId === principal.id;
+    let authorized = project.ownerId === principal.subjectId;
     if (!authorized) {
-      const role = await this.projectService.getMemberRole(dto.projectId, principal.id);
+      const role = await this.projectService.getMemberRole(dto.projectId, principal.subjectId);
       authorized = role === 'WRITER';
     }
 
@@ -200,7 +205,7 @@ export class DomainPortsImpl implements DomainPorts {
     if (!env) throw new NotFoundError('Associated environment not found');
 
     const project = await this.projectService.getProject(env.projectId);
-    if (!project || project.ownerId !== principal.id) {
+    if (!project || project.ownerId !== principal.subjectId) {
       throw new ForbiddenError('Only the project owner can register callbacks');
     }
 
@@ -249,7 +254,7 @@ export class DomainPortsImpl implements DomainPorts {
     if (!env) throw new NotFoundError('Associated environment not found');
 
     const project = await this.projectService.getProject(env.projectId);
-    if (!project || project.ownerId !== principal.id) {
+    if (!project || project.ownerId !== principal.subjectId) {
       throw new ForbiddenError('Only the project owner can delete callbacks');
     }
 
@@ -274,9 +279,9 @@ export class DomainPortsImpl implements DomainPorts {
   ): Promise<{ success: boolean; request?: ApprovalRequest }> {
     return this.approvalService.createApprovalRequest({
       resourceId,
-      requesterId: principal.id,
+      requesterId: principal.subjectId,
       requesterType: principal.type === 'SERVICE' ? 'SERVICE_PRINCIPAL' : 'DISCORD_USER',
-      authKind: principal.authKind as any,
+      authKind: principal.authKind,
       action,
       targetKey: targetKey ?? null,
     });
@@ -291,7 +296,7 @@ export class DomainPortsImpl implements DomainPorts {
       throw new ForbiddenError('Service principals cannot resolve approval requests');
     }
 
-    return this.approvalService.recordDecision(requestId, decision, principal.id);
+    return this.approvalService.recordDecision(requestId, decision, principal);
   }
 
   async getApprovalRequest(
@@ -310,13 +315,13 @@ export class DomainPortsImpl implements DomainPorts {
     if (!project) return null;
 
     const isMember =
-      project.ownerId === principal.id ||
-      (await this.projectService.getMemberRole(env.projectId, principal.id)) !== null;
-    const isRequester = request.requesterId === principal.id;
+      project.ownerId === principal.subjectId ||
+      (await this.projectService.getMemberRole(env.projectId, principal.subjectId)) !== null;
+    const isRequester = request.requesterId === principal.subjectId;
     const guardians = await this.resourceService.deps.repositories.guardians.findByResourceId(
       request.resourceId
     );
-    const isGuardian = guardians.some((g) => g.discordUserId === principal.id);
+    const isGuardian = guardians.some((g) => g.discordUserId === principal.subjectId);
 
     if (!isMember && !isRequester && !isGuardian) {
       throw new ForbiddenError('Permission denied');

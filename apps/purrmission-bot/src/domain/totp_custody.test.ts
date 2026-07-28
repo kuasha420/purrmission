@@ -3,6 +3,7 @@ import assert from 'node:assert';
 import { createInMemoryRepositories } from './repositories.mock.js';
 import { ResourceService, ApprovalService } from './services.js';
 import { ProjectService } from './project.js';
+import { createDiscordPrincipal } from './principal.js';
 
 describe('TOTP Custody, Consents, and Reveals', () => {
   let repos: ReturnType<typeof createInMemoryRepositories>;
@@ -231,7 +232,7 @@ describe('TOTP Custody, Consents, and Reveals', () => {
       const decision = await resourceService.deps.approval.recordDecision(
         reqRes.request.id,
         'APPROVE',
-        ownerId
+        createDiscordPrincipal(ownerId)
       );
       assert.ok(decision.success);
 

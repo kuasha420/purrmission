@@ -36,6 +36,7 @@ import {
   isEffectiveOwner,
   hasCapability,
 } from './policy.js';
+import { createDiscordPrincipal } from './principal.js';
 import { getPrismaClient } from '../infra/prismaClient.js';
 import { generateTOTPCode } from './totp.js';
 import { computeKeyedDigest, deterministicUUID } from './crypto.js';
@@ -201,9 +202,9 @@ export class ApprovalService {
             {
               eventType: 'REQUEST_CREATE',
               outcomeCode: 'SUCCESS',
-              actorType: requesterId !== 'legacy' ? (requesterType as any) : 'DISCORD_USER',
+              actorType: requesterId !== 'legacy' ? requesterType : 'DISCORD_USER',
               actorId: requesterId,
-              authKind: authKind as any,
+              authKind,
               resourceId: input.resourceId,
               requestId: req.id,
               payload: {
@@ -261,15 +262,16 @@ export class ApprovalService {
    *
    * @param requestId - The ID of the request
    * @param decision - The decision (APPROVE or DENY)
-   * @param byGuardianDiscordId - Discord user ID of the guardian making the decision
+   * @param principal - Authenticated principal making the decision
    * @returns The result of recording the decision
    */
   async recordDecision(
     requestId: string,
     decision: ApprovalDecision,
-    byGuardianDiscordId: string
+    principal: Principal
   ): Promise<DecisionResult> {
     const { repositories } = this.deps;
+    const byGuardianDiscordId = principal.subjectId;
 
     // Find the request
     const request = await repositories.approvalRequests.findById(requestId);
@@ -299,33 +301,31 @@ export class ApprovalService {
       };
     }
 
-    // Verify requester is not self-approving
-    if (request.requesterId === byGuardianDiscordId) {
-      logger.warn('Self-approval rejected', {
-        requestId,
-        guardianId: byGuardianDiscordId,
-      });
-      return {
-        success: false,
-        error: 'Requesters cannot approve their own requests.',
-      };
-    }
+    const authorization = await hasCapability(repositories, principal, 'request.decide', {
+      requestId,
+      resourceId: request.resourceId,
+    });
+    if (!authorization.allowed) {
+      if (authorization.reasonCode === 'SELF_APPROVAL_FORBIDDEN') {
+        logger.warn('Self-approval rejected', {
+          requestId,
+          guardianId: byGuardianDiscordId,
+        });
+        return {
+          success: false,
+          error: 'Requesters cannot approve their own requests.',
+        };
+      }
 
-    // Verify that the user is actually a guardian for this resource
-    const isGuardian = await isEffectiveGuardian(
-      repositories,
-      request.resourceId,
-      byGuardianDiscordId
-    );
-    if (!isGuardian) {
-      logger.warn('Decision made by non-guardian user', {
+      logger.warn('Decision made without request.decide capability', {
         requestId,
         discordUserId: byGuardianDiscordId,
         resourceId: request.resourceId,
+        reasonCode: authorization.reasonCode,
       });
       return {
         success: false,
-        error: 'User is not a guardian for this resource',
+        error: 'User cannot decide requests for this resource',
       };
     }
 
@@ -376,9 +376,9 @@ export class ApprovalService {
             {
               eventType: 'APPROVAL_DECISION',
               outcomeCode: newStatus === 'APPROVED' ? 'SUCCESS' : 'DENIED',
-              actorType: 'DISCORD_USER',
+              actorType: principal.type,
               actorId: byGuardianDiscordId,
-              authKind: 'DISCORD',
+              authKind: principal.authKind,
               resourceId: request.resourceId,
               requestId: request.id,
               payload: {
@@ -730,14 +730,6 @@ export class ResourceService {
       targetUserId
     );
     if (!targetGuardian) {
-      const isDynamic = await isEffectiveGuardian(repositories, resourceId, targetUserId);
-      if (isDynamic) {
-        return {
-          success: false,
-          error:
-            'Cannot remove this user directly because they inherit guardian status from a project role (Project Owner or Writer member). Remove them from the project instead.',
-        };
-      }
       return { success: false, error: 'User is not a guardian of this resource.' };
     }
     if (targetGuardian.role === 'OWNER') {
@@ -1242,17 +1234,9 @@ export class ResourceService {
   ): Promise<string> {
     const { repositories } = this.deps;
     const userPrincipal: Principal =
-      typeof principal === 'string'
-        ? {
-            type: 'DISCORD_USER',
-            id: principal,
-            subjectId: principal,
-            authKind: 'DISCORD',
-            actorDiscordId: principal,
-          }
-        : principal;
+      typeof principal === 'string' ? createDiscordPrincipal(principal) : principal;
 
-    const actorId = userPrincipal.id;
+    const actorId = userPrincipal.subjectId;
 
     // Check capability 'totp.code.read'
     const evalResult = await hasCapability(repositories, userPrincipal, 'totp.code.read', {
@@ -1273,7 +1257,7 @@ export class ResourceService {
 
     if (!authorized) {
       // Delegated access! Must consume ApprovalGrant AND TOTPDelegationConsent atomically.
-      const requesterId = userPrincipal.subjectId || userPrincipal.id;
+      const requesterId = userPrincipal.subjectId;
 
       let resolvedGrantId = grantId;
       if (!resolvedGrantId) {
@@ -1357,9 +1341,9 @@ export class ResourceService {
       await this.deps.audit.log({
         eventType: 'TOTP_CODE_REVEAL',
         outcomeCode: 'SUCCESS',
-        actorType: userPrincipal.type as any,
+        actorType: userPrincipal.type,
         actorId,
-        authKind: userPrincipal.authKind as any,
+        authKind: userPrincipal.authKind,
         resourceId,
         payload: { totpAccountId: account.id },
       });
@@ -1375,13 +1359,7 @@ export class ResourceService {
     const { repositories } = this.deps;
 
     // Check capability 'totp.recovery.read'
-    const principal: Principal = {
-      type: 'DISCORD_USER',
-      id: actorId,
-      subjectId: actorId,
-      authKind: 'DISCORD',
-      actorDiscordId: actorId,
-    };
+    const principal = createDiscordPrincipal(actorId);
     const evalResult = await hasCapability(repositories, principal, 'totp.recovery.read', {
       totpAccountId,
     });
@@ -1637,7 +1615,7 @@ export class ResourceService {
               eventType,
               outcomeCode: 'SUCCESS',
               actorType: actorPrincipal.type === 'SERVICE' ? 'SERVICE' : 'DISCORD_USER',
-              actorId: actorPrincipal.id,
+              actorId: actorPrincipal.subjectId,
               authKind: actorPrincipal.authKind,
               resourceId,
               payload: { fieldName: key },

@@ -469,18 +469,21 @@ export interface CreateProjectMemberInput {
 }
 
 // ----------------------------------------------------
-// RBAC & Capabilities (Prerequisite 1/8)
+// RBAC & Capabilities (Prerequisite 1/9)
 // ----------------------------------------------------
 
 export type PrincipalType = 'DISCORD_USER' | 'PAWTHY_TOKEN' | 'RESOURCE_API_KEY' | 'SERVICE';
 export type AuthKind = 'DISCORD' | 'PAWTHY' | 'API_KEY' | 'SERVICE';
 
 export interface Principal {
+  /** Stable credential/session record identifier. Never use this as the authorization subject. */
   type: PrincipalType;
-  id: string; // Stable Credential / Principal ID
-  subjectId: string; // Resource ID, User ID, or Service Name
+  id: string;
+  /** Discord user, Resource, or service identity that capabilities are evaluated against. */
+  subjectId: string;
   authKind: AuthKind;
-  actorDiscordId?: string; // Optional human Discord User ID association
+  /** Optional human attribution. It is not an alternative authorization subject. */
+  actorDiscordId?: string;
   correlationId?: string;
   scopes?: string[];
   audience?: string;
@@ -560,7 +563,9 @@ export type Capability =
   | 'audit.operational.read'
   | 'audit.queue.read'
   | 'audit.own.read'
-  | 'audit.export';
+  | 'audit.export'
+  // Current CLI credential lifecycle capabilities
+  | 'token.manage-own';
 
 export interface CapabilityContext {
   projectId?: string;
@@ -569,9 +574,13 @@ export interface CapabilityContext {
   totpAccountId?: string;
   requestId?: string;
   fieldName?: string; // specific secret/field
+  subjectId?: string;
   // For grant consumption validation
   grantId?: string;
+  action?: string;
   targetVersion?: string;
+  policyVersion?: string;
+  requiredAudience?: string;
   currentTimestamp?: Date;
 }
 
@@ -587,17 +596,49 @@ export type ReasonCode =
   | 'RECOVERY_KEY_OWNER_REQUIRED'
   | 'NO_ROLE'
   | 'INVALID_AUTH'
+  | 'AUTH_SUBJECT_MISMATCH'
+  | 'WRONG_AUDIENCE'
   | 'MISSING_CONTEXT'
+  | 'TARGET_SCOPE_MISMATCH'
   | 'GRANT_EXPIRED'
   | 'GRANT_SCOPE_MISMATCH'
+  | 'GRANT_INVALID'
   | 'SERVICE'
   | 'INSUFFICIENT_SCOPES';
+
+export type AuthoritySource =
+  | 'AUTHENTICATED_SUBJECT'
+  | 'PROJECT_OWNER'
+  | 'PROJECT_WRITER'
+  | 'PROJECT_READER'
+  | 'RESOURCE_OWNER'
+  | 'EXPLICIT_GUARDIAN'
+  | 'TOTP_OWNER'
+  | 'SCOPED_CREDENTIAL'
+  | 'APPROVAL_GRANT';
+
+export type PolicyTarget =
+  | { type: 'GLOBAL' }
+  | { type: 'SUBJECT'; id: string }
+  | { type: 'PROJECT'; id: string }
+  | { type: 'ENVIRONMENT'; id: string }
+  | { type: 'RESOURCE'; id: string }
+  | { type: 'SECRET'; resourceId: string; key: string }
+  | { type: 'TOTP_ACCOUNT'; id: string }
+  | { type: 'APPROVAL_REQUEST'; id: string }
+  | { type: 'APPROVAL_GRANT'; id: string };
 
 export interface EvaluationResult {
   allowed: boolean;
   decisionCode: DecisionCode;
   reasonCode: ReasonCode;
-  reason: string;
+  capability: Capability;
+  target: PolicyTarget;
+  authoritySources: AuthoritySource[];
+  approvalRequestId?: string;
+  grantId?: string;
+  /** Safe for UI/CLI display; never contains protected values or object names. */
+  safeExplanation: string;
 }
 
 export interface CallbackDestination {

@@ -35,11 +35,13 @@ async function runReconciliation() {
   // We group rows by resourceId_discordUserId key
   const guardianGroups = new Map<string, typeof guardians>();
   for (const g of guardians) {
-    const key = `${g.resourceId}_${g.discordUserId}`;
-    if (!guardianGroups.has(key)) {
-      guardianGroups.set(key, []);
+    const key = JSON.stringify([g.resourceId, g.discordUserId]);
+    let group = guardianGroups.get(key);
+    if (!group) {
+      group = [];
+      guardianGroups.set(key, group);
     }
-    guardianGroups.get(key)!.push(g);
+    group.push(g);
   }
 
   const duplicatesToDelete: string[] = [];
@@ -57,7 +59,8 @@ async function runReconciliation() {
     const sorted = [...group].sort((a, b) => {
       if (a.role === 'OWNER' && b.role !== 'OWNER') return -1;
       if (a.role !== 'OWNER' && b.role === 'OWNER') return 1;
-      return a.createdAt.getTime() - b.createdAt.getTime();
+      const createdAtOrder = a.createdAt.getTime() - b.createdAt.getTime();
+      return createdAtOrder !== 0 ? createdAtOrder : a.id.localeCompare(b.id);
     });
 
     const primary = sorted[0];
@@ -74,15 +77,12 @@ async function runReconciliation() {
     }
   }
 
-  // 3. Identify legacy project-linked resource owner mirrors
-  // For project-linked resources, any Guardian row with role = 'OWNER' is a legacy mirror or stale owner.
-  // We want to delete them. But wait: we must never delete an explicit Guardian assignment solely because the user is a Writer.
-  // If the row we are deleting is an OWNER mirror, but the user is not the Project Owner (maybe they are a Writer or Guardian),
-  // wait, did they have an explicit guardian assignment? The issue says:
-  // "never deletes an explicit Guardian assignment solely because the user is a Writer."
-  // If the explicit assignment was role = GUARDIAN, it is kept. If it was role = OWNER, it was a legacy mirror/stale row.
-  // Let's check:
-  const mirrorsToDelete: string[] = [];
+  // 3. Identify legacy project-linked Resource owner rows for operator review.
+  //
+  // The current schema has no provenance column that can distinguish an automatically mirrored
+  // OWNER row from a deliberate historical assignment. Project.ownerId is authoritative in policy,
+  // but this script must not destroy ambiguous data. Report these rows and leave them untouched.
+  const ownerRowsToReview: string[] = [];
 
   for (const g of keptGuardians) {
     if (projectLinkedResourceIds.has(g.resourceId) && g.role === 'OWNER') {
@@ -92,27 +92,26 @@ async function runReconciliation() {
       );
       if (g.discordUserId === pOwnerId) {
         console.log(
-          `   Row ID: ${g.id} matches Project Owner (${pOwnerId}). Marking mirror for deletion.`
+          `   Row ID: ${g.id} matches Project Owner (${pOwnerId}). Retaining for operator review.`
         );
       } else {
         console.log(
-          `   Row ID: ${g.id} is a stale Owner (doesn't match Project Owner ${pOwnerId}). Marking for deletion.`
+          `   Row ID: ${g.id} does not match Project Owner ${pOwnerId}. Policy ignores its OWNER authority; retaining ambiguous data for operator review.`
         );
       }
-      mirrorsToDelete.push(g.id);
+      ownerRowsToReview.push(g.id);
     }
   }
 
   console.log('================================================================');
   console.log(`Reconciliation Summary:`);
   console.log(`- Duplicate guardian rows to delete: ${duplicatesToDelete.length}`);
-  console.log(`- Legacy owner mirror rows to delete: ${mirrorsToDelete.length}`);
+  console.log(
+    `- Ambiguous project-linked OWNER rows retained for review: ${ownerRowsToReview.length}`
+  );
 
-  const allToDelete = Array.from(new Set([...duplicatesToDelete, ...mirrorsToDelete]));
-  console.log(`- Total unique rows to delete: ${allToDelete.length}`);
-
-  if (allToDelete.length === 0) {
-    console.log('✅ No reconciliation actions required. Database is clean!');
+  if (duplicatesToDelete.length === 0) {
+    console.log('✅ No duplicate Guardian assignments require reconciliation.');
     return;
   }
 
@@ -123,7 +122,7 @@ async function runReconciliation() {
     console.log('\n💾 Executing database writes...');
     const result = await prisma.guardian.deleteMany({
       where: {
-        id: { in: allToDelete },
+        id: { in: duplicatesToDelete },
       },
     });
     console.log(`✅ Successfully deleted ${result.count} guardian rows from database.`);

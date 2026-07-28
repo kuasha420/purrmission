@@ -256,7 +256,6 @@ export class AuthService {
           type: isSvc ? 'SERVICE' : 'PAWTHY_TOKEN',
           id: credential.id,
           subjectId: credential.subjectId,
-          userId: isSvc ? undefined : credential.subjectId, // Legacy compatibility alias
           authKind: isSvc ? 'SERVICE' : 'PAWTHY',
           actorDiscordId: isSvc ? undefined : credential.subjectId,
           scopes: credential.scopes ? credential.scopes.split(',') : [],
@@ -278,7 +277,6 @@ export class AuthService {
         type: 'PAWTHY_TOKEN',
         id: apiToken.id,
         subjectId: apiToken.userId,
-        userId: apiToken.userId, // Legacy compatibility alias
         authKind: 'PAWTHY',
         actorDiscordId: apiToken.userId,
         scopes: ['project.view', 'environment.view', 'resource.view', 'request.create'],

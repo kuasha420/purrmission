@@ -9,6 +9,7 @@ import {
   type Repositories,
 } from './repositories.js';
 import type { Guardian } from './models.js';
+import { createDiscordPrincipal } from './principal.js';
 
 type MockedFn = {
   mock: {
@@ -109,8 +110,8 @@ describe('ResourceService', () => {
       assert.strictEqual((mockGuardianRepo.remove as unknown as MockedFn).mock.calls.length, 0);
     });
 
-    it('should fail with custom error if target is a dynamic guardian', async () => {
-      // Mock Actor is Owner, Target is not in guardians table but is in projects membership
+    it('should not treat a project Writer as a Guardian', async () => {
+      // Actor is Owner; target has no explicit Guardian assignment.
       (mockGuardianRepo.findByResourceAndUser as unknown as MockedFn).mock.mockImplementation(
         async (_rid: unknown, uid: unknown) => {
           if (uid === ownerId)
@@ -121,7 +122,7 @@ describe('ResourceService', () => {
 
       const customProjectsRepo = {
         findEnvironmentByResourceId: mock.fn(async () => ({ projectId: 'p-1' })),
-        findById: mock.fn(async () => ({ id: 'p-1', ownerId: 'some-other-owner' })),
+        findById: mock.fn(async () => ({ id: 'p-1', ownerId })),
         getMemberRole: mock.fn(async () => 'WRITER'),
       };
 
@@ -136,7 +137,7 @@ describe('ResourceService', () => {
       const result = await customService.removeGuardian(resourceId, ownerId, otherId);
 
       assert.strictEqual(result.success, false);
-      assert.match(result.error ?? '', /inherit guardian status/);
+      assert.match(result.error ?? '', /not a guardian/);
       assert.strictEqual((mockGuardianRepo.remove as unknown as MockedFn).mock.calls.length, 0);
     });
 
@@ -225,10 +226,18 @@ describe('ResourceService', () => {
         async () => mockResource
       ) as unknown as ResourceRepository['update'];
 
-      mockGuardianRepo.findByResourceAndUser = mock.fn(async (_rid, uid) => {
-        if (uid === ownerId) return { id: 'g1', role: 'OWNER', discordUserId: ownerId } as any;
+      mockGuardianRepo.findByResourceAndUser = mock.fn(async (_rid: string, uid: string) => {
+        if (uid === ownerId) {
+          return {
+            id: 'g1',
+            resourceId,
+            role: 'OWNER',
+            discordUserId: ownerId,
+            createdAt: new Date(),
+          } satisfies Guardian;
+        }
         return null;
-      }) as any;
+      }) as unknown as GuardianRepository['findByResourceAndUser'];
 
       const failingAuditService = {
         log: mock.fn(async () => {
@@ -345,7 +354,7 @@ describe('ApprovalService', () => {
 
       // Should throw due to audit service failure
       await assert.rejects(async () => {
-        await svc.recordDecision('req-1', 'APPROVE', 'guardian-1');
+        await svc.recordDecision('req-1', 'APPROVE', createDiscordPrincipal('guardian-1'));
       }, /Audit service unavailable/);
     });
   });

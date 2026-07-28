@@ -1,676 +1,803 @@
-import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import {
-  checkAccessPolicy,
-  requiresApproval,
-  getEffectiveGuardians,
-  isEffectiveGuardian,
-  getGuardedResourcesForUser,
-  isEffectiveOwner,
-  hasCapability,
-} from './policy.js';
+import { describe, it } from 'node:test';
+
 import type {
-  Resource,
-  Guardian,
+  ApprovalGrant,
   ApprovalRequest,
-  Principal,
   CapabilityContext,
+  Environment,
+  Guardian,
+  Principal,
+  Project,
+  ProjectMemberRole,
+  Resource,
   TOTPAccount,
 } from './models.js';
-import type { Repositories, ApprovalRequestRepository } from './repositories.js';
+import {
+  checkAccessPolicy,
+  getEffectiveGuardians,
+  getGuardedResourcesForUser,
+  hasCapability,
+  isEffectiveGuardian,
+  isEffectiveOwner,
+  type CapabilityRepositories,
+  type EffectiveGuardianRepositories,
+} from './policy.js';
+import { createDiscordPrincipal } from './principal.js';
 
-describe('Access Policy', () => {
-  const mockResource: Resource = {
-    id: 'res-1',
-    name: 'Test Resource',
-    mode: 'ONE_OF_N',
-    apiKey: 'key',
-    createdAt: new Date(),
+const PROJECT_ID = 'project-1';
+const ENVIRONMENT_ID = 'environment-1';
+const RESOURCE_ID = 'resource-1';
+const STANDALONE_RESOURCE_ID = 'standalone-resource';
+const OWNER_ID = 'owner-user';
+const WRITER_ID = 'writer-user';
+const READER_ID = 'reader-user';
+const GUARDIAN_ID = 'guardian-user';
+const MIXED_ID = 'mixed-user';
+const REQUESTER_ID = 'requester-user';
+
+const project: Project = {
+  id: PROJECT_ID,
+  name: 'Project',
+  description: null,
+  ownerId: OWNER_ID,
+  policyVersion: 'policy-v1',
+  createdAt: new Date('2026-01-01T00:00:00Z'),
+  updatedAt: new Date('2026-01-01T00:00:00Z'),
+};
+
+const environment: Environment = {
+  id: ENVIRONMENT_ID,
+  name: 'Production',
+  slug: 'production',
+  projectId: PROJECT_ID,
+  resourceId: RESOURCE_ID,
+  createdAt: new Date('2026-01-01T00:00:00Z'),
+  updatedAt: new Date('2026-01-01T00:00:00Z'),
+};
+
+const resource: Resource = {
+  id: RESOURCE_ID,
+  name: 'Project Resource',
+  mode: 'ONE_OF_N',
+  apiKey: null,
+  totpAccountId: null,
+  totpDelegationEnvelope: null,
+  version: 'resource-v1',
+  createdAt: new Date('2026-01-01T00:00:00Z'),
+};
+
+const standaloneResource: Resource = {
+  ...resource,
+  id: STANDALONE_RESOURCE_ID,
+  name: 'Standalone Resource',
+};
+
+const explicitGuardian: Guardian = {
+  id: 'guardian-assignment',
+  resourceId: RESOURCE_ID,
+  discordUserId: GUARDIAN_ID,
+  role: 'GUARDIAN',
+  createdAt: new Date('2026-01-01T00:00:00Z'),
+};
+
+const mixedGuardian: Guardian = {
+  id: 'mixed-assignment',
+  resourceId: RESOURCE_ID,
+  discordUserId: MIXED_ID,
+  role: 'GUARDIAN',
+  createdAt: new Date('2026-01-01T00:00:00Z'),
+};
+
+const staleOwnerMirror: Guardian = {
+  id: 'stale-owner-mirror',
+  resourceId: RESOURCE_ID,
+  discordUserId: 'former-owner',
+  role: 'OWNER',
+  createdAt: new Date('2025-01-01T00:00:00Z'),
+};
+
+const standaloneOwner: Guardian = {
+  id: 'standalone-owner',
+  resourceId: STANDALONE_RESOURCE_ID,
+  discordUserId: OWNER_ID,
+  role: 'OWNER',
+  createdAt: new Date('2026-01-01T00:00:00Z'),
+};
+
+const totpAccount: TOTPAccount = {
+  id: 'totp-1',
+  ownerDiscordUserId: OWNER_ID,
+  accountName: 'Account',
+  secret: 'encrypted-seed',
+  issuer: 'Purrmission',
+  backupKey: 'encrypted-recovery',
+  version: 'totp-v1',
+  createdAt: new Date('2026-01-01T00:00:00Z'),
+  updatedAt: new Date('2026-01-01T00:00:00Z'),
+};
+
+function approvalRequest(
+  requesterId: string,
+  overrides: Partial<ApprovalRequest> = {}
+): ApprovalRequest {
+  return {
+    id: 'request-1',
+    resourceId: RESOURCE_ID,
+    status: 'PENDING',
+    context: null,
+    requesterId,
+    requesterType: 'DISCORD_USER',
+    authKind: 'DISCORD',
+    action: 'secret.value.read',
+    targetKey: null,
+    targetVersion: 'resource-v1',
+    policyVersion: 'policy-v1',
+    constraints: null,
+    createdAt: new Date('2026-01-01T00:00:00Z'),
+    expiresAt: new Date('2026-01-01T01:00:00Z'),
+    ...overrides,
   };
+}
 
-  const owner: Guardian = {
-    id: 'g-1',
-    resourceId: 'res-1',
-    discordUserId: 'user-owner',
-    role: 'OWNER',
-    createdAt: new Date(),
+function approvalGrant(overrides: Partial<ApprovalGrant> = {}): ApprovalGrant {
+  return {
+    id: 'grant-1',
+    requestId: 'request-1',
+    resourceId: RESOURCE_ID,
+    requesterId: REQUESTER_ID,
+    requesterType: 'DISCORD_USER',
+    authKind: 'DISCORD',
+    action: 'secret.value.read',
+    targetKey: null,
+    targetVersion: 'resource-v1',
+    policyVersion: 'policy-v1',
+    constraints: null,
+    createdAt: new Date('2026-01-01T00:00:00Z'),
+    expiresAt: new Date('2026-01-01T01:00:00Z'),
+    consumedAt: null,
+    revokedAt: null,
+    ...overrides,
   };
+}
 
-  const guardian: Guardian = {
-    id: 'g-2',
-    resourceId: 'res-1',
-    discordUserId: 'user-guardian',
-    role: 'GUARDIAN',
-    createdAt: new Date(),
+function memberRole(userId: string): ProjectMemberRole | null {
+  if (userId === WRITER_ID || userId === MIXED_ID) return 'WRITER';
+  if (userId === READER_ID) return 'READER';
+  return null;
+}
+
+function capabilityRepositories(options?: {
+  request?: ApprovalRequest | null;
+  grant?: ApprovalGrant | null;
+  approvalLookup?: () => void;
+}): CapabilityRepositories {
+  return {
+    guardians: {
+      async findByResourceAndUser(resourceId, userId) {
+        if (resourceId !== RESOURCE_ID) return null;
+        if (userId === GUARDIAN_ID) return explicitGuardian;
+        if (userId === MIXED_ID) return mixedGuardian;
+        if (userId === staleOwnerMirror.discordUserId) return staleOwnerMirror;
+        return null;
+      },
+    },
+    projects: {
+      async findById(projectId) {
+        return projectId === PROJECT_ID ? project : null;
+      },
+      async getEnvironmentById(projectId, environmentId) {
+        return projectId === PROJECT_ID && environmentId === ENVIRONMENT_ID ? environment : null;
+      },
+      async findEnvironmentByResourceId(resourceId) {
+        return resourceId === RESOURCE_ID ? environment : null;
+      },
+      async getMemberRole(projectId, userId) {
+        return projectId === PROJECT_ID ? memberRole(userId) : null;
+      },
+    },
+    approvalRequests: {
+      async findById() {
+        options?.approvalLookup?.();
+        return options?.request ?? null;
+      },
+    },
+    approvalGrants: {
+      async findById(grantId) {
+        const grant = options?.grant ?? null;
+        return grant?.id === grantId ? grant : null;
+      },
+    },
+    totp: {
+      async findById(totpAccountId) {
+        return totpAccountId === totpAccount.id ? totpAccount : null;
+      },
+    },
   };
+}
 
-  const guardians = [owner, guardian];
+function effectiveGuardianRepositories(): EffectiveGuardianRepositories {
+  const resources = [resource, standaloneResource];
+  return {
+    guardians: {
+      async findByResourceId(resourceId) {
+        if (resourceId === RESOURCE_ID) {
+          return [explicitGuardian, mixedGuardian, staleOwnerMirror];
+        }
+        if (resourceId === STANDALONE_RESOURCE_ID) return [standaloneOwner];
+        return [];
+      },
+      async findByResourceAndUser(resourceId, userId) {
+        const guardians =
+          resourceId === RESOURCE_ID
+            ? [explicitGuardian, mixedGuardian, staleOwnerMirror]
+            : resourceId === STANDALONE_RESOURCE_ID
+              ? [standaloneOwner]
+              : [];
+        return guardians.find((guardian) => guardian.discordUserId === userId) ?? null;
+      },
+      async findByUserId(userId) {
+        return [explicitGuardian, mixedGuardian, staleOwnerMirror, standaloneOwner].filter(
+          (guardian) => guardian.discordUserId === userId
+        );
+      },
+    },
+    projects: {
+      async findById(projectId) {
+        return projectId === PROJECT_ID ? project : null;
+      },
+      async findEnvironmentByResourceId(resourceId) {
+        return resourceId === RESOURCE_ID ? environment : null;
+      },
+      async listProjectsByOwner(userId) {
+        return userId === OWNER_ID ? [project] : [];
+      },
+      async listEnvironments(projectId) {
+        return projectId === PROJECT_ID ? [environment] : [];
+      },
+    },
+    resources: {
+      async findManyByIds(ids, query) {
+        return resources.filter(
+          (item) =>
+            ids.includes(item.id) &&
+            (!query || item.name.toLocaleLowerCase().includes(query.toLocaleLowerCase()))
+        );
+      },
+    },
+  };
+}
 
-  // Mock Repositories
-  const mockApprovalRepo = {
-    findActiveByRequester: async (_resId: string, _reqId: string) => null,
-  } as unknown as ApprovalRequestRepository;
+describe('Principal and exact-object capability policy', () => {
+  it('uses subjectId rather than credential id for role authorization', async () => {
+    const ownerCredential: Principal = {
+      type: 'PAWTHY_TOKEN',
+      id: 'credential-record-1',
+      subjectId: OWNER_ID,
+      actorDiscordId: OWNER_ID,
+      authKind: 'PAWTHY',
+      scopes: ['project.view'],
+      audience: 'cli',
+    };
+    const result = await hasCapability(capabilityRepositories(), ownerCredential, 'project.view', {
+      projectId: PROJECT_ID,
+      requiredAudience: 'cli',
+    });
 
-  const mockRepos = {
-    approvalRequests: mockApprovalRepo,
-  } as unknown as Repositories;
-
-  it('should allow direct access for owner', async () => {
-    const result = await checkAccessPolicy(mockResource, guardians, 'user-owner', mockRepos);
     assert.equal(result.allowed, true);
-    assert.equal(result.requiresApproval, false);
-    assert.match(result.reason ?? '', /guardian\/owner/);
-  });
+    assert.deepEqual(result.authoritySources, ['PROJECT_OWNER']);
 
-  it('should allow direct access for guardian', async () => {
-    const result = await checkAccessPolicy(mockResource, guardians, 'user-guardian', mockRepos);
-    assert.equal(result.allowed, true);
-    assert.equal(result.requiresApproval, false);
-  });
-
-  it('should require approval for non-guardian without active request', async () => {
-    const result = await checkAccessPolicy(mockResource, guardians, 'user-random', mockRepos);
-    assert.equal(result.allowed, false);
-    assert.equal(result.requiresApproval, true);
-    assert.equal(requiresApproval(result), true);
-  });
-
-  it('should handle empty guardians list safely', async () => {
-    const result = await checkAccessPolicy(mockResource, [], 'user-owner', mockRepos);
-    assert.equal(result.allowed, false);
-    assert.equal(result.requiresApproval, true);
-  });
-
-  it('should allow access if active approved request exists', async () => {
-    const activeRequest: ApprovalRequest = {
-      id: 'req-1',
-      resourceId: 'res-1',
-      status: 'APPROVED',
-      context: { requesterId: 'user-approved' },
-      createdAt: new Date(),
-      expiresAt: new Date(Date.now() + 10000), // Future
+    const credentialIdCollision: Principal = {
+      ...ownerCredential,
+      id: OWNER_ID,
+      subjectId: REQUESTER_ID,
+      actorDiscordId: REQUESTER_ID,
     };
-
-    const reposWithApproval = {
-      approvalRequests: {
-        findActiveByRequester: async () => activeRequest,
-      },
-    } as unknown as Repositories;
-
-    const result = await checkAccessPolicy(
-      mockResource,
-      guardians,
-      'user-approved',
-      reposWithApproval
+    const denied = await hasCapability(
+      capabilityRepositories(),
+      credentialIdCollision,
+      'project.view',
+      { projectId: PROJECT_ID, requiredAudience: 'cli' }
     );
-    assert.equal(result.allowed, true);
-    assert.equal(result.requiresApproval, false);
-    assert.match(result.reason ?? '', /Active approval granted/);
+    assert.equal(denied.allowed, false);
+    assert.equal(denied.reasonCode, 'NO_ROLE');
   });
 
-  it('should deny access if approved request is expired', async () => {
-    const expiredRequest: ApprovalRequest = {
-      id: 'req-1',
-      resourceId: 'res-1',
-      status: 'APPROVED',
-      context: { requesterId: 'user-expired' },
-      createdAt: new Date(),
-      expiresAt: new Date(Date.now() - 10000), // Past
+  it('rejects mismatched actor attribution, auth provenance, and audience', async () => {
+    const actorMismatch: Principal = {
+      type: 'PAWTHY_TOKEN',
+      id: 'credential-1',
+      subjectId: OWNER_ID,
+      actorDiscordId: REQUESTER_ID,
+      authKind: 'PAWTHY',
+      scopes: ['project.view'],
+      audience: 'cli',
     };
+    const mismatch = await hasCapability(capabilityRepositories(), actorMismatch, 'project.view', {
+      projectId: PROJECT_ID,
+    });
+    assert.equal(mismatch.reasonCode, 'AUTH_SUBJECT_MISMATCH');
 
-    const reposWithExpired = {
-      approvalRequests: {
-        findActiveByRequester: async () => expiredRequest,
-      },
-    } as unknown as Repositories;
+    const wrongKind: Principal = {
+      ...actorMismatch,
+      actorDiscordId: OWNER_ID,
+      authKind: 'API_KEY',
+    };
+    const invalidAuth = await hasCapability(capabilityRepositories(), wrongKind, 'project.view', {
+      projectId: PROJECT_ID,
+    });
+    assert.equal(invalidAuth.reasonCode, 'INVALID_AUTH');
 
-    const result = await checkAccessPolicy(
-      mockResource,
-      guardians,
-      'user-expired',
-      reposWithExpired
+    const wrongAudience = await hasCapability(
+      capabilityRepositories(),
+      { ...actorMismatch, actorDiscordId: OWNER_ID },
+      'project.view',
+      { projectId: PROJECT_ID, requiredAudience: 'web' }
     );
-    assert.equal(result.allowed, false);
-    assert.equal(result.requiresApproval, true);
-    assert.match(result.reason ?? '', /expired/);
+    assert.equal(wrongAudience.reasonCode, 'WRONG_AUDIENCE');
   });
 
-  it('should deny access if request is not APPROVED (e.g. PENDING)', async () => {
-    const pendingRequest: ApprovalRequest = {
-      id: 'req-1',
-      resourceId: 'res-1',
-      status: 'PENDING',
-      context: { requesterId: 'user-pending' },
-      createdAt: new Date(),
-      expiresAt: null,
-    };
+  it('keeps Writer and explicit Guardian authority independent for mixed-role users', async () => {
+    const principal = createDiscordPrincipal(MIXED_ID);
+    const context = { projectId: PROJECT_ID, resourceId: RESOURCE_ID };
 
-    const reposWithPending = {
-      approvalRequests: {
-        findActiveByRequester: async () => pendingRequest,
-      },
-    } as unknown as Repositories;
-
-    const result = await checkAccessPolicy(
-      mockResource,
-      guardians,
-      'user-pending',
-      reposWithPending
+    const secretWrite = await hasCapability(
+      capabilityRepositories(),
+      principal,
+      'secret.write',
+      context
     );
+    assert.equal(secretWrite.allowed, true);
+    assert.deepEqual(secretWrite.authoritySources, ['PROJECT_WRITER']);
+
+    const decision = await hasCapability(
+      capabilityRepositories({ request: approvalRequest(REQUESTER_ID) }),
+      principal,
+      'request.decide',
+      { ...context, requestId: 'request-1' }
+    );
+    assert.equal(decision.allowed, true);
+    assert.equal(decision.approvalRequestId, 'request-1');
+    assert.deepEqual(decision.authoritySources, ['EXPLICIT_GUARDIAN']);
+
+    const selfDecision = await hasCapability(
+      capabilityRepositories({ request: approvalRequest(MIXED_ID) }),
+      principal,
+      'request.decide',
+      { ...context, requestId: 'request-1' }
+    );
+    assert.equal(selfDecision.allowed, false);
+    assert.equal(selfDecision.reasonCode, 'SELF_APPROVAL_FORBIDDEN');
+    assert.equal(selfDecision.approvalRequestId, 'request-1');
+  });
+
+  it('does not grant Writer approval authority or Guardian protected-value authority', async () => {
+    const writer = createDiscordPrincipal(WRITER_ID);
+    const guardian = createDiscordPrincipal(GUARDIAN_ID);
+    const context = { projectId: PROJECT_ID, resourceId: RESOURCE_ID };
+
+    const writerDecision = await hasCapability(
+      capabilityRepositories({ request: approvalRequest(REQUESTER_ID) }),
+      writer,
+      'request.decide',
+      { ...context, requestId: 'request-1' }
+    );
+    assert.equal(writerDecision.allowed, false);
+
+    const guardianSecret = await hasCapability(
+      capabilityRepositories(),
+      guardian,
+      'secret.value.read',
+      context
+    );
+    const guardianTotp = await hasCapability(
+      capabilityRepositories(),
+      guardian,
+      'totp.code.read',
+      context
+    );
+    const guardianList = await hasCapability(
+      capabilityRepositories(),
+      guardian,
+      'guardian.view',
+      context
+    );
+    const guardianContext = await hasCapability(
+      capabilityRepositories(),
+      guardian,
+      'guardian.context.read',
+      context
+    );
+
+    assert.equal(guardianSecret.allowed, false);
+    assert.equal(guardianTotp.allowed, false);
+    assert.equal(guardianList.allowed, false);
+    assert.equal(guardianContext.allowed, true);
+  });
+
+  it('encodes the least-privilege role matrix without broad role inheritance', async () => {
+    const repositories = capabilityRepositories({
+      request: approvalRequest(REQUESTER_ID),
+    });
+    const projectContext = { projectId: PROJECT_ID };
+    const resourceContext = { projectId: PROJECT_ID, resourceId: RESOURCE_ID };
+    const requestContext = {
+      ...resourceContext,
+      requestId: 'request-1',
+    };
+
+    const cases: Array<{
+      role: string;
+      principal: Principal;
+      allowed: Array<[Parameters<typeof hasCapability>[2], CapabilityContext]>;
+      denied: Array<[Parameters<typeof hasCapability>[2], CapabilityContext]>;
+    }> = [
+      {
+        role: 'Owner',
+        principal: createDiscordPrincipal(OWNER_ID),
+        allowed: [
+          ['project.update', projectContext],
+          ['environment.delete', { ...projectContext, environmentId: ENVIRONMENT_ID }],
+          ['secret.write', resourceContext],
+          ['totp.code.read', resourceContext],
+          ['request.decide', requestContext],
+          ['guardian.manage', resourceContext],
+          ['audit.full.read', projectContext],
+        ],
+        denied: [],
+      },
+      {
+        role: 'Writer',
+        principal: createDiscordPrincipal(WRITER_ID),
+        allowed: [
+          ['project.view', projectContext],
+          ['environment.update', { ...projectContext, environmentId: ENVIRONMENT_ID }],
+          ['secret.value.read', resourceContext],
+          ['secret.write', resourceContext],
+          ['audit.operational.read', projectContext],
+        ],
+        denied: [
+          ['project.update', projectContext],
+          ['environment.delete', { ...projectContext, environmentId: ENVIRONMENT_ID }],
+          ['request.decide', requestContext],
+          ['totp.code.read', resourceContext],
+          ['guardian.manage', resourceContext],
+        ],
+      },
+      {
+        role: 'Reader',
+        principal: createDiscordPrincipal(READER_ID),
+        allowed: [
+          ['project.view', projectContext],
+          ['environment.view', { ...projectContext, environmentId: ENVIRONMENT_ID }],
+          ['secret.metadata.read', resourceContext],
+          ['secret.value.read', resourceContext],
+        ],
+        denied: [
+          ['environment.update', { ...projectContext, environmentId: ENVIRONMENT_ID }],
+          ['secret.write', resourceContext],
+          ['request.decide', requestContext],
+          ['totp.code.read', resourceContext],
+        ],
+      },
+      {
+        role: 'Guardian',
+        principal: createDiscordPrincipal(GUARDIAN_ID),
+        allowed: [
+          ['resource.view', resourceContext],
+          ['guardian.context.read', resourceContext],
+          ['request.queue.view', resourceContext],
+          ['request.decide', requestContext],
+          ['audit.queue.read', resourceContext],
+        ],
+        denied: [
+          ['secret.metadata.read', resourceContext],
+          ['secret.value.read', resourceContext],
+          ['secret.write', resourceContext],
+          ['totp.code.read', resourceContext],
+          ['totp.link.manage', resourceContext],
+          ['guardian.manage', resourceContext],
+        ],
+      },
+      {
+        role: 'Requester',
+        principal: createDiscordPrincipal(REQUESTER_ID),
+        allowed: [
+          ['request.create', resourceContext],
+          ['request.view-own', requestContext],
+          ['request.cancel-own', requestContext],
+          ['audit.own.read', { subjectId: REQUESTER_ID }],
+          ['token.manage-own', { subjectId: REQUESTER_ID }],
+        ],
+        denied: [
+          ['project.view', projectContext],
+          ['resource.view', resourceContext],
+          ['request.decide', requestContext],
+          ['secret.value.read', resourceContext],
+        ],
+      },
+    ];
+
+    for (const entry of cases) {
+      for (const [capability, context] of entry.allowed) {
+        const result = await hasCapability(repositories, entry.principal, capability, context);
+        assert.equal(result.allowed, true, `${entry.role} should have ${capability}`);
+      }
+      for (const [capability, context] of entry.denied) {
+        const result = await hasCapability(repositories, entry.principal, capability, context);
+        assert.equal(result.allowed, false, `${entry.role} should not have ${capability}`);
+      }
+    }
+  });
+
+  it('fails closed when an Environment does not belong to the supplied Project', async () => {
+    const result = await hasCapability(
+      capabilityRepositories(),
+      createDiscordPrincipal(OWNER_ID),
+      'environment.view',
+      {
+        projectId: PROJECT_ID,
+        environmentId: 'environment-from-another-project',
+      }
+    );
+
     assert.equal(result.allowed, false);
-    assert.equal(result.requiresApproval, true);
-  });
-
-  describe('Effective Guardians and Unified Permissions', () => {
-    const mockRes1: Resource = {
-      id: 'env-res-1',
-      name: 'Project1:dev',
-      mode: 'ONE_OF_N',
-      apiKey: 'key1',
-      createdAt: new Date(),
-    };
-
-    const mockRes2: Resource = {
-      id: 'standalone-res-1',
-      name: 'Standalone Res',
-      mode: 'ONE_OF_N',
-      apiKey: 'key2',
-      createdAt: new Date(),
-    };
-
-    const projectOwnerId = 'user-project-owner';
-    const writerMemberId = 'user-project-writer';
-    const readerMemberId = 'user-project-reader';
-    const explicitGuardianId = 'user-explicit-guardian';
-
-    const mockProject = {
-      id: 'project-1',
-      name: 'Project 1',
-      ownerId: projectOwnerId,
-      createdAt: new Date(),
-      updatedAt: new Date(),
-    };
-
-    const mockEnv = {
-      id: 'env-1',
-      name: 'Dev',
-      slug: 'dev',
-      projectId: 'project-1',
-      resourceId: 'env-res-1',
-      createdAt: new Date(),
-      updatedAt: new Date(),
-    };
-
-    const mockExplicitGuardian: Guardian = {
-      id: 'g-explicit',
-      resourceId: 'env-res-1',
-      discordUserId: explicitGuardianId,
-      role: 'GUARDIAN',
-      createdAt: new Date(),
-    };
-
-    const mockRepos = {
-      guardians: {
-        findByResourceId: async (resId: string) => {
-          if (resId === 'env-res-1') return [mockExplicitGuardian];
-          return [];
-        },
-        findByUserId: async (userId: string) => {
-          if (userId === explicitGuardianId) return [mockExplicitGuardian];
-          return [];
-        },
-        findByResourceAndUser: async (resId: string, userId: string) => {
-          if (resId === 'env-res-1' && userId === explicitGuardianId) return mockExplicitGuardian;
-          return null;
-        },
-      },
-      projects: {
-        findEnvironmentByResourceId: async (resId: string) => {
-          if (resId === 'env-res-1') return mockEnv;
-          return null;
-        },
-        findById: async (projId: string) => {
-          if (projId === 'project-1') return mockProject;
-          return null;
-        },
-        listMembers: async (projId: string) => {
-          if (projId === 'project-1') {
-            return [
-              {
-                id: 'm-writer',
-                projectId: 'project-1',
-                userId: writerMemberId,
-                role: 'WRITER',
-                addedBy: 'owner',
-                createdAt: new Date(),
-                updatedAt: new Date(),
-              },
-              {
-                id: 'm-reader',
-                projectId: 'project-1',
-                userId: readerMemberId,
-                role: 'READER',
-                addedBy: 'owner',
-                createdAt: new Date(),
-                updatedAt: new Date(),
-              },
-            ];
-          }
-          return [];
-        },
-        listEnvironments: async (projId: string) => {
-          if (projId === 'project-1') return [mockEnv];
-          return [];
-        },
-        listProjectsByOwner: async (ownerId: string) => {
-          if (ownerId === projectOwnerId) return [mockProject];
-          return [];
-        },
-        listMembershipsByUser: async (userId: string) => {
-          if (userId === writerMemberId) {
-            return [
-              {
-                id: 'm-writer',
-                projectId: 'project-1',
-                userId: writerMemberId,
-                role: 'WRITER',
-                addedBy: 'owner',
-                createdAt: new Date(),
-                updatedAt: new Date(),
-              },
-            ];
-          }
-          if (userId === readerMemberId) {
-            return [
-              {
-                id: 'm-reader',
-                projectId: 'project-1',
-                userId: readerMemberId,
-                role: 'READER',
-                addedBy: 'owner',
-                createdAt: new Date(),
-                updatedAt: new Date(),
-              },
-            ];
-          }
-          return [];
-        },
-        getMemberRole: async (projId: string, userId: string) => {
-          if (projId === 'project-1') {
-            if (userId === writerMemberId) return 'WRITER';
-            if (userId === readerMemberId) return 'READER';
-          }
-          return null;
-        },
-      },
-      resources: {
-        findManyByIds: async (ids: string[]) => {
-          const resList = [];
-          if (ids.includes('env-res-1')) resList.push(mockRes1);
-          if (ids.includes('standalone-res-1')) resList.push(mockRes2);
-          return resList;
-        },
-        findById: async (id: string) => {
-          if (id === 'env-res-1') return mockRes1;
-          if (id === 'standalone-res-1') return mockRes2;
-          return null;
-        },
-      },
-    } as unknown as Repositories;
-
-    it('should resolve effective guardians containing explicit, project owner, and writer member', async () => {
-      const guardians = await getEffectiveGuardians(mockRepos, 'env-res-1');
-      assert.equal(guardians.length, 3);
-
-      const explicit = guardians.find((g) => g.discordUserId === explicitGuardianId);
-      assert.ok(explicit);
-      assert.equal(explicit.role, 'GUARDIAN');
-
-      const owner = guardians.find((g) => g.discordUserId === projectOwnerId);
-      assert.ok(owner);
-      assert.equal(owner.role, 'OWNER');
-
-      const writer = guardians.find((g) => g.discordUserId === writerMemberId);
-      assert.ok(writer);
-      assert.equal(writer.role, 'GUARDIAN');
-
-      const reader = guardians.find((g) => g.discordUserId === readerMemberId);
-      assert.equal(reader, undefined);
-    });
-
-    it('should correctly evaluate isEffectiveGuardian', async () => {
-      assert.equal(await isEffectiveGuardian(mockRepos, 'env-res-1', projectOwnerId), true);
-      assert.equal(await isEffectiveGuardian(mockRepos, 'env-res-1', writerMemberId), true);
-      assert.equal(await isEffectiveGuardian(mockRepos, 'env-res-1', explicitGuardianId), true);
-      assert.equal(await isEffectiveGuardian(mockRepos, 'env-res-1', readerMemberId), false);
-      assert.equal(await isEffectiveGuardian(mockRepos, 'env-res-1', 'random-user'), false);
-    });
-
-    it('should retrieve correctly guarded resources for users', async () => {
-      const ownerResources = await getGuardedResourcesForUser(mockRepos, projectOwnerId);
-      assert.equal(ownerResources.length, 1);
-      assert.equal(ownerResources[0].id, 'env-res-1');
-
-      const writerResources = await getGuardedResourcesForUser(mockRepos, writerMemberId);
-      assert.equal(writerResources.length, 1);
-      assert.equal(writerResources[0].id, 'env-res-1');
-
-      const explicitResources = await getGuardedResourcesForUser(mockRepos, explicitGuardianId);
-      assert.equal(explicitResources.length, 1);
-      assert.equal(explicitResources[0].id, 'env-res-1');
-
-      const readerResources = await getGuardedResourcesForUser(mockRepos, readerMemberId);
-      assert.equal(readerResources.length, 0);
-    });
-
-    it('should upgrade project owner to OWNER role even if explicitly registered as GUARDIAN', async () => {
-      const explicitGuardianWithOwnerId: Guardian = {
-        id: 'g-owner-explicit',
-        resourceId: 'env-res-1',
-        discordUserId: projectOwnerId,
-        role: 'GUARDIAN', // Lower privilege role
-        createdAt: new Date(),
-      };
-
-      const customRepos = {
-        ...mockRepos,
-        guardians: {
-          ...mockRepos.guardians,
-          findByResourceId: async () => [explicitGuardianWithOwnerId],
-        },
-      } as unknown as Repositories;
-
-      const guardians = await getEffectiveGuardians(customRepos, 'env-res-1');
-      const owner = guardians.find((g) => g.discordUserId === projectOwnerId);
-      assert.ok(owner);
-      assert.equal(owner.role, 'OWNER', 'Should be upgraded to OWNER role');
-    });
-
-    it('should correctly evaluate isEffectiveOwner', async () => {
-      assert.equal(await isEffectiveOwner(mockRepos, 'env-res-1', projectOwnerId), true);
-      assert.equal(await isEffectiveOwner(mockRepos, 'env-res-1', explicitGuardianId), false); // explicit but role is GUARDIAN
-      assert.equal(await isEffectiveOwner(mockRepos, 'env-res-1', writerMemberId), false);
-      assert.equal(await isEffectiveOwner(mockRepos, 'env-res-1', readerMemberId), false);
+    assert.equal(result.reasonCode, 'TARGET_SCOPE_MISMATCH');
+    assert.deepEqual(result.target, {
+      type: 'ENVIRONMENT',
+      id: 'environment-from-another-project',
     });
   });
 
-  describe('hasCapability Evaluator', () => {
-    const projectOwnerId = 'user-project-owner';
-    const writerMemberId = 'user-project-writer';
-    const readerMemberId = 'user-project-reader';
-    const explicitGuardianId = 'user-explicit-guardian';
-    const randomUserId = 'user-random';
+  it('uses typed requesterId rather than legacy JSON context for own-request checks', async () => {
+    const principal = createDiscordPrincipal(REQUESTER_ID);
+    const legacySpoof = approvalRequest('different-user', {
+      context: { requesterId: REQUESTER_ID },
+    });
+    const spoofed = await hasCapability(
+      capabilityRepositories({ request: legacySpoof }),
+      principal,
+      'request.view-own',
+      { requestId: legacySpoof.id }
+    );
+    assert.equal(spoofed.allowed, false);
 
-    const mockProject = {
-      id: 'project-1',
-      name: 'Project 1',
-      ownerId: projectOwnerId,
-      createdAt: new Date(),
-      updatedAt: new Date(),
+    const owned = await hasCapability(
+      capabilityRepositories({ request: approvalRequest(REQUESTER_ID) }),
+      principal,
+      'request.view-own',
+      { requestId: 'request-1' }
+    );
+    assert.equal(owned.allowed, true);
+    assert.deepEqual(owned.authoritySources, ['AUTHENTICATED_SUBJECT']);
+  });
+
+  it('never treats an APPROVED request as a grant', async () => {
+    let approvalLookups = 0;
+    const principal = createDiscordPrincipal(REQUESTER_ID);
+    const result = await hasCapability(
+      capabilityRepositories({
+        request: approvalRequest(REQUESTER_ID, { status: 'APPROVED' }),
+        approvalLookup: () => {
+          approvalLookups += 1;
+        },
+      }),
+      principal,
+      'grant.consume',
+      {
+        resourceId: RESOURCE_ID,
+        action: 'secret.value.read',
+        targetVersion: 'resource-v1',
+        policyVersion: 'policy-v1',
+      }
+    );
+
+    assert.equal(result.allowed, false);
+    assert.equal(result.reasonCode, 'MISSING_CONTEXT');
+    assert.equal(approvalLookups, 0);
+  });
+
+  it('allows only a current exact immutable grant', async () => {
+    const principal = createDiscordPrincipal(REQUESTER_ID);
+    const grant = approvalGrant();
+    const context = {
+      resourceId: RESOURCE_ID,
+      grantId: grant.id,
+      action: 'secret.value.read',
+      targetVersion: 'resource-v1',
+      policyVersion: 'policy-v1',
+      currentTimestamp: new Date('2026-01-01T00:30:00Z'),
+    };
+    const allowed = await hasCapability(
+      capabilityRepositories({ grant }),
+      principal,
+      'grant.consume',
+      context
+    );
+
+    assert.equal(allowed.allowed, true);
+    assert.equal(allowed.grantId, grant.id);
+    assert.equal(allowed.target.type, 'APPROVAL_GRANT');
+    assert.deepEqual(allowed.authoritySources, ['APPROVAL_GRANT']);
+
+    const wrongSubject = await hasCapability(
+      capabilityRepositories({ grant }),
+      createDiscordPrincipal('other-user'),
+      'grant.consume',
+      context
+    );
+    assert.equal(wrongSubject.reasonCode, 'GRANT_SCOPE_MISMATCH');
+    assert.equal(wrongSubject.grantId, grant.id);
+
+    const consumed = await hasCapability(
+      capabilityRepositories({ grant: approvalGrant({ consumedAt: new Date() }) }),
+      principal,
+      'grant.consume',
+      context
+    );
+    assert.equal(consumed.reasonCode, 'GRANT_INVALID');
+  });
+
+  it('binds Resource API credentials to their Resource subject', async () => {
+    const principal: Principal = {
+      type: 'RESOURCE_API_KEY',
+      id: 'resource-credential',
+      subjectId: RESOURCE_ID,
+      authKind: 'API_KEY',
+      scopes: ['request.create'],
+      audience: 'api',
+    };
+    const allowed = await hasCapability(capabilityRepositories(), principal, 'request.create', {
+      resourceId: RESOURCE_ID,
+      requiredAudience: 'api',
+    });
+    assert.equal(allowed.allowed, true);
+
+    const denied = await hasCapability(capabilityRepositories(), principal, 'request.create', {
+      resourceId: STANDALONE_RESOURCE_ID,
+      requiredAudience: 'api',
+    });
+    assert.equal(denied.reasonCode, 'AUTH_SUBJECT_MISMATCH');
+  });
+
+  it('keeps personal TOTP recovery and own-token management subject scoped', async () => {
+    const owner = createDiscordPrincipal(OWNER_ID);
+    const recovery = await hasCapability(capabilityRepositories(), owner, 'totp.recovery.read', {
+      totpAccountId: totpAccount.id,
+    });
+    assert.equal(recovery.allowed, true);
+    assert.deepEqual(recovery.authoritySources, ['TOTP_OWNER']);
+
+    const ownTokens = await hasCapability(capabilityRepositories(), owner, 'token.manage-own', {
+      subjectId: OWNER_ID,
+    });
+    assert.equal(ownTokens.allowed, true);
+
+    const otherTokens = await hasCapability(capabilityRepositories(), owner, 'token.manage-own', {
+      subjectId: REQUESTER_ID,
+    });
+    assert.equal(otherTokens.reasonCode, 'AUTH_SUBJECT_MISMATCH');
+  });
+
+  it('double-gates service audit export with a same-credential read scope', async () => {
+    const service: Principal = {
+      type: 'SERVICE',
+      id: 'service-credential',
+      subjectId: 'ci-service',
+      authKind: 'SERVICE',
+      scopes: ['audit.export'],
+      audience: 'internal',
+    };
+    const denied = await hasCapability(capabilityRepositories(), service, 'audit.export', {
+      projectId: PROJECT_ID,
+      requiredAudience: 'internal',
+    });
+    assert.equal(denied.reasonCode, 'INSUFFICIENT_SCOPES');
+
+    const allowed = await hasCapability(
+      capabilityRepositories(),
+      { ...service, scopes: ['audit.export', 'audit.full.read'] },
+      'audit.export',
+      { projectId: PROJECT_ID, requiredAudience: 'internal' }
+    );
+    assert.equal(allowed.allowed, true);
+    assert.deepEqual(allowed.authoritySources, ['SCOPED_CREDENTIAL']);
+
+    const wrongTargetReadScope = await hasCapability(
+      capabilityRepositories(),
+      { ...service, scopes: ['audit.export', 'audit.own.read'] },
+      'audit.export',
+      { projectId: PROJECT_ID, requiredAudience: 'internal' }
+    );
+    assert.equal(wrongTargetReadScope.allowed, false);
+    assert.equal(wrongTargetReadScope.reasonCode, 'INSUFFICIENT_SCOPES');
+
+    const ownTarget = await hasCapability(
+      capabilityRepositories(),
+      { ...service, scopes: ['audit.export', 'audit.own.read'] },
+      'audit.export',
+      { subjectId: service.subjectId, requiredAudience: 'internal' }
+    );
+    assert.equal(ownTarget.allowed, true);
+    assert.deepEqual(ownTarget.target, { type: 'SUBJECT', id: service.subjectId });
+  });
+
+  it('validates Environment/Project relationships before scoped service authorization', async () => {
+    const service: Principal = {
+      type: 'SERVICE',
+      id: 'service-credential',
+      subjectId: 'ci-service',
+      authKind: 'SERVICE',
+      scopes: ['environment.view'],
+      audience: 'internal',
     };
 
-    const mockEnv = {
-      id: 'env-1',
-      name: 'Dev',
-      slug: 'dev',
-      projectId: 'project-1',
-      resourceId: 'env-res-1',
-      createdAt: new Date(),
-      updatedAt: new Date(),
-    };
-
-    const mockExplicitGuardian: Guardian = {
-      id: 'g-explicit',
-      resourceId: 'env-res-1',
-      discordUserId: explicitGuardianId,
-      role: 'GUARDIAN',
-      createdAt: new Date(),
-    };
-
-    const mockTotpAccount: TOTPAccount = {
-      id: 'totp-1',
-      ownerDiscordUserId: projectOwnerId,
-      accountName: 'Test Account',
-      secret: 'SECRET',
-      shared: false,
-      createdAt: new Date(),
-      updatedAt: new Date(),
-    };
-
-    const mockActiveRequest: ApprovalRequest = {
-      id: 'req-active',
-      resourceId: 'env-res-1',
-      status: 'APPROVED',
-      context: { requesterId: randomUserId },
-      createdAt: new Date(),
-      expiresAt: new Date(Date.now() + 10000),
-    };
-
-    const mockReposForEval = {
-      guardians: {
-        findByResourceAndUser: async (resId: string, userId: string) => {
-          if (resId === 'env-res-1' && userId === explicitGuardianId) return mockExplicitGuardian;
-          return null;
-        },
-      },
-      projects: {
-        findEnvironmentByResourceId: async (resId: string) => {
-          if (resId === 'env-res-1') return mockEnv;
-          return null;
-        },
-        findEnvironmentById: async (envId: string) => {
-          if (envId === 'env-1') return mockEnv;
-          return null;
-        },
-        findById: async (projId: string) => {
-          if (projId === 'project-1') return mockProject;
-          return null;
-        },
-        getMemberRole: async (projId: string, userId: string) => {
-          if (projId === 'project-1') {
-            if (userId === writerMemberId) return 'WRITER';
-            if (userId === readerMemberId) return 'READER';
-          }
-          return null;
-        },
-      },
-      totp: {
-        findById: async (id: string) => {
-          if (id === 'totp-1') return mockTotpAccount;
-          return null;
-        },
-      },
-      approvalRequests: {
-        findById: async (id: string) => {
-          if (id === 'req-active') return mockActiveRequest;
-          return null;
-        },
-        findActiveByRequester: async (resId: string, reqId: string) => {
-          if (resId === 'env-res-1' && reqId === randomUserId) return mockActiveRequest;
-          return null;
-        },
-      },
-    } as unknown as Repositories;
-
-    it('should allow project creation for human principals and deny for API keys', async () => {
-      const human: Principal = { type: 'DISCORD_USER', id: randomUserId, authKind: 'DISCORD' };
-      const apiKey: Principal = { type: 'RESOURCE_API_KEY', id: 'key', authKind: 'API_KEY' };
-
-      const resHuman = await hasCapability(mockReposForEval, human, 'project.create', {});
-      assert.equal(resHuman.allowed, true);
-
-      const resKey = await hasCapability(mockReposForEval, apiKey, 'project.create', {});
-      assert.equal(resKey.allowed, false);
-      assert.equal(resKey.reasonCode, 'INVALID_AUTH');
+    const result = await hasCapability(capabilityRepositories(), service, 'environment.view', {
+      projectId: PROJECT_ID,
+      environmentId: 'environment-from-another-project',
+      requiredAudience: 'internal',
     });
 
-    it('should correctly authorize Project Owner', async () => {
-      const principal: Principal = {
-        type: 'DISCORD_USER',
-        id: projectOwnerId,
-        authKind: 'DISCORD',
-      };
-      const ctx: CapabilityContext = { projectId: 'project-1', resourceId: 'env-res-1' };
+    assert.equal(result.allowed, false);
+    assert.equal(result.reasonCode, 'TARGET_SCOPE_MISMATCH');
+  });
+});
 
-      // Project Owner has full project capabilities
-      const resView = await hasCapability(mockReposForEval, principal, 'project.view', ctx);
-      assert.equal(resView.allowed, true);
-      assert.equal(resView.reasonCode, 'OWNER');
+describe('Legacy RBAC compatibility helpers fail closed', () => {
+  it('allows only OWNER direct access and ignores approved requests', async () => {
+    const ownerResult = await checkAccessPolicy(resource, [standaloneOwner], OWNER_ID);
+    assert.equal(ownerResult.allowed, true);
 
-      const resDelete = await hasCapability(mockReposForEval, principal, 'project.delete', ctx);
-      assert.equal(resDelete.allowed, true);
+    const guardianResult = await checkAccessPolicy(resource, [explicitGuardian], GUARDIAN_ID);
+    assert.equal(guardianResult.allowed, false);
+    assert.equal(guardianResult.requiresApproval, true);
+    assert.match(guardianResult.reason ?? '', /immutable grant/i);
+  });
 
-      // Project Owner has full resource/secret capabilities on linked resources
-      const resSecretWrite = await hasCapability(mockReposForEval, principal, 'secret.write', ctx);
-      assert.equal(resSecretWrite.allowed, true);
+  it('does not synthesize Writers and ignores stale linked OWNER rows', async () => {
+    const repositories = effectiveGuardianRepositories();
+    const guardians = await getEffectiveGuardians(repositories, RESOURCE_ID);
 
-      const resSecretRead = await hasCapability(
-        mockReposForEval,
-        principal,
-        'secret.value.read',
-        ctx
-      );
-      assert.equal(resSecretRead.allowed, true);
-    });
+    assert.deepEqual(guardians.map((guardian) => [guardian.discordUserId, guardian.role]).sort(), [
+      [GUARDIAN_ID, 'GUARDIAN'],
+      [MIXED_ID, 'GUARDIAN'],
+      [OWNER_ID, 'OWNER'],
+    ]);
+    assert.equal(await isEffectiveGuardian(repositories, RESOURCE_ID, WRITER_ID), false);
+    assert.equal(await isEffectiveGuardian(repositories, RESOURCE_ID, GUARDIAN_ID), true);
+    assert.equal(
+      await isEffectiveGuardian(repositories, RESOURCE_ID, staleOwnerMirror.discordUserId),
+      false
+    );
+  });
 
-    it('should correctly authorize Project Writer', async () => {
-      const principal: Principal = {
-        type: 'DISCORD_USER',
-        id: writerMemberId,
-        authKind: 'DISCORD',
-      };
-      const ctx: CapabilityContext = { projectId: 'project-1', resourceId: 'env-res-1' };
+  it('uses Project.ownerId as canonical linked ownership and explicit OWNER for standalone Resources', async () => {
+    const repositories = effectiveGuardianRepositories();
 
-      // Project Writer can view project and environments
-      const resView = await hasCapability(mockReposForEval, principal, 'project.view', ctx);
-      assert.equal(resView.allowed, true);
-      assert.equal(resView.reasonCode, 'WRITER');
+    assert.equal(await isEffectiveOwner(repositories, RESOURCE_ID, OWNER_ID), true);
+    assert.equal(
+      await isEffectiveOwner(repositories, RESOURCE_ID, staleOwnerMirror.discordUserId),
+      false
+    );
+    assert.equal(await isEffectiveOwner(repositories, STANDALONE_RESOURCE_ID, OWNER_ID), true);
+  });
 
-      // Project Writer can write secrets
-      const resSecretWrite = await hasCapability(mockReposForEval, principal, 'secret.write', ctx);
-      assert.equal(resSecretWrite.allowed, true);
+  it('discovers guarded Resources for explicit Guardians and Owners, never Writers by membership', async () => {
+    const repositories = effectiveGuardianRepositories();
 
-      // Project Writer CANNOT delete project
-      const resDelete = await hasCapability(mockReposForEval, principal, 'project.delete', ctx);
-      assert.equal(resDelete.allowed, false);
-      assert.equal(resDelete.reasonCode, 'NO_ROLE');
+    const ownerResources = await getGuardedResourcesForUser(repositories, OWNER_ID);
+    assert.deepEqual(
+      ownerResources.map((item) => item.id).sort(),
+      [RESOURCE_ID, STANDALONE_RESOURCE_ID].sort()
+    );
 
-      // Project Writer CANNOT decide approvals
-      const resDecide = await hasCapability(mockReposForEval, principal, 'request.decide', ctx);
-      assert.equal(resDecide.allowed, false);
-    });
+    const guardianResources = await getGuardedResourcesForUser(repositories, GUARDIAN_ID);
+    assert.deepEqual(
+      guardianResources.map((item) => item.id),
+      [RESOURCE_ID]
+    );
 
-    it('should correctly authorize Project Reader', async () => {
-      const principal: Principal = {
-        type: 'DISCORD_USER',
-        id: readerMemberId,
-        authKind: 'DISCORD',
-      };
-      const ctx: CapabilityContext = { projectId: 'project-1', resourceId: 'env-res-1' };
-
-      // Project Reader can view project
-      const resView = await hasCapability(mockReposForEval, principal, 'project.view', ctx);
-      assert.equal(resView.allowed, true);
-      assert.equal(resView.reasonCode, 'READER');
-
-      // Project Reader can read secrets
-      const resSecretRead = await hasCapability(
-        mockReposForEval,
-        principal,
-        'secret.value.read',
-        ctx
-      );
-      assert.equal(resSecretRead.allowed, true);
-
-      // Project Reader CANNOT write secrets
-      const resSecretWrite = await hasCapability(mockReposForEval, principal, 'secret.write', ctx);
-      assert.equal(resSecretWrite.allowed, false);
-    });
-
-    it('should correctly authorize explicit Guardian and enforce self-approval prevention', async () => {
-      const principal: Principal = {
-        type: 'DISCORD_USER',
-        id: explicitGuardianId,
-        authKind: 'DISCORD',
-      };
-      const ctx: CapabilityContext = { resourceId: 'env-res-1', requestId: 'req-active' };
-
-      // Guardian can view approval queue
-      const resQueue = await hasCapability(mockReposForEval, principal, 'request.queue.view', ctx);
-      assert.equal(resQueue.allowed, true);
-      assert.equal(resQueue.reasonCode, 'GUARDIAN');
-
-      // Guardian can decide requests
-      const resDecide = await hasCapability(mockReposForEval, principal, 'request.decide', ctx);
-      assert.equal(resDecide.allowed, true);
-
-      // Guardian CANNOT decide request if they are the requester (self-approval)
-      const selfPrincipal: Principal = {
-        type: 'DISCORD_USER',
-        id: randomUserId,
-        authKind: 'DISCORD',
-      };
-      const selfApprovalRepo = {
-        ...mockReposForEval,
-        guardians: {
-          findByResourceAndUser: async () => mockExplicitGuardian,
-        },
-      } as unknown as Repositories;
-
-      const resSelfDecide = await hasCapability(
-        selfApprovalRepo,
-        selfPrincipal,
-        'request.decide',
-        ctx
-      );
-      assert.equal(resSelfDecide.allowed, false);
-      assert.equal(resSelfDecide.reasonCode, 'SELF_APPROVAL_FORBIDDEN');
-    });
-
-    it('should authorize personal TOTP Owner and deny others for recovery keys', async () => {
-      const ownerPrincipal: Principal = {
-        type: 'DISCORD_USER',
-        id: projectOwnerId,
-        authKind: 'DISCORD',
-      };
-      const otherPrincipal: Principal = {
-        type: 'DISCORD_USER',
-        id: randomUserId,
-        authKind: 'DISCORD',
-      };
-      const ctx: CapabilityContext = { totpAccountId: 'totp-1' };
-
-      // Owner of the TOTP account can read recovery key
-      const resOwner = await hasCapability(
-        mockReposForEval,
-        ownerPrincipal,
-        'totp.recovery.read',
-        ctx
-      );
-      assert.equal(resOwner.allowed, true);
-
-      // Another user cannot read recovery key
-      const resOther = await hasCapability(
-        mockReposForEval,
-        otherPrincipal,
-        'totp.recovery.read',
-        ctx
-      );
-      assert.equal(resOther.allowed, false);
-      assert.equal(resOther.reasonCode, 'RECOVERY_KEY_OWNER_REQUIRED');
-    });
-
-    it('should authorize grant consumption if approved grant exists', async () => {
-      const requesterPrincipal: Principal = {
-        type: 'DISCORD_USER',
-        id: randomUserId,
-        authKind: 'DISCORD',
-      };
-      const ctx: CapabilityContext = { resourceId: 'env-res-1' };
-
-      const res = await hasCapability(mockReposForEval, requesterPrincipal, 'grant.consume', ctx);
-      assert.equal(res.allowed, true);
-      assert.equal(res.reasonCode, 'GRANT');
-    });
+    const writerResources = await getGuardedResourcesForUser(repositories, WRITER_ID);
+    assert.deepEqual(writerResources, []);
   });
 });

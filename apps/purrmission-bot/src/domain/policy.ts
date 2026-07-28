@@ -10,7 +10,10 @@ import type {
   CapabilityContext,
   EvaluationResult,
   ReasonCode,
+  AuthoritySource,
+  PolicyTarget,
 } from './models.js';
+import { authorizationSubjectId, validatePrincipal } from './principal.js';
 
 export interface AccessRequest {
   resourceId: string;
@@ -23,59 +26,68 @@ export interface AccessPolicyResult {
   reason?: string;
 }
 
-import type { Repositories } from './repositories.js';
+import type {
+  ApprovalGrantRepository,
+  ApprovalRequestRepository,
+  GuardianRepository,
+  ProjectRepository,
+  Repositories,
+  ResourceRepository,
+  TOTPRepository,
+} from './repositories.js';
+
+export interface CapabilityRepositories {
+  guardians: Pick<GuardianRepository, 'findByResourceAndUser'>;
+  projects: Pick<
+    ProjectRepository,
+    'findById' | 'getEnvironmentById' | 'findEnvironmentByResourceId' | 'getMemberRole'
+  >;
+  approvalRequests: Pick<ApprovalRequestRepository, 'findById'>;
+  approvalGrants: Pick<ApprovalGrantRepository, 'findById'>;
+  totp: Pick<TOTPRepository, 'findById'>;
+}
+
+export interface EffectiveGuardianRepositories {
+  guardians: Pick<
+    GuardianRepository,
+    'findByResourceId' | 'findByResourceAndUser' | 'findByUserId'
+  >;
+  projects: Pick<
+    ProjectRepository,
+    'findById' | 'findEnvironmentByResourceId' | 'listProjectsByOwner' | 'listEnvironments'
+  >;
+  resources: Pick<ResourceRepository, 'findManyByIds'>;
+}
 
 /**
  * Determine if an actor can access a resource.
  *
- * Logic:
- * 1. Owners and Guardians have DIRECT access (no approval needed).
- * 2. If an active, approved request exists for the actor -> ALLOWED.
- * 3. Otherwise -> APPROVAL_REQUIRED (or DENIED if functionality limited).
+ * @deprecated Current adapters retain this compatibility function until #128/#129. It is
+ * deliberately fail-closed for Guardians and approved requests: only a Resource/Project Owner may
+ * receive direct protected access from this non-capability-aware API.
  */
 export async function checkAccessPolicy(
-  resource: Resource,
+  _resource: Resource,
   guardians: Guardian[],
   actorDiscordId: string,
-  repositories?: Repositories
+  _repositories?: Repositories
 ): Promise<AccessPolicyResult> {
-  const isGuardian = guardians.some((g) => g.discordUserId === actorDiscordId);
+  const isOwner = guardians.some(
+    (guardian) => guardian.discordUserId === actorDiscordId && guardian.role === 'OWNER'
+  );
 
-  if (isGuardian) {
+  if (isOwner) {
     return {
       allowed: true,
       requiresApproval: false,
-      reason: 'User is a guardian/owner',
+      reason: 'Resource Owner has direct access',
     };
-  }
-
-  if (repositories) {
-    const activeRequest = await repositories.approvalRequests.findActiveByRequester(
-      resource.id,
-      actorDiscordId
-    );
-    if (activeRequest && activeRequest.status === 'APPROVED') {
-      // Check expiry if applicable
-      if (activeRequest.expiresAt && activeRequest.expiresAt < new Date()) {
-        return {
-          allowed: false,
-          requiresApproval: true,
-          reason: 'Previous approval has expired',
-        };
-      }
-
-      return {
-        allowed: true,
-        requiresApproval: false,
-        reason: 'Active approval granted',
-      };
-    }
   }
 
   return {
     allowed: false,
     requiresApproval: true,
-    reason: 'User is not a guardian',
+    reason: 'Exact capability and immutable grant evaluation required',
   };
 }
 
@@ -87,11 +99,12 @@ export function requiresApproval(result: AccessPolicyResult): boolean {
 }
 
 /**
- * Retrieve the effective list of guardians for a resource (explicit database guardians
- * + project owner as OWNER + project WRITER members as GUARDIAN).
+ * Retrieve explicit Guardians plus canonical Project/Resource ownership authority.
+ *
+ * Project Writers are intentionally not synthesized as Guardians.
  */
 export async function getEffectiveGuardians(
-  repositories: Repositories,
+  repositories: EffectiveGuardianRepositories,
   resourceId: string
 ): Promise<Guardian[]> {
   // 1. Get explicit guardians from database
@@ -108,6 +121,15 @@ export async function getEffectiveGuardians(
   if (environment && repositories.projects) {
     const project = await repositories.projects.findById(environment.projectId);
     if (project) {
+      // OWNER rows on project-linked Resources are legacy mirrors or stale ownership. Project
+      // ownership is canonical, and provenance is insufficient to reinterpret a stale OWNER row as
+      // an explicit GUARDIAN assignment, so fail closed until an operator reconciles it.
+      for (const [discordUserId, guardian] of guardianMap) {
+        if (guardian.role === 'OWNER' && discordUserId !== project.ownerId) {
+          guardianMap.delete(discordUserId);
+        }
+      }
+
       // Project owner -> OWNER role (upgrade if they only have GUARDIAN role explicitly)
       const existingOwner = guardianMap.get(project.ownerId);
       if (!existingOwner || existingOwner.role !== 'OWNER') {
@@ -119,21 +141,6 @@ export async function getEffectiveGuardians(
           createdAt: project.createdAt,
         });
       }
-
-      // Project members with WRITER -> GUARDIAN role
-      const members = await repositories.projects.listMembers(project.id);
-      const writers = members.filter((m) => m.role === 'WRITER');
-      for (const writer of writers) {
-        if (!guardianMap.has(writer.userId)) {
-          guardianMap.set(writer.userId, {
-            id: `project-member-${writer.id}`,
-            resourceId,
-            discordUserId: writer.userId,
-            role: 'GUARDIAN',
-            createdAt: writer.createdAt,
-          });
-        }
-      }
     }
   }
 
@@ -141,26 +148,16 @@ export async function getEffectiveGuardians(
 }
 
 /**
- * Check if a user is an effective guardian (explicit or project owner/writer) for a resource.
+ * Check approval authority for an explicit Guardian or canonical Project/Resource Owner.
+ *
+ * @deprecated Prefer hasCapability(..., 'request.decide', exactContext).
  */
 export async function isEffectiveGuardian(
-  repositories: Repositories,
+  repositories: EffectiveGuardianRepositories,
   resourceId: string,
   userId: string
 ): Promise<boolean> {
-  // 1. Check explicit guardians table for this user first
-  let explicitGuardian = null;
-  if (repositories.guardians.findByResourceAndUser) {
-    explicitGuardian = await repositories.guardians.findByResourceAndUser(resourceId, userId);
-  } else if (repositories.guardians.findByUserId) {
-    const list = await repositories.guardians.findByUserId(userId);
-    explicitGuardian = list.find((g) => g.resourceId === resourceId) || null;
-  }
-  if (explicitGuardian) {
-    return true;
-  }
-
-  // 2. Resolve other effective guardians (project owner, project writer)
+  // Project ownership is canonical for linked Resources. A legacy OWNER row cannot override it.
   const environment = repositories.projects
     ? await repositories.projects.findEnvironmentByResourceId(resourceId)
     : null;
@@ -170,25 +167,36 @@ export async function isEffectiveGuardian(
       if (project.ownerId === userId) {
         return true;
       }
-      const memberRole = await repositories.projects.getMemberRole(project.id, userId);
-      if (memberRole === 'WRITER') {
-        return true;
-      }
+      const explicitGuardian = await repositories.guardians.findByResourceAndUser(
+        resourceId,
+        userId
+      );
+      return explicitGuardian?.role === 'GUARDIAN';
     }
   }
 
-  return false;
+  const explicitGuardian = await repositories.guardians.findByResourceAndUser(resourceId, userId);
+  return explicitGuardian !== null;
 }
 
 /**
  * Check if a user is an effective owner of a resource.
  */
 export async function isEffectiveOwner(
-  repositories: Repositories,
+  repositories: EffectiveGuardianRepositories,
   resourceId: string,
   userId: string
 ): Promise<boolean> {
-  // 1. Check explicit guardians table for this user first
+  // Project ownership is canonical for an environment-linked Resource.
+  const environment = repositories.projects
+    ? await repositories.projects.findEnvironmentByResourceId(resourceId)
+    : null;
+  if (environment && repositories.projects) {
+    const project = await repositories.projects.findById(environment.projectId);
+    return project?.ownerId === userId;
+  }
+
+  // Standalone Resources retain their explicit OWNER assignment.
   let explicitGuardian = null;
   if (repositories.guardians.findByResourceAndUser) {
     explicitGuardian = await repositories.guardians.findByResourceAndUser(resourceId, userId);
@@ -200,17 +208,6 @@ export async function isEffectiveOwner(
     return true;
   }
 
-  // 2. Resolve other effective guardians (project owner)
-  const environment = repositories.projects
-    ? await repositories.projects.findEnvironmentByResourceId(resourceId)
-    : null;
-  if (environment && repositories.projects) {
-    const project = await repositories.projects.findById(environment.projectId);
-    if (project && project.ownerId === userId) {
-      return true;
-    }
-  }
-
   return false;
 }
 
@@ -218,7 +215,7 @@ export async function isEffectiveOwner(
  * Get all resources that a user effectively guards.
  */
 export async function getGuardedResourcesForUser(
-  repositories: Repositories,
+  repositories: EffectiveGuardianRepositories,
   userId: string,
   query?: string
 ): Promise<Resource[]> {
@@ -227,9 +224,19 @@ export async function getGuardedResourcesForUser(
 
   // 1. Get explicit guarded resources
   const explicitGuardians = await repositories.guardians.findByUserId(userId);
-  const explicitResourceIds = explicitGuardians
-    ? explicitGuardians.map((g) => g.resourceId).filter((id): id is string => !!id)
-    : [];
+  const explicitResourceIds = (
+    await Promise.all(
+      (explicitGuardians ?? []).map(async (guardian) => {
+        if (guardian.role !== 'OWNER') return guardian.resourceId;
+        const environment = await repositories.projects.findEnvironmentByResourceId(
+          guardian.resourceId
+        );
+        if (!environment) return guardian.resourceId;
+        const project = await repositories.projects.findById(environment.projectId);
+        return project?.ownerId === userId ? guardian.resourceId : null;
+      })
+    )
+  ).filter((id): id is string => id !== null);
 
   // 2. Resolve resources inherited via project ownership
   const ownedProjects = repositories.projects
@@ -243,23 +250,8 @@ export async function getGuardedResourcesForUser(
     .map((e) => e.resourceId)
     .filter((id): id is string => !!id);
 
-  // 3. Resolve resources inherited via project writer role
-  const memberships = repositories.projects
-    ? await repositories.projects.listMembershipsByUser(userId)
-    : [];
-  const writerProjectIds = memberships.filter((m) => m.role === 'WRITER').map((m) => m.projectId);
-  const writerProjectEnvironments = await Promise.all(
-    writerProjectIds.map((projectId) => repositories.projects.listEnvironments(projectId))
-  );
-  const writerResourceIds = writerProjectEnvironments
-    .flat()
-    .map((e) => e.resourceId)
-    .filter((id): id is string => !!id);
-
   // Combine all resource IDs and deduplicate before querying
-  const allResourceIds = Array.from(
-    new Set([...explicitResourceIds, ...ownedResourceIds, ...writerResourceIds])
-  );
+  const allResourceIds = Array.from(new Set([...explicitResourceIds, ...ownedResourceIds]));
 
   if (allResourceIds.length > 0) {
     const resources = await repositories.resources.findManyByIds(allResourceIds, query);
@@ -270,39 +262,115 @@ export async function getGuardedResourcesForUser(
 }
 
 /**
- * Capability evaluator (Prerequisite 1/8)
+ * Capability evaluator (Prerequisite 1/9)
  */
+function resolvePolicyTarget(context: CapabilityContext): PolicyTarget {
+  if (context.grantId) return { type: 'APPROVAL_GRANT', id: context.grantId };
+  if (context.requestId) return { type: 'APPROVAL_REQUEST', id: context.requestId };
+  if (context.totpAccountId) return { type: 'TOTP_ACCOUNT', id: context.totpAccountId };
+  if (context.resourceId && context.fieldName) {
+    return { type: 'SECRET', resourceId: context.resourceId, key: context.fieldName };
+  }
+  if (context.resourceId) return { type: 'RESOURCE', id: context.resourceId };
+  if (context.environmentId) return { type: 'ENVIRONMENT', id: context.environmentId };
+  if (context.projectId) return { type: 'PROJECT', id: context.projectId };
+  if (context.subjectId) return { type: 'SUBJECT', id: context.subjectId };
+  return { type: 'GLOBAL' };
+}
+
+function auditReadCapabilitiesForTarget(target: PolicyTarget): Capability[] {
+  switch (target.type) {
+    case 'PROJECT':
+    case 'ENVIRONMENT':
+      return ['audit.full.read', 'audit.operational.read'];
+    case 'RESOURCE':
+    case 'SECRET':
+    case 'APPROVAL_REQUEST':
+    case 'APPROVAL_GRANT':
+      return ['audit.queue.read'];
+    case 'SUBJECT':
+      return ['audit.own.read'];
+    default:
+      return [];
+  }
+}
+
 export async function hasCapability(
-  repositories: Repositories,
+  repositories: CapabilityRepositories,
   principal: Principal,
   capability: Capability,
   context: CapabilityContext
 ): Promise<EvaluationResult> {
-  const allow = (reasonCode: ReasonCode, reason: string): EvaluationResult => ({
+  const target = resolvePolicyTarget(context);
+  let isProjectOwner = false;
+
+  const defaultAuthoritySources = (reasonCode: ReasonCode): AuthoritySource[] => {
+    switch (reasonCode) {
+      case 'OWNER':
+        return [isProjectOwner ? 'PROJECT_OWNER' : 'RESOURCE_OWNER'];
+      case 'WRITER':
+        return ['PROJECT_WRITER'];
+      case 'READER':
+        return ['PROJECT_READER'];
+      case 'GUARDIAN':
+        return ['EXPLICIT_GUARDIAN'];
+      case 'GRANT':
+        return ['APPROVAL_GRANT'];
+      case 'SERVICE':
+        return ['SCOPED_CREDENTIAL'];
+      default:
+        return [];
+    }
+  };
+
+  const allow = (
+    reasonCode: ReasonCode,
+    safeExplanation: string,
+    authoritySources = defaultAuthoritySources(reasonCode),
+    grantId?: string
+  ): EvaluationResult => ({
     allowed: true,
     decisionCode: 'ALLOW',
     reasonCode,
-    reason,
+    capability,
+    target,
+    authoritySources,
+    ...(context.requestId ? { approvalRequestId: context.requestId } : {}),
+    ...(grantId ? { grantId } : {}),
+    safeExplanation,
   });
 
-  const deny = (reasonCode: ReasonCode, reason: string): EvaluationResult => ({
+  const deny = (
+    reasonCode: ReasonCode,
+    safeExplanation: string,
+    decisionCode: EvaluationResult['decisionCode'] = 'DENY'
+  ): EvaluationResult => ({
     allowed: false,
-    decisionCode: 'DENY',
+    decisionCode,
     reasonCode,
-    reason,
+    capability,
+    target,
+    authoritySources: [],
+    ...(context.requestId ? { approvalRequestId: context.requestId } : {}),
+    ...(context.grantId ? { grantId: context.grantId } : {}),
+    safeExplanation,
   });
+
+  const principalValidation = validatePrincipal(principal, context.requiredAudience);
+  if (!principalValidation.valid) {
+    return deny(
+      principalValidation.reasonCode ?? 'INVALID_AUTH',
+      principalValidation.safeExplanation ?? 'Authentication identity is invalid.'
+    );
+  }
 
   // 1. Scoped Capability / Least Privilege Check
   if (principal.scopes) {
     if (!principal.scopes.includes(capability)) {
-      return deny('INSUFFICIENT_SCOPES', `Principal lacks required scope: ${capability}`);
+      return deny('INSUFFICIENT_SCOPES', 'Credential lacks the required capability scope.');
     }
-    // For SERVICE type, authorization is purely capability-scope based (no human user role)
-    if (principal.type === 'SERVICE') {
-      return allow('SERVICE', `Service principal authorized via scope: ${capability}`);
-    }
-  } else if (principal.type === 'SERVICE') {
-    return deny('INSUFFICIENT_SCOPES', 'Service principal lacks scopes');
+  } else if (principal.type === 'SERVICE' || principal.type === 'RESOURCE_API_KEY') {
+    return deny('INSUFFICIENT_SCOPES', 'Credential has no capability scopes.');
   }
 
   // Resolve roles
@@ -313,13 +381,21 @@ export async function hasCapability(
   let projectId = context.projectId;
   let resourceId = context.resourceId;
 
-  if (context.environmentId && repositories.projects) {
-    const env = await repositories.projects.findEnvironmentById(context.environmentId);
-    if (env) {
-      projectId = env.projectId;
-      if (env.resourceId) {
-        resourceId = env.resourceId;
-      }
+  if (context.environmentId && !projectId) {
+    return deny(
+      'MISSING_CONTEXT',
+      'Environment authorization requires its containing Project context.'
+    );
+  }
+
+  if (context.environmentId && projectId && repositories.projects) {
+    const env = await repositories.projects.getEnvironmentById(projectId, context.environmentId);
+    if (!env) {
+      return deny('TARGET_SCOPE_MISMATCH', 'Environment does not belong to the requested Project.');
+    }
+    projectId = env.projectId;
+    if (env.resourceId) {
+      resourceId = env.resourceId;
     }
   }
 
@@ -331,7 +407,9 @@ export async function hasCapability(
   }
 
   const userId =
-    principal.actorDiscordId || (principal.type === 'DISCORD_USER' ? principal.id : null);
+    principal.type === 'DISCORD_USER' || principal.type === 'PAWTHY_TOKEN'
+      ? authorizationSubjectId(principal)
+      : null;
 
   if (projectId && userId && repositories.projects) {
     const project = await repositories.projects.findById(projectId);
@@ -354,17 +432,26 @@ export async function hasCapability(
     }
   }
 
-  const isProjectOwner = pOwnerId !== null;
+  isProjectOwner = pOwnerId !== null;
   const isProjectLinked = !!projectId;
   const isResourceOwner = isProjectOwner || (!isProjectLinked && explicitGuardianRole === 'OWNER');
+
+  // Non-audit service operations are authorized by their explicit credential scope after exact
+  // target relationships above have been validated. Audit scopes require additional target-shape
+  // checks in their capability cases, and export must re-evaluate a read capability on this target.
+  if (principal.type === 'SERVICE' && !capability.startsWith('audit.')) {
+    return allow('SERVICE', 'Scoped service credential permits this operation.');
+  }
 
   switch (capability) {
     // --- PROJECT CAPABILITIES ---
     case 'project.create':
       if (principal.type === 'DISCORD_USER' || principal.type === 'PAWTHY_TOKEN') {
-        return allow('OWNER', 'Authorized to create project');
+        return allow('OWNER', 'Authenticated user may create a project.', [
+          'AUTHENTICATED_SUBJECT',
+        ]);
       }
-      return deny('INVALID_AUTH', 'Only user sessions can create projects');
+      return deny('INVALID_AUTH', 'Only an authenticated user may create a project.');
 
     case 'project.view':
     case 'project.members.view':
@@ -400,9 +487,11 @@ export async function hasCapability(
     // --- RESOURCE CAPABILITIES ---
     case 'resource.create':
       if (principal.type === 'DISCORD_USER' || principal.type === 'PAWTHY_TOKEN') {
-        return allow('OWNER', 'Authorized to register resource');
+        return allow('OWNER', 'Authenticated user may register a resource.', [
+          'AUTHENTICATED_SUBJECT',
+        ]);
       }
-      return deny('INVALID_AUTH', 'Only user sessions can register resources');
+      return deny('INVALID_AUTH', 'Only an authenticated user may register a resource.');
 
     case 'resource.view':
       if (isResourceOwner) return allow('OWNER', 'Resource Owner can view resource');
@@ -457,7 +546,7 @@ export async function hasCapability(
       if (context.totpAccountId && repositories.totp && userId) {
         const totpAcc = await repositories.totp.findById(context.totpAccountId);
         if (totpAcc && totpAcc.ownerDiscordUserId === userId) {
-          return allow('OWNER', 'Personal TOTP Owner can view recovery key');
+          return allow('OWNER', 'Personal TOTP Owner can view recovery key', ['TOTP_OWNER']);
         }
       }
       return deny(
@@ -473,7 +562,7 @@ export async function hasCapability(
       if (context.totpAccountId && repositories.totp && userId) {
         const totpAcc = await repositories.totp.findById(context.totpAccountId);
         if (totpAcc && totpAcc.ownerDiscordUserId === userId) {
-          return allow('OWNER', 'Personal TOTP Owner can manage account');
+          return allow('OWNER', 'Personal TOTP Owner can manage account', ['TOTP_OWNER']);
         }
       }
       return deny('NO_ROLE', 'Only the personal owner can manage this TOTP account');
@@ -481,9 +570,7 @@ export async function hasCapability(
     // --- GUARDIAN CAPABILITIES ---
     case 'guardian.view':
       if (isResourceOwner) return allow('OWNER', 'Resource Owner can view guardians');
-      if (explicitGuardianRole === 'GUARDIAN')
-        return allow('GUARDIAN', 'Guardian can view guardians');
-      return deny('NO_ROLE', 'No role to view guardians');
+      return deny('NO_ROLE', 'Only the Resource Owner may list full Guardian assignments.');
 
     case 'guardian.context.read':
       if (isResourceOwner) return allow('OWNER', 'Resource Owner can view guardian context');
@@ -497,27 +584,35 @@ export async function hasCapability(
 
     // --- REQUEST CAPABILITIES ---
     case 'request.create':
-      if (
-        principal.type === 'DISCORD_USER' ||
-        principal.type === 'PAWTHY_TOKEN' ||
-        principal.type === 'RESOURCE_API_KEY'
-      ) {
-        return allow('READER', 'Authorized to create requests');
+      if (principal.type === 'RESOURCE_API_KEY') {
+        if (!resourceId || resourceId !== authorizationSubjectId(principal)) {
+          return deny(
+            'AUTH_SUBJECT_MISMATCH',
+            'Resource credential does not match the requested Resource.'
+          );
+        }
+        return allow('READER', 'Scoped Resource credential may create a request.', [
+          'SCOPED_CREDENTIAL',
+        ]);
       }
-      return deny('INVALID_AUTH', 'Invalid authentication to create requests');
+      if (principal.type === 'DISCORD_USER' || principal.type === 'PAWTHY_TOKEN') {
+        return allow('READER', 'Authenticated user may create an eligible request.', [
+          'AUTHENTICATED_SUBJECT',
+        ]);
+      }
+      return deny('INVALID_AUTH', 'Authentication type cannot create requests.');
 
     case 'request.view-own':
     case 'request.cancel-own':
       if (context.requestId && repositories.approvalRequests && userId) {
         const req = await repositories.approvalRequests.findById(context.requestId);
-        if (req && req.context && typeof req.context === 'object') {
-          const requesterId = (req.context as Record<string, unknown>)['requesterId'];
-          if (requesterId === userId) {
-            return allow('READER', 'Can view/cancel own request');
-          }
+        if (req?.requesterId === userId) {
+          return allow('READER', 'Requester may view or cancel their own request.', [
+            'AUTHENTICATED_SUBJECT',
+          ]);
         }
       }
-      return deny('NO_ROLE', "Cannot view/cancel someone else's request");
+      return deny('NO_ROLE', 'Requester does not own this request.');
 
     case 'request.queue.view':
       if (isResourceOwner) return allow('OWNER', 'Resource Owner can view approval queue');
@@ -528,11 +623,8 @@ export async function hasCapability(
     case 'request.decide':
       if (context.requestId && repositories.approvalRequests && userId) {
         const req = await repositories.approvalRequests.findById(context.requestId);
-        if (req && req.context && typeof req.context === 'object') {
-          const requesterId = (req.context as Record<string, unknown>)['requesterId'];
-          if (requesterId === userId) {
-            return deny('SELF_APPROVAL_FORBIDDEN', 'Guardians cannot approve their own requests');
-          }
+        if (req?.requesterId === userId) {
+          return deny('SELF_APPROVAL_FORBIDDEN', 'A requester cannot decide their own request.');
         }
       }
       if (isResourceOwner) return allow('OWNER', 'Resource Owner can decide requests');
@@ -541,44 +633,138 @@ export async function hasCapability(
       return deny('NO_ROLE', 'Only Owners and Guardians can decide requests');
 
     // --- GRANT CAPABILITIES ---
-    case 'grant.consume':
-      if (resourceId && userId && repositories.approvalRequests) {
-        const activeRequest = await repositories.approvalRequests.findActiveByRequester(
-          resourceId,
-          userId
-        );
-        if (activeRequest && activeRequest.status === 'APPROVED') {
-          if (activeRequest.expiresAt && activeRequest.expiresAt < new Date()) {
-            return deny('GRANT_EXPIRED', 'Approved grant has expired');
-          }
-          return allow('GRANT', 'Valid approved grant exists');
-        }
+    case 'grant.consume': {
+      if (!context.grantId || !resourceId) {
+        return deny('MISSING_CONTEXT', 'Exact grant and Resource context are required.');
       }
-      return deny('NO_ROLE', 'No active approved grant found');
+      const grant = await repositories.approvalGrants.findById(context.grantId);
+      if (!grant || grant.revokedAt || grant.consumedAt) {
+        return deny('GRANT_INVALID', 'Grant is missing, revoked, or already consumed.');
+      }
+      const now = context.currentTimestamp ?? new Date();
+      if (grant.expiresAt <= now) {
+        return deny('GRANT_EXPIRED', 'Grant has expired.');
+      }
+      if (
+        grant.requesterId !== authorizationSubjectId(principal) ||
+        grant.authKind !== principal.authKind ||
+        grant.resourceId !== resourceId ||
+        (context.action !== undefined && grant.action !== context.action) ||
+        (context.fieldName !== undefined && grant.targetKey !== context.fieldName) ||
+        (context.targetVersion !== undefined && grant.targetVersion !== context.targetVersion) ||
+        (context.policyVersion !== undefined && grant.policyVersion !== context.policyVersion)
+      ) {
+        return deny(
+          'GRANT_SCOPE_MISMATCH',
+          'Grant does not match this subject or exact operation.'
+        );
+      }
+      return allow(
+        'GRANT',
+        'Exact immutable grant permits this operation.',
+        ['APPROVAL_GRANT'],
+        grant.id
+      );
+    }
 
     // --- AUDIT CAPABILITIES ---
     case 'audit.full.read':
+      if (principal.type === 'SERVICE') {
+        if (!projectId) {
+          return deny('MISSING_CONTEXT', 'Full audit read requires an exact Project target.');
+        }
+        return allow('SERVICE', 'Scoped service credential permits full Project audit reads.');
+      }
       if (isProjectOwner) return allow('OWNER', 'Project Owner has full audit read access');
       return deny('NO_ROLE', 'Only Project Owner has full audit read access');
 
     case 'audit.operational.read':
+      if (principal.type === 'SERVICE') {
+        if (!projectId) {
+          return deny(
+            'MISSING_CONTEXT',
+            'Operational audit read requires an exact Project target.'
+          );
+        }
+        return allow(
+          'SERVICE',
+          'Scoped service credential permits operational Project audit reads.'
+        );
+      }
       if (isProjectOwner) return allow('OWNER', 'Project Owner has operational audit read access');
       if (pMemberRole === 'WRITER')
         return allow('WRITER', 'Project Writer has operational audit read access');
       return deny('NO_ROLE', 'Only Owner or Writer has operational audit read access');
 
     case 'audit.queue.read':
+      if (principal.type === 'SERVICE') {
+        if (!resourceId && !context.requestId) {
+          return deny(
+            'MISSING_CONTEXT',
+            'Queue audit read requires an exact Resource or approval-request target.'
+          );
+        }
+        return allow('SERVICE', 'Scoped service credential permits approval-queue audit reads.');
+      }
       if (isResourceOwner) return allow('OWNER', 'Resource Owner has audit queue read access');
       if (explicitGuardianRole === 'GUARDIAN')
         return allow('GUARDIAN', 'Guardian has audit queue read access');
       return deny('NO_ROLE', 'No role to read audit queue');
 
     case 'audit.own.read':
-      return allow('READER', 'Any authenticated actor can read their own audit events');
+      if (!context.subjectId) {
+        return deny('MISSING_CONTEXT', 'Own-audit read requires an exact Subject target.');
+      }
+      if (context.subjectId !== authorizationSubjectId(principal)) {
+        return deny(
+          'AUTH_SUBJECT_MISMATCH',
+          'Audit subject does not match the authenticated user.'
+        );
+      }
+      if (principal.type === 'SERVICE') {
+        return allow('SERVICE', 'Scoped service credential may read its own audit events.');
+      }
+      return allow('READER', 'Authenticated user may read their own audit events.', [
+        'AUTHENTICATED_SUBJECT',
+      ]);
 
-    case 'audit.export':
-      if (isProjectOwner) return allow('OWNER', 'Project Owner can export audits');
-      return deny('NO_ROLE', 'Only Project Owner can export audits');
+    case 'audit.export': {
+      if (principal.type !== 'SERVICE' && !isProjectOwner) {
+        return deny('NO_ROLE', 'Only Project Owner can export audits');
+      }
+
+      const readCapabilities = auditReadCapabilitiesForTarget(target);
+      if (readCapabilities.length === 0) {
+        return deny('MISSING_CONTEXT', 'Audit export requires an exact auditable target.');
+      }
+
+      for (const readCapability of readCapabilities) {
+        const readResult = await hasCapability(repositories, principal, readCapability, context);
+        if (readResult.allowed) {
+          return allow(
+            principal.type === 'SERVICE' ? 'SERVICE' : 'OWNER',
+            'Audit export is permitted by export and read authority on the same target.',
+            readResult.authoritySources
+          );
+        }
+      }
+
+      return deny(
+        principal.scopes ? 'INSUFFICIENT_SCOPES' : 'NO_ROLE',
+        'Audit export requires audit read authority on the same target.'
+      );
+    }
+
+    case 'token.manage-own':
+      if (principal.type !== 'DISCORD_USER' && principal.type !== 'PAWTHY_TOKEN') {
+        return deny('INVALID_AUTH', 'Only an authenticated user may manage their own tokens.');
+      }
+      if (context.subjectId && context.subjectId !== authorizationSubjectId(principal)) {
+        return deny('AUTH_SUBJECT_MISMATCH', 'Token owner does not match the authenticated user.');
+      }
+      return allow('READER', 'Authenticated user may manage their own token records.', [
+        'AUTHENTICATED_SUBJECT',
+      ]);
 
     default:
       return deny('NO_ROLE', 'Unknown capability');

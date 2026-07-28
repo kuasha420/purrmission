@@ -1,7 +1,8 @@
 import { ChatInputCommandInteraction, Colors } from 'discord.js';
 import type { Services } from '../../domain/services.js';
 import { logger } from '../../logging/logger.js';
-import type { ApprovalDecision, ApprovalRequest, Principal } from '../../domain/models.js';
+import type { ApprovalDecision, ApprovalRequest } from '../../domain/models.js';
+import { createDiscordPrincipal } from '../../domain/principal.js';
 
 /**
  * Handle approval/denial decision commands.
@@ -18,14 +19,7 @@ export async function handleDecisionCommand(
   const icon = decision === 'APPROVE' ? '✅' : '🚫'; // correction: DENY usually 🚫 or ❌
 
   try {
-    const principal: Principal = {
-      id: userId,
-      type: 'DISCORD_USER',
-      subjectId: userId,
-      authKind: 'DISCORD',
-      scopes: [],
-      audience: 'discord',
-    };
+    const principal = createDiscordPrincipal(userId);
 
     const result = await services.ports.recordApprovalDecision(principal, requestId, decision);
 

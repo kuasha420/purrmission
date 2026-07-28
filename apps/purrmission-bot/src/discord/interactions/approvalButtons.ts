@@ -13,7 +13,8 @@ import {
   ButtonStyle,
 } from 'discord.js';
 import type { Services } from '../../domain/services.js';
-import type { ApprovalDecision, AccessRequestContext, Principal } from '../../domain/models.js';
+import type { ApprovalDecision, AccessRequestContext } from '../../domain/models.js';
+import { createDiscordPrincipal } from '../../domain/principal.js';
 import type { Repositories } from '../../domain/repositories.js';
 import { generateTOTPCode } from '../../domain/totp.js';
 import { logger } from '../../logging/logger.js';
@@ -105,14 +106,7 @@ export async function handleApprovalButton(
   await interaction.deferUpdate();
 
   try {
-    const principal: Principal = {
-      id: userId,
-      type: 'DISCORD_USER',
-      subjectId: userId,
-      authKind: 'DISCORD',
-      scopes: [],
-      audience: 'discord',
-    };
+    const principal = createDiscordPrincipal(userId);
 
     // Record the decision via the ports layer
     const result = await services.ports.recordApprovalDecision(principal, requestId, action);

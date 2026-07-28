@@ -17,6 +17,7 @@ import {
 } from '../domain/auth.js';
 import { ResourceNotFoundError } from '../domain/errors.js';
 import type { Principal } from '../domain/models.js';
+import { createDiscordPrincipal } from '../domain/principal.js';
 import type { Services } from '../domain/services.js';
 import { logger } from '../logging/logger.js';
 import crypto from 'node:crypto';
@@ -25,6 +26,7 @@ import { correlationStorage } from '../logging/correlationContext.js';
 declare module 'fastify' {
   interface FastifyRequest {
     user: { id: string };
+    principal?: Principal;
     correlationId?: string;
   }
 }
@@ -83,14 +85,13 @@ export function createHttpServer(deps: HttpServerDeps): FastifyInstance {
   const { services, discordClient } = deps;
 
   function extractPrincipal(req: FastifyRequest, userId: string): Principal {
-    const raw = (req as any).principal;
-    return {
-      type: raw?.type || 'DISCORD_USER',
-      id: raw?.id || raw?.subjectId || raw?.userId || userId,
-      subjectId: raw?.subjectId || raw?.userId || raw?.id || userId,
-      authKind: raw?.authKind || 'DISCORD',
-      actorDiscordId: raw?.actorDiscordId || raw?.id || raw?.subjectId || raw?.userId || userId,
-    };
+    if (req.principal) {
+      return {
+        ...req.principal,
+        correlationId: req.correlationId ?? req.principal.correlationId,
+      };
+    }
+    return createDiscordPrincipal(userId, req.correlationId);
   }
 
   const server = Fastify({
@@ -390,8 +391,8 @@ export function createHttpServer(deps: HttpServerDeps): FastifyInstance {
       throw new AccessDeniedError('Invalid token');
     }
     // Attach user and principal to request
-    req.user = { id: principal.subjectId || (principal as any).userId };
-    (req as any).principal = principal;
+    req.user = { id: principal.subjectId };
+    req.principal = principal;
   }
 
   // Authorization Hook: Verify Guardian/Owner Access
