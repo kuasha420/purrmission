@@ -7,16 +7,24 @@
 - Baseline delivery: [#107](https://github.com/kuasha420/purrmission/issues/107) /
   [#115](https://github.com/kuasha420/purrmission/pull/115)
 - Final readiness gate: [#126](https://github.com/kuasha420/purrmission/issues/126)
-- Current checkpoint: **No-go** at `e4269cea4d6f`; independent verification and remediation
+- Original No-go checkpoint: `e4269cea4d6f` (2026-07-26); independent verification and remediation
   routing are recorded in the
   [2026-07-26 prerequisite conformance report](../reports/2026-07-26-prerequisite-conformance-report.md)
   and [#138](https://github.com/kuasha420/purrmission/pull/138)
-- Last assessed: 2026-07-26
+- Current execution checkpoint: Wave 1 implementation [#117](https://github.com/kuasha420/purrmission/issues/117)
+  merged through [#139](https://github.com/kuasha420/purrmission/pull/139) at
+  `edd9c3497909bb71b265300ffa201038edea54ef` on 2026-07-28 UTC and is closed. Its
+  independent-review/post-merge-verification evidence remains incomplete. Wave 2 issues #118 and
+  #119 are open, assigned to `kuasha420`, and authorized for parallel branch execution; neither may
+  merge until the Wave 1 evidence gap is resolved.
+- Last assessed: 2026-07-31
 
 All implementation nodes and both gates were reopened after the No-go result. Reopening records
-ownership; it does not make every node ready at once. The immediately claimable prerequisite lane is
-#117. Issue #105 remains independently claimable on the parallel production-safety lane. Every
-other node must wait for the incoming dependencies in Section 3 to be post-merge verified and
+ownership; it does not make every node ready at once. #117 has completed implementation and closed,
+but still needs attributable independent/post-merge verification evidence. #118 and #119 are the
+current parallel execution lanes under an explicit owner directive, with their merge gate held on
+that evidence. Issue #105 remains independently claimable on the parallel production-safety lane.
+Every later node must wait for the incoming dependencies in Section 3 to be post-merge verified and
 closed again.
 
 ## 1. Goal and authority
@@ -64,9 +72,9 @@ cannot relabel a failed prerequisite as future work.
 flowchart TD
   BASE["#107 / #115<br/>Baseline audit and knowledgebase<br/>Complete"]
   EPIC["#116<br/>Pre-dashboard remediation epic"]
-  I117["#117<br/>Principal and capability contract"]
-  I118["#118<br/>Audit, outbox, and correlation"]
-  I119["#119<br/>Metadata projections and target versions"]
+  I117["#117<br/>Principal and capability contract<br/>Merged / closed; verification evidence pending"]
+  I118["#118<br/>Audit, outbox, and correlation<br/>Claimed; merge-blocked"]
+  I119["#119<br/>Metadata projections and target versions<br/>Claimed; merge-blocked"]
   I120["#120<br/>TOTP custody and consent"]
   I121["#121<br/>Credential lifecycle"]
   I122["#122<br/>Approval Request V2 and grants"]
@@ -132,6 +140,15 @@ incomplete at final reassessment, #126 must preserve an explicit production roll
 | 7    | [#130](https://github.com/kuasha420/purrmission/issues/130)                                                                 | #129 verified and closed                                      | Pawthy may plan against #127 earlier, but it merges only against the verified HTTP contract.            |
 | 8    | [#124](https://github.com/kuasha420/purrmission/issues/124)                                                                 | #128, #129, and #130 verified and closed                      | Integrates surfaces, removes legacy paths, and runs the complete conformance suite.                     |
 | 9    | [#126](https://github.com/kuasha420/purrmission/issues/126)                                                                 | #117-#124 and #127-#130 verified and closed; contracts frozen | Independent holistic reassessment. Go updates the knowledgebase; No-go returns work to the owning node. |
+
+### 3.1 Current wave ledger
+
+| Node(s)   | Current state                                                  | Evidence / merge gate                                                                                         |
+| --------- | -------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------- |
+| #117      | Implementation merged and issue closed                         | #139 / `edd9c349`; independent GitHub review and attributable post-merge verification evidence still required |
+| #118/#119 | Assigned to `kuasha420`; claimed for parallel branch execution | May develop in separate worktrees; merge remains blocked until #117 is independently verified                 |
+| #120-#130 | Blocked according to the dependency graph                      | Planning and test design may begin only within the one-wave-ahead rule                                        |
+| #105      | Open parallel production-safety lane                           | Blocks production migration/deployment, not local branch execution                                            |
 
 Research, threat modeling, test design, and file-collision planning may begin one wave early.
 Production implementation must not merge before every native blocker is **Verified** and closed.
@@ -219,8 +236,8 @@ and handoff.
 - Keep the primary checkout on `master` for integration and post-merge verification.
 - Use one branch and one worktree per active issue. Never let two humans or agents edit the same
   worktree.
-- Suggested names are `feat/issue-117-capability-contract`,
-  `fix/issue-121-credential-lifecycle`, and `docs/issue-126-readiness-signoff`.
+- Suggested names are `feat/issue-118-audit-outbox-correlation`,
+  `feat/issue-119-metadata-target-versions`, and `docs/issue-126-readiness-signoff`.
 - Branch from the latest verified `master`, not from a sibling feature branch.
 - Avoid stacked PRs. If design work must begin early, keep it rebased and do not merge it before
   native blockers close.
@@ -237,7 +254,7 @@ High-collision areas require these rules:
 | Area                                            | Rule                                                                                                                                         |
 | ----------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
 | `prisma/schema.prisma` and migrations           | One schema integration lock. The later PR rebases on current `master`, reconciles migration order, and reruns fresh plus upgrade rehearsals. |
-| Principal/capability types and policy           | #117 merges contract changes before consumers. Consumers do not fork capability names.                                                       |
+| Principal/capability types and policy           | #117's merged contract is frozen at `edd9c349`; consumers do not fork capability names.                                                      |
 | Audit/outbox and transaction APIs               | #118 owns primitives; #127 composes them but does not create a competing outbox.                                                             |
 | TOTP and Approval V2                            | #120 owns link/delegation consent inputs and versions; #122 owns grants. Cross-boundary tests are reviewed by both owners.                   |
 | `approvalButtons.ts` and Discord delivery       | #123 owns delivery mechanics; #128 owns command/interaction adaptation. Agree on interfaces before either edit.                              |

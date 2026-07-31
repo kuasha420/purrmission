@@ -1,24 +1,42 @@
 # Purrmission RBAC and Observability Knowledgebase
 
-- Status: **Prerequisite verification failed — remediation required**
+- Status: **Prerequisite remediation active — Wave 1 merged; Wave 2 claimed (dashboard readiness remains No-go)**
 - Preparation issue: [#107](https://github.com/kuasha420/purrmission/issues/107) (complete)
-- Prerequisite epic: [#116](https://github.com/kuasha420/purrmission/issues/116) (reopen required)
+- Prerequisite epic: [#116](https://github.com/kuasha420/purrmission/issues/116) (open and active)
 - Execution graph:
   [Pre-Dashboard RBAC Prerequisite Execution Graph](../epics/rbac-prerequisite-execution-graph.md)
-- Readiness gate: [#126](https://github.com/kuasha420/purrmission/issues/126) (No-go; reopen required)
+- Readiness gate: [#126](https://github.com/kuasha420/purrmission/issues/126) (open, blocked by #124; No-go remains in force)
 - Conformance Report: [2026-07-26 Prerequisite Conformance Report](../reports/2026-07-26-prerequisite-conformance-report.md)
 - Dashboard readiness: **No-go** (do not file Discord OAuth/session or Web Dashboard backend/frontend implementation phases until the prerequisite remediation and independent gate are complete)
 - Baseline audited revision: `e4269cea4d6f` (`master`, 2026-07-26)
+- Current remediation checkpoint: #117 implementation merged through #139 at
+  `edd9c3497909bb71b265300ffa201038edea54ef` on 2026-07-28 UTC and the issue is closed;
+  independent review/post-merge verification evidence remains pending. #118 and #119 are open,
+  assigned to `kuasha420`, and claimed for parallel branch execution with their merge gate held on
+  that evidence.
+- Last progress update: 2026-07-31
 - Applies to: Discord commands, the Fastify API, Pawthy, and the future
   `apps/purrmission-web`
+
+### Remediation progress ledger
+
+| Wave | Nodes     | State                                                                                  |
+| ---- | --------- | -------------------------------------------------------------------------------------- |
+| 1    | #117      | Implementation merged/closed via #139; independent verification evidence still pending |
+| 2    | #118/#119 | Claimed in parallel; branch execution authorized, merge-blocked on the Wave 1 evidence |
+| 3-9  | #120-#130 | Blocked by the execution graph                                                         |
+
+Sections 3-5 remain the point-in-time audit record for `e4269cea4d6f`; they are not silently
+rewritten as remediation lands. The ledger above and the execution graph are the live progress
+record until #126 performs a fresh holistic reassessment and updates this knowledgebase after Go.
 
 ## 1. Purpose and normative language
 
 This document is the authorization and observability source of truth for the phased
 Discord-authenticated Purrmission dashboard. It has two deliberately separate parts:
 
-1. **Observed behavior** records what the current code does, including inconsistencies and unsafe
-   behavior that must not become an accidental compatibility contract.
+1. **Observed behavior** records what the baseline audited revision did, including inconsistencies
+   and unsafe behavior that must not become an accidental compatibility contract.
 2. **Target policy** defines the least-privilege contract that future HTTP and web-dashboard work
    must implement.
 
@@ -78,9 +96,9 @@ The central rule is:
     not inherit approval authority.
 - An explicit Resource Guardian is an **approver**, not a secret reader or resource editor, in the
   target policy. This intentionally narrows the current behavior.
-- Project Writer does not inherit approval authority in the target policy. This intentionally
-  removes today's synthetic-Guardian privilege and keeps Writer and Guardian responsibilities
-  separate.
+- Project Writer does not inherit approval authority in the target policy. #117 removed the
+  baseline synthetic-Guardian privilege from the central policy contract and keeps Writer and
+  Guardian responsibilities separate.
 - Approved access is a scoped grant, not a temporary role. A grant binds actor, operation, target,
   and expiry and is consumed according to its grant type.
 - Web sessions carry identity only. Roles and capabilities MUST NOT be snapshotted into a cookie,
@@ -91,7 +109,7 @@ The central rule is:
 - Durable auditability is part of the security boundary for sensitive reads, writes, role changes,
   and approval decisions.
 
-## 3. Domain vocabulary and current persistence model
+## 3. Domain vocabulary and audited-baseline persistence model
 
 ### 3.1 Persisted roles
 
@@ -107,7 +125,7 @@ The central rule is:
 The schema definitions are in `prisma/schema.prisma:15-25,65-95,168-217`. Domain types are in
 `apps/purrmission-bot/src/domain/models.ts:46-76,157-183,297-360`.
 
-### 3.2 Effective role resolution today
+### 3.2 Effective role resolution at the audited baseline
 
 For a resource linked to a project environment, `getEffectiveGuardians` currently unions:
 
