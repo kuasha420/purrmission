@@ -8,6 +8,13 @@
   prerequisite implementation PRs #132-#137
 - Decision: **No-go**
 
+> **Historical evidence notice:** This report is the immutable No-go baseline for
+> `e4269cea4d6f`, not the live remediation tracker. #117 implementation later merged through #139
+> at `edd9c3497909bb71b265300ffa201038edea54ef` and the issue closed; independent
+> review/post-merge verification evidence is still pending. See the
+> [execution graph](../epics/rbac-prerequisite-execution-graph.md) for current progress. The findings
+> below remain unchanged until #126 performs a fresh pinned-`master` reassessment.
+
 This report supersedes the earlier Go report at this path. That report pinned pre-merge commit
 `19eea3b`, linked to local Windows files, claimed zero lint warnings, and did not trace the complete
 prerequisite contract. Verification of merged `master` does not support its conclusion.
