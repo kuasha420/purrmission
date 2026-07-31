@@ -1,6 +1,6 @@
 # Purrmission RBAC and Observability Knowledgebase
 
-- Status: **Prerequisite remediation active — Wave 1 merged; Wave 2 claimed (dashboard readiness remains No-go)**
+- Status: **Prerequisite remediation active — Wave 1 reopened after post-merge No-go; Wave 2 branch execution only (dashboard readiness remains No-go)**
 - Preparation issue: [#107](https://github.com/kuasha420/purrmission/issues/107) (complete)
 - Prerequisite epic: [#116](https://github.com/kuasha420/purrmission/issues/116) (open and active)
 - Execution graph:
@@ -10,21 +10,21 @@
 - Dashboard readiness: **No-go** (do not file Discord OAuth/session or Web Dashboard backend/frontend implementation phases until the prerequisite remediation and independent gate are complete)
 - Baseline audited revision: `e4269cea4d6f` (`master`, 2026-07-26)
 - Current remediation checkpoint: #117 implementation merged through #139 at
-  `edd9c3497909bb71b265300ffa201038edea54ef` on 2026-07-28 UTC and the issue is closed;
-  independent review/post-merge verification evidence remains pending. #118 and #119 are open,
-  assigned to `kuasha420`, and claimed for parallel branch execution with their merge gate held on
-  that evidence.
+  `edd9c3497909bb71b265300ffa201038edea54ef`, but independent verification against
+  `a1f2004141f90376c0084b7b2156297de92dd6f7` returned No-go on 2026-07-31 and reopened the issue.
+  #118 and #119 are open, assigned to `kuasha420`, and claimed for isolated parallel branch
+  execution; their merge gate remains blocked on #117 remediation and re-verification.
 - Last progress update: 2026-07-31
 - Applies to: Discord commands, the Fastify API, Pawthy, and the future
   `apps/purrmission-web`
 
 ### Remediation progress ledger
 
-| Wave | Nodes     | State                                                                                  |
-| ---- | --------- | -------------------------------------------------------------------------------------- |
-| 1    | #117      | Implementation merged/closed via #139; independent verification evidence still pending |
-| 2    | #118/#119 | Claimed in parallel; branch execution authorized, merge-blocked on the Wave 1 evidence |
-| 3-9  | #120-#130 | Blocked by the execution graph                                                         |
+| Wave | Nodes     | State                                                                            |
+| ---- | --------- | -------------------------------------------------------------------------------- |
+| 1    | #117      | Reopened after independent post-merge No-go; remediation required                |
+| 2    | #118/#119 | Claimed in parallel; branch execution authorized, merge-blocked on reopened #117 |
+| 3-9  | #120-#130 | Blocked by the execution graph                                                   |
 
 Sections 3-5 remain the point-in-time audit record for `e4269cea4d6f`; they are not silently
 rewritten as remediation lands. The ledger above and the execution graph are the live progress
@@ -96,9 +96,9 @@ The central rule is:
     not inherit approval authority.
 - An explicit Resource Guardian is an **approver**, not a secret reader or resource editor, in the
   target policy. This intentionally narrows the current behavior.
-- Project Writer does not inherit approval authority in the target policy. #117 removed the
-  baseline synthetic-Guardian privilege from the central policy contract and keeps Writer and
-  Guardian responsibilities separate.
+- Project Writer does not inherit approval authority in the target policy. #117 narrowed the
+  central evaluator, but post-merge verification found live adapter paths that still use broad
+  Guardian helpers; Writer and Guardian responsibilities are therefore not yet fully separated.
 - Approved access is a scoped grant, not a temporary role. A grant binds actor, operation, target,
   and expiry and is consumed according to its grant type.
 - Web sessions carry identity only. Roles and capabilities MUST NOT be snapshotted into a cookie,
