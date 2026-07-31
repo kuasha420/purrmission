@@ -10,8 +10,8 @@
 
 > **Historical evidence notice:** This report is the immutable No-go baseline for
 > `e4269cea4d6f`, not the live remediation tracker. #117 implementation later merged through #139
-> at `edd9c3497909bb71b265300ffa201038edea54ef` and the issue closed; independent
-> review/post-merge verification evidence is still pending. See the
+> at `edd9c3497909bb71b265300ffa201038edea54ef`, but independent verification against
+> `a1f2004141f90376c0084b7b2156297de92dd6f7` returned No-go on 2026-07-31 and reopened #117. See the
 > [execution graph](../epics/rbac-prerequisite-execution-graph.md) for current progress. The findings
 > below remain unchanged until #126 performs a fresh pinned-`master` reassessment.
 
