@@ -114,50 +114,15 @@ export class DomainPortsImpl implements DomainPorts {
 
   // Secrets & Reveal Operations
   async getSecrets(
-    principal: Principal,
-    projectId: string,
-    envId: string,
-    grantId?: string
+    _principal: Principal,
+    _projectId: string,
+    _envId: string,
+    _grantId?: string
   ): Promise<Record<string, string>> {
-    const project = await this.getProject(principal, projectId);
-    if (!project) throw new NotFoundError('Project not found');
-
-    const env = await this.projectService.getEnvironmentById(projectId, envId);
-    if (!env || !env.resourceId) throw new NotFoundError('Environment not found');
-
-    // Access check: Owner/Writer can view directly.
-    let authorized = project.ownerId === principal.subjectId;
-    if (!authorized) {
-      const role = await this.projectService.getMemberRole(projectId, principal.subjectId);
-      authorized = role === 'WRITER' || role === 'READER';
-    }
-
-    if (!authorized && grantId) {
-      // Validate and consume the approval grant
-      const consumed = await this.approvalService.consumeGrant(
-        grantId,
-        principal,
-        'secrets.read',
-        env.resourceId
-      );
-      if (consumed) {
-        authorized = true;
-      }
-    }
-
-    if (!authorized) {
-      throw new ForbiddenError('Secrets read access denied');
-    }
-
-    // Load and return secrets
-    const fields = await this.resourceService.deps.repositories.resourceFields.findByResourceId(
-      env.resourceId
-    );
-    const result: Record<string, string> = {};
-    for (const f of fields) {
-      result[f.name] = f.value;
-    }
-    return result;
+    // A GET must be safe and idempotent. Secret-value redemption consumes an exact grant, so it
+    // cannot be implemented by this read port. Keep the legacy boundary fail-closed until the
+    // dedicated authenticated, grant-consuming POST use case is introduced (#122/#128).
+    throw new ForbiddenError('Secret values require the grant-consuming redemption endpoint');
   }
 
   async setSecrets(principal: Principal, dto: BatchSetSecretsDTO): Promise<void> {

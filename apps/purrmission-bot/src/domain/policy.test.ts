@@ -33,6 +33,7 @@ const OWNER_ID = 'owner-user';
 const WRITER_ID = 'writer-user';
 const READER_ID = 'reader-user';
 const GUARDIAN_ID = 'guardian-user';
+const CUSTODY_OWNER_ID = 'custody-owner-user';
 const MIXED_ID = 'mixed-user';
 const REQUESTER_ID = 'requester-user';
 
@@ -117,6 +118,12 @@ const totpAccount: TOTPAccount = {
   updatedAt: new Date('2026-01-01T00:00:00Z'),
 };
 
+const custodyOwnedTotpAccount: TOTPAccount = {
+  ...totpAccount,
+  id: 'totp-custody-owned',
+  ownerDiscordUserId: CUSTODY_OWNER_ID,
+};
+
 function approvalRequest(
   requesterId: string,
   overrides: Partial<ApprovalRequest> = {}
@@ -173,6 +180,13 @@ function capabilityRepositories(options?: {
   approvalLookup?: () => void;
 }): CapabilityRepositories {
   return {
+    resources: {
+      async findById(resourceId) {
+        return resourceId === RESOURCE_ID
+          ? { ...resource, totpAccountId: custodyOwnedTotpAccount.id }
+          : null;
+      },
+    },
     guardians: {
       async findByResourceAndUser(resourceId, userId) {
         if (resourceId !== RESOURCE_ID) return null;
@@ -210,7 +224,14 @@ function capabilityRepositories(options?: {
     },
     totp: {
       async findById(totpAccountId) {
-        return totpAccountId === totpAccount.id ? totpAccount : null;
+        if (totpAccountId === totpAccount.id) return totpAccount;
+        if (totpAccountId === custodyOwnedTotpAccount.id) return custodyOwnedTotpAccount;
+        return null;
+      },
+      async findMetadataById(totpAccountId) {
+        if (totpAccountId === totpAccount.id) return totpAccount;
+        if (totpAccountId === custodyOwnedTotpAccount.id) return custodyOwnedTotpAccount;
+        return null;
       },
     },
   };
@@ -528,6 +549,50 @@ describe('Principal and exact-object capability policy', () => {
         assert.equal(result.allowed, false, `${entry.role} should not have ${capability}`);
       }
     }
+  });
+
+  it('allows a TOTP custody owner to unlink only, without granting link or Guardian authority', async () => {
+    const repositories = capabilityRepositories();
+    repositories.totp.findById = async () => {
+      throw new Error('value-bearing TOTP lookup must not run during link authorization');
+    };
+    const unlinkContext: CapabilityContext = {
+      resourceId: RESOURCE_ID,
+      totpAccountId: custodyOwnedTotpAccount.id,
+      totpLinkOperation: 'UNLINK',
+    };
+
+    const custodyUnlink = await hasCapability(
+      repositories,
+      createDiscordPrincipal(CUSTODY_OWNER_ID),
+      'totp.link.manage',
+      unlinkContext
+    );
+    const custodyLink = await hasCapability(
+      repositories,
+      createDiscordPrincipal(CUSTODY_OWNER_ID),
+      'totp.link.manage',
+      { ...unlinkContext, totpLinkOperation: 'LINK' }
+    );
+    const guardianUnlink = await hasCapability(
+      repositories,
+      createDiscordPrincipal(GUARDIAN_ID),
+      'totp.link.manage',
+      unlinkContext
+    );
+    const mismatchedResourceUnlink = await hasCapability(
+      repositories,
+      createDiscordPrincipal(CUSTODY_OWNER_ID),
+      'totp.link.manage',
+      { ...unlinkContext, resourceId: 'different-resource' }
+    );
+
+    assert.equal(custodyUnlink.allowed, true);
+    assert.deepEqual(custodyUnlink.authoritySources, ['TOTP_OWNER']);
+    assert.equal(custodyLink.allowed, false);
+    assert.equal(guardianUnlink.allowed, false);
+    assert.equal(mismatchedResourceUnlink.allowed, false);
+    assert.equal(mismatchedResourceUnlink.reasonCode, 'TARGET_SCOPE_MISMATCH');
   });
 
   it('fails closed when an Environment does not belong to the supplied Project', async () => {

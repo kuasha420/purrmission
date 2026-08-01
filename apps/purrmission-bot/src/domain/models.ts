@@ -572,6 +572,8 @@ export interface CapabilityContext {
   environmentId?: string;
   resourceId?: string;
   totpAccountId?: string;
+  /** Distinguishes Resource-owner link authority from custody-owner unlink authority. */
+  totpLinkOperation?: 'LINK' | 'UNLINK';
   requestId?: string;
   fieldName?: string; // specific secret/field
   subjectId?: string;

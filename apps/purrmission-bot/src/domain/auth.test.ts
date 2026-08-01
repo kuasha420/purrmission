@@ -10,6 +10,7 @@ type MockedAuthRepository = {
   findSessionByDeviceCode: Mock<AuthRepository['findSessionByDeviceCode']>;
   findSessionByUserCode: Mock<AuthRepository['findSessionByUserCode']>;
   updateSessionStatus: Mock<AuthRepository['updateSessionStatus']>;
+  transitionSessionStatus: Mock<AuthRepository['transitionSessionStatus']>;
   createApiToken: Mock<AuthRepository['createApiToken']>;
   findApiToken: Mock<AuthRepository['findApiToken']>;
   updateApiTokenLastUsed: Mock<AuthRepository['updateApiTokenLastUsed']>;
@@ -27,6 +28,7 @@ describe('AuthService', () => {
       findSessionByDeviceCode: mock.fn<AuthRepository['findSessionByDeviceCode']>(),
       findSessionByUserCode: mock.fn<AuthRepository['findSessionByUserCode']>(),
       updateSessionStatus: mock.fn<AuthRepository['updateSessionStatus']>(),
+      transitionSessionStatus: mock.fn<AuthRepository['transitionSessionStatus']>(async () => true),
       createApiToken: mock.fn<AuthRepository['createApiToken']>(),
       findApiToken: mock.fn<AuthRepository['findApiToken']>(),
       updateApiTokenLastUsed: mock.fn<AuthRepository['updateApiTokenLastUsed']>(),
@@ -181,8 +183,9 @@ describe('AuthService', () => {
       assert.notStrictEqual(createCall.token, result?.token); // Stored token should be hash, result is plain
 
       // Should mark session as CONSUMED
-      assert.deepStrictEqual(mockRepo.updateSessionStatus.mock.calls[0].arguments, [
+      assert.deepStrictEqual(mockRepo.transitionSessionStatus.mock.calls[0].arguments, [
         'session-1',
+        'APPROVED',
         'CONSUMED',
       ]);
     });

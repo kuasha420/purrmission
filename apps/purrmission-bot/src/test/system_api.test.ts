@@ -290,144 +290,38 @@ describe('System API E2E Tests', () => {
       assert.strictEqual(data.error, 'unauthorized');
     });
 
-    it('should return 200 with secrets when requester is the project owner', async () => {
+    it('fails closed without reading values, resolving roles, or mutating approval state', async () => {
       mockValidateToken.fn = async () => pawthyPrincipal('user-owner');
-      mockGetProject.fn = async () => ({ ownerId: 'user-owner', name: 'MyProject' });
-      mockGetEnvironmentById.fn = async () => ({ name: 'Production', resourceId: 'res-1' });
-      mockListFields.fn = async () => [
-        { name: 'DB_PASS', value: 'my-pass' },
-        { name: 'API_SECRET', value: 'my-secret' },
-      ];
-
-      const response = await server.inject({
-        method: 'GET',
-        url: '/api/projects/b0f19c99-d41c-43be-82a8-9d7a96df3222/environments/e0f19c99-d41c-43be-82a8-9d7a96df3222/secrets',
-        headers: {
-          Authorization: 'Bearer valid-token',
-        },
-      });
-      assert.strictEqual(response.statusCode, 200);
-      const data = JSON.parse(response.payload);
-      assert.deepStrictEqual(data.secrets, {
-        DB_PASS: 'my-pass',
-        API_SECRET: 'my-secret',
-      });
-    });
-
-    it('should return 202 pending when approval is required and is currently pending', async () => {
-      mockValidateToken.fn = async () => pawthyPrincipal('user-requester');
-      mockGetProject.fn = async () => ({ ownerId: 'user-owner', name: 'MyProject' });
-      mockGetEnvironmentById.fn = async () => ({ name: 'Production', resourceId: 'res-1' });
-      mockGetMemberRole.fn = async () => null; // not a project member
-      mockIsGuardian.fn = async () => false; // not a guardian
-      mockFindActiveApproval.fn = async () => ({
-        id: 'req-1',
-        status: 'PENDING',
-      });
-
-      const response = await server.inject({
-        method: 'GET',
-        url: '/api/projects/b0f19c99-d41c-43be-82a8-9d7a96df3222/environments/e0f19c99-d41c-43be-82a8-9d7a96df3222/secrets',
-        headers: {
-          Authorization: 'Bearer valid-token',
-        },
-      });
-      assert.strictEqual(response.statusCode, 202);
-      const data = JSON.parse(response.payload);
-      assert.strictEqual(data.status, 'pending');
-      assert.strictEqual(data.requestId, 'req-1');
-    });
-
-    it('should return 200 with secrets only when an exact grant exists', async () => {
-      mockValidateToken.fn = async () => pawthyPrincipal('user-requester');
-      mockGetProject.fn = async () => ({ ownerId: 'user-owner', name: 'MyProject' });
-      mockGetEnvironmentById.fn = async () => ({ name: 'Production', resourceId: 'res-1' });
-      mockGetMemberRole.fn = async () => null;
-      mockIsGuardian.fn = async () => false;
-      mockFindActiveApproval.fn = async () => ({
-        id: 'req-1',
-        status: 'APPROVED',
-      });
-      mockFindActiveGrant.fn = async () => ({
-        id: 'grant-1',
-        requestId: 'req-1',
-        resourceId: 'res-1',
-        requesterId: 'user-requester',
-      });
-      mockListFields.fn = async () => [{ name: 'SECRET_KEY', value: 'approved-value' }];
-
-      const response = await server.inject({
-        method: 'GET',
-        url: '/api/projects/b0f19c99-d41c-43be-82a8-9d7a96df3222/environments/e0f19c99-d41c-43be-82a8-9d7a96df3222/secrets',
-        headers: {
-          Authorization: 'Bearer valid-token',
-        },
-      });
-      assert.strictEqual(response.statusCode, 200);
-      const data = JSON.parse(response.payload);
-      assert.deepStrictEqual(data.secrets, {
-        SECRET_KEY: 'approved-value',
-      });
-    });
-
-    it('should automatically trigger a new approval request and return 202 when no active request exists', async () => {
-      mockValidateToken.fn = async () => pawthyPrincipal('user-requester');
-      mockGetProject.fn = async () => ({ ownerId: 'user-owner', name: 'MyProject' });
-      mockGetEnvironmentById.fn = async () => ({ name: 'Production', resourceId: 'res-1' });
-      mockGetMemberRole.fn = async () => null;
-      mockIsGuardian.fn = async () => false;
-      mockFindActiveApproval.fn = async () => null; // none exists yet
-
-      let createdRequest = false;
-      mockCreateApprovalRequest.fn = async (input: unknown) => {
-        createdRequest = true;
-        assert.strictEqual((input as { resourceId: string }).resourceId, 'res-1');
-        return {
-          success: true,
-          request: {
-            id: 'req-new',
-            status: 'PENDING',
-          },
-          resource: { id: 'res-1', name: 'MyProject:Production' },
-          guardians: [{ discordUserId: 'g-1', role: 'OWNER' }],
-        };
+      let boundaryCalls = 0;
+      mockGetProject.fn = async () => {
+        boundaryCalls += 1;
+        throw new Error('GET must not resolve project-role authority');
+      };
+      mockListFields.fn = async () => {
+        boundaryCalls += 1;
+        throw new Error('GET must not decrypt secret values');
+      };
+      mockCreateApprovalRequest.fn = async () => {
+        boundaryCalls += 1;
+        throw new Error('GET must not create approval state');
+      };
+      mockFindActiveGrant.fn = async () => {
+        boundaryCalls += 1;
+        throw new Error('GET must not consume or resolve grants');
       };
 
       const response = await server.inject({
         method: 'GET',
-        url: '/api/projects/b0f19c99-d41c-43be-82a8-9d7a96df3222/environments/e0f19c99-d41c-43be-82a8-9d7a96df3222/secrets',
+        url: '/api/projects/b0f19c99-d41c-43be-82a8-9d7a96df3222/environments/e0f19c99-d41c-43be-82a8-9d7a96df3222/secrets?grantId=grant-1&keys=DB_PASS',
         headers: {
           Authorization: 'Bearer valid-token',
         },
       });
-      assert.strictEqual(response.statusCode, 202);
+      assert.strictEqual(response.statusCode, 405);
       const data = JSON.parse(response.payload);
-      assert.strictEqual(data.status, 'pending');
-      assert.strictEqual(data.requestId, 'req-new');
-      assert.strictEqual(createdRequest, true);
-    });
-
-    it('should return 401 when access is explicitly denied', async () => {
-      mockValidateToken.fn = async () => pawthyPrincipal('user-requester');
-      mockGetProject.fn = async () => ({ ownerId: 'user-owner', name: 'MyProject' });
-      mockGetEnvironmentById.fn = async () => ({ name: 'Production', resourceId: 'res-1' });
-      mockGetMemberRole.fn = async () => null;
-      mockIsGuardian.fn = async () => false;
-      mockFindActiveApproval.fn = async () => ({
-        id: 'req-1',
-        status: 'DENIED',
-      });
-
-      const response = await server.inject({
-        method: 'GET',
-        url: '/api/projects/b0f19c99-d41c-43be-82a8-9d7a96df3222/environments/e0f19c99-d41c-43be-82a8-9d7a96df3222/secrets',
-        headers: {
-          Authorization: 'Bearer valid-token',
-        },
-      });
-      assert.strictEqual(response.statusCode, 401);
-      const data = JSON.parse(response.payload);
-      assert.strictEqual(data.error, 'unauthorized');
+      assert.strictEqual(data.error, 'method_not_allowed');
+      assert.strictEqual(response.headers.allow, 'PUT');
+      assert.strictEqual(boundaryCalls, 0);
     });
   });
 

@@ -37,6 +37,7 @@ import type {
 } from './repositories.js';
 
 export interface CapabilityRepositories {
+  resources: Pick<ResourceRepository, 'findById'>;
   guardians: Pick<GuardianRepository, 'findByResourceAndUser'>;
   projects: Pick<
     ProjectRepository,
@@ -44,7 +45,7 @@ export interface CapabilityRepositories {
   >;
   approvalRequests: Pick<ApprovalRequestRepository, 'findById'>;
   approvalGrants: Pick<ApprovalGrantRepository, 'findById'>;
-  totp: Pick<TOTPRepository, 'findById'>;
+  totp: Pick<TOTPRepository, 'findById' | 'findMetadataById'>;
 }
 
 export interface EffectiveGuardianRepositories {
@@ -544,7 +545,7 @@ export async function hasCapability(
 
     case 'totp.recovery.read':
       if (context.totpAccountId && repositories.totp && userId) {
-        const totpAcc = await repositories.totp.findById(context.totpAccountId);
+        const totpAcc = await repositories.totp.findMetadataById(context.totpAccountId);
         if (totpAcc && totpAcc.ownerDiscordUserId === userId) {
           return allow('OWNER', 'Personal TOTP Owner can view recovery key', ['TOTP_OWNER']);
         }
@@ -556,11 +557,31 @@ export async function hasCapability(
 
     case 'totp.link.manage':
       if (isResourceOwner) return allow('OWNER', 'Resource Owner can manage TOTP link');
+      if (
+        context.totpLinkOperation === 'UNLINK' &&
+        context.resourceId &&
+        context.totpAccountId &&
+        repositories.resources &&
+        repositories.totp &&
+        userId
+      ) {
+        const linkedResource = await repositories.resources.findById(context.resourceId);
+        if (linkedResource?.totpAccountId !== context.totpAccountId) {
+          return deny(
+            'TARGET_SCOPE_MISMATCH',
+            'TOTP account is not linked to the requested Resource.'
+          );
+        }
+        const totpAcc = await repositories.totp.findMetadataById(context.totpAccountId);
+        if (totpAcc?.ownerDiscordUserId === userId) {
+          return allow('OWNER', 'TOTP custody owner can unlink their account', ['TOTP_OWNER']);
+        }
+      }
       return deny('NO_ROLE', 'Only Resource Owner can manage TOTP link');
 
     case 'totp.account.manage':
       if (context.totpAccountId && repositories.totp && userId) {
-        const totpAcc = await repositories.totp.findById(context.totpAccountId);
+        const totpAcc = await repositories.totp.findMetadataById(context.totpAccountId);
         if (totpAcc && totpAcc.ownerDiscordUserId === userId) {
           return allow('OWNER', 'Personal TOTP Owner can manage account', ['TOTP_OWNER']);
         }

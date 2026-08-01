@@ -141,6 +141,11 @@ Purrmission exposes seven top-level Discord slash commands:
 | Unlink Resource 2FA | `/resource 2fa unlink resource-id:<id>`                        |
 | Get Resource 2FA    | `/resource 2fa get resource-id:<id>`                           |
 
+> **Prerequisite hardening:** New Resource↔TOTP links and delegated TOTP reveals currently fail
+> closed. They remain disabled until #120 supplies authenticated, seed-version-bound custody
+> consent and #122 supplies request-bound conditional grant issuance. An `APPROVED` request records
+> a decision only; it is not reveal authority.
+
 ### `/guardian`
 
 | Action          | Command                                           |
@@ -207,6 +212,12 @@ pnpm discord:deploy-commands
 # 7. Start the bot
 pnpm dev:purrmission
 ```
+
+Always deploy migrations through `pnpm prisma:deploy`. It runs the required Guardian/owner
+reconciliation before Prisma applies the published Guardian uniqueness migration. Calling raw
+`prisma migrate deploy` bypasses that safety preflight and is unsupported. A fresh empty database
+is detected explicitly and skips reconciliation; an initialized database missing prerequisite
+tables fails closed.
 
 ### Environment Variables
 
@@ -285,17 +296,17 @@ purrmission/
 
 ### Scripts
 
-| Command                        | Description                   |
-| ------------------------------ | ----------------------------- |
-| `pnpm dev:purrmission`         | Start bot in development mode |
-| `pnpm build`                   | Build all packages            |
-| `pnpm test`                    | Run tests                     |
-| `pnpm lint`                    | Run ESLint                    |
-| `pnpm format`                  | Format code with Prettier     |
-| `pnpm discord:deploy-commands` | Register slash commands       |
-| `pnpm prisma:generate`         | Generate Prisma Client        |
-| `pnpm prisma:deploy`           | Apply database migrations     |
-| `pnpm prisma:studio`           | Open Prisma Studio            |
+| Command                        | Description                                         |
+| ------------------------------ | --------------------------------------------------- |
+| `pnpm dev:purrmission`         | Start bot in development mode                       |
+| `pnpm build`                   | Build all packages                                  |
+| `pnpm test`                    | Run tests                                           |
+| `pnpm lint`                    | Run ESLint                                          |
+| `pnpm format`                  | Format code with Prettier                           |
+| `pnpm discord:deploy-commands` | Register slash commands                             |
+| `pnpm prisma:generate`         | Generate Prisma Client                              |
+| `pnpm prisma:deploy`           | Reconcile RBAC data, then apply database migrations |
+| `pnpm prisma:studio`           | Open Prisma Studio                                  |
 
 ---
 

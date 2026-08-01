@@ -47,6 +47,10 @@ Manage shared and personal 2FA accounts directly from Discord.
 | `/resource 2fa unlink`    | Remove a linked 2FA account          |
 | `/resource 2fa get`       | Retrieve the linked 2FA code         |
 
+New Resource↔TOTP links and delegated TOTP reveals currently fail closed pending the authenticated,
+seed-version-bound consent model in #120 and request-bound conditional grants in #122. Approval
+records decision state only and does not mint reveal authority.
+
 ### 🛡️ Guardian Management
 
 | Command / Subcommand                               | Description                  |
@@ -123,7 +127,7 @@ Uses Prisma with SQLite by default. From project root:
 
 ```bash
 pnpm prisma:studio    # View data
-pnpm prisma:deploy    # Apply migrations
+pnpm prisma:deploy    # Reconcile RBAC data, then apply migrations (required deployment path)
 ```
 
 ---

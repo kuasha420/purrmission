@@ -8,6 +8,7 @@
  */
 
 import crypto from 'node:crypto';
+import type { Prisma } from '@prisma/client';
 import {
   ApprovalRequest,
   Resource,
@@ -17,17 +18,19 @@ import {
   ResourceFieldMetadata,
   TOTPLinkConsent,
   TOTPDelegationConsent,
-  TOTPLinkEnvelope,
   Credential,
   ApprovalGrant,
   Principal,
   ApprovalDecision,
   DecisionResult,
+  Capability,
+  CapabilityContext,
+  EvaluationResult,
 } from './models.js';
 import type { Repositories } from './repositories.js';
 import { logger } from '../logging/logger.js';
 import { AuditService } from './audit.js';
-import { AuthService, AccessDeniedError } from './auth.js';
+import { AuthService, AccessDeniedError, ForbiddenError } from './auth.js';
 import { ProjectService } from './project.js';
 import { ResourceNotFoundError, DuplicateError, ValidationError } from './errors.js';
 import {
@@ -89,7 +92,7 @@ export interface CreateApprovalRequestResult {
  * Application services for the Purrmission system.
  */
 export class ApprovalService {
-  private deps: ServiceDependencies;
+  readonly deps: ServiceDependencies;
 
   constructor(deps: ServiceDependencies) {
     this.deps = deps;
@@ -341,35 +344,8 @@ export class ApprovalService {
           tx
         );
 
-        if (newStatus === 'APPROVED') {
-          if (repositories.approvalGrants) {
-            // Grant expires at the earlier of: 15 minutes from now, or the request's expiry
-            const defaultGrantDurationMs = 15 * 60 * 1000; // 15 minutes
-            const requestExpiresTime = request.expiresAt
-              ? new Date(request.expiresAt).getTime()
-              : Date.now() + defaultGrantDurationMs;
-            const grantExpiresAt = new Date(
-              Math.min(Date.now() + defaultGrantDurationMs, requestExpiresTime)
-            );
-
-            await repositories.approvalGrants.create(
-              {
-                requestId: request.id,
-                resourceId: request.resourceId,
-                requesterId: request.requesterId,
-                requesterType: request.requesterType,
-                authKind: request.authKind,
-                action: request.action,
-                targetKey: request.targetKey,
-                targetVersion: request.targetVersion,
-                policyVersion: request.policyVersion,
-                constraints: request.constraints || null,
-                expiresAt: grantExpiresAt,
-              },
-              tx
-            );
-          }
-        }
+        // APPROVED is decision state, not reveal authority. The conditional transition and
+        // request-bound immutable grant model lands in #122; #117 deliberately mints no grant.
 
         if (this.deps.audit) {
           await this.deps.audit.log(
@@ -458,9 +434,6 @@ export class ApprovalService {
     action: string = 'resource.view',
     targetKey: string | null = null
   ): Promise<ApprovalRequest | null> {
-    if (action === 'resource.view' && targetKey === null) {
-      return this.deps.repositories.approvalRequests.findActiveByRequester(resourceId, requesterId);
-    }
     return this.deps.repositories.approvalRequests.findActiveByRequester(
       resourceId,
       requesterId,
@@ -576,7 +549,7 @@ export class ApprovalService {
  * Service for managing resources.
  */
 export class ResourceService {
-  private deps: ServiceDependencies;
+  readonly deps: ServiceDependencies;
 
   constructor(deps: ServiceDependencies) {
     this.deps = deps;
@@ -603,6 +576,21 @@ export class ResourceService {
    */
   async isGuardian(resourceId: string, userId: string): Promise<boolean> {
     return isEffectiveGuardian(this.deps.repositories, resourceId, userId);
+  }
+
+  /**
+   * Evaluate one exact capability against the authenticated principal and target.
+   *
+   * Legacy adapters use this narrow bridge while their full #128/#129 cutovers remain deferred.
+   * It keeps role interpretation in the domain evaluator instead of recreating broad Guardian
+   * booleans at each transport boundary.
+   */
+  async evaluateCapability(
+    principal: Principal,
+    capability: Capability,
+    context: CapabilityContext
+  ): Promise<EvaluationResult> {
+    return hasCapability(this.deps.repositories, principal, capability, context);
   }
 
   /**
@@ -754,10 +742,16 @@ export class ResourceService {
     resourceId: string,
     actorId: string
   ): Promise<{ success: boolean; guardians?: Guardian[]; error?: string }> {
-    // Verify Access
-    const hasAccess = await this.isGuardian(resourceId, actorId);
-    if (!hasAccess) {
-      return { success: false, error: 'Access denied. You must be a guardian to list guardians.' };
+    const decision = await this.evaluateCapability(
+      createDiscordPrincipal(actorId),
+      'guardian.view',
+      { resourceId }
+    );
+    if (!decision.allowed) {
+      return {
+        success: false,
+        error: 'Access denied. Only the resource owner may list Guardian assignments.',
+      };
     }
 
     const guardians = await getEffectiveGuardians(this.deps.repositories, resourceId);
@@ -943,10 +937,13 @@ export class ResourceService {
   async listApiKeys(resourceId: string, actorId: string): Promise<Credential[]> {
     const { repositories } = this.deps;
 
-    // Verify Access (actor must be resource owner or guardian)
-    const hasAccess = await this.isGuardian(resourceId, actorId);
-    if (!hasAccess) {
-      throw new Error('Access denied. You must be a guardian or owner to list API keys.');
+    const decision = await this.evaluateCapability(
+      createDiscordPrincipal(actorId),
+      'resource.api-key.list',
+      { resourceId }
+    );
+    if (!decision.allowed) {
+      throw new Error('Access denied. Only the resource owner may list API keys.');
     }
 
     const creds = await repositories.credentials.findBySubject(resourceId);
@@ -964,110 +961,24 @@ export class ResourceService {
    * Link a TOTP account to a resource using a one-time consent token.
    */
   async linkTOTPAccount(
-    resourceId: string,
-    totpAccountId: string,
-    actorId: string,
-    consentId: string
+    _resourceId: string,
+    _totpAccountId: string,
+    _principal: Principal | string,
+    _consentId: string
   ): Promise<void> {
-    const { repositories } = this.deps;
-
-    // Verify Resource Authority (actor must be resource owner)
-    const hasOwnerAccess = await isEffectiveOwner(repositories, resourceId, actorId);
-    if (!hasOwnerAccess) {
-      throw new Error('Only the resource owner can link a TOTP account.');
-    }
-
-    // Verify resource exists
-    const resource = await repositories.resources.findById(resourceId);
-    if (!resource) {
-      throw new Error(`Resource not found: ${resourceId}`);
-    }
-
-    // Verify TOTP account exists
-    const totpAccount = await repositories.totp.findById(totpAccountId);
-    if (!totpAccount) {
-      throw new Error(`TOTP account not found: ${totpAccountId}`);
-    }
-
-    // Retrieve and validate consent
-    const consent = await repositories.totp.findLinkConsentById(consentId);
-    if (!consent) {
-      throw new Error(`Link consent not found: ${consentId}`);
-    }
-    if (consent.accountId !== totpAccountId || consent.resourceId !== resourceId) {
-      throw new Error('Link consent parameters mismatch.');
-    }
-    if (consent.expiresAt < new Date()) {
-      throw new Error('Link consent has expired.');
-    }
-    if (consent.usedAt) {
-      throw new Error('Link consent has already been used.');
-    }
-
-    // Check if TOTP account is already linked to another resource
-    if (resource.totpAccountId && resource.totpAccountId !== totpAccountId) {
-      throw new Error('Resource already has a linked 2FA account. Unlink it first.');
-    }
-
-    const delegationEnvelope: TOTPLinkEnvelope = {
-      consentId: consent.id,
-      delegationPolicy: consent.delegationPolicy,
-      accountOwnerDiscordUserId: consent.ownerDiscordUserId,
-      accountVersion: totpAccount.version,
-      linkVersion: crypto.randomUUID(),
-      createdAt: new Date(),
-    };
-
-    // Update the resource with the linked TOTP account ID
-    const prisma = getPrismaClient();
-    try {
-      await prisma.$transaction(async (tx) => {
-        await repositories.totp.useLinkConsent(consentId, tx);
-        await repositories.resources.update(
-          resourceId,
-          {
-            totpAccountId,
-            totpDelegationEnvelope: delegationEnvelope,
-            version: delegationEnvelope.linkVersion,
-          },
-          tx
-        );
-
-        if (this.deps.audit) {
-          await this.deps.audit.log(
-            {
-              eventType: 'TOTP_LINK',
-              outcomeCode: 'SUCCESS',
-              actorType: 'DISCORD_USER',
-              actorId,
-              authKind: 'DISCORD',
-              resourceId,
-              payload: { totpAccountId, consentId },
-            },
-            tx
-          );
-        }
-      });
-    } catch (err) {
-      logger.error('Failed to link TOTP account atomically', {
-        resourceId,
-        totpAccountId,
-        error: err instanceof Error ? err.message : String(err),
-      });
-      throw err; // Fail closed
-    }
-
-    logger.info('Linked TOTP account to resource', {
-      resourceId,
-      totpAccountId,
-    });
+    throw new ForbiddenError(
+      'TOTP linking is deferred until authenticated, seed-version-bound custody consent lands in #120.'
+    );
   }
 
   /**
    * Unlink TOTP account from a resource.
    */
-  async unlinkTOTPAccount(resourceId: string, actorId: string): Promise<void> {
+  async unlinkTOTPAccount(resourceId: string, principal: Principal | string): Promise<void> {
     const { repositories } = this.deps;
+    const actorPrincipal =
+      typeof principal === 'string' ? createDiscordPrincipal(principal) : principal;
+    const actorId = actorPrincipal.subjectId;
 
     // Verify resource exists
     const resource = await repositories.resources.findById(resourceId);
@@ -1079,20 +990,13 @@ export class ResourceService {
       throw new Error('Resource is not linked to any TOTP account.');
     }
 
-    // Verify Actor is Resource Owner or TOTP Account Custody Owner
-    const isResourceOwner = await isEffectiveOwner(repositories, resourceId, actorId);
-    let isTotpOwner = false;
-    if (resource.totpAccountId) {
-      const totpAcc = await repositories.totp.findById(resource.totpAccountId);
-      if (totpAcc && totpAcc.ownerDiscordUserId === actorId) {
-        isTotpOwner = true;
-      }
-    }
-
-    if (!isResourceOwner && !isTotpOwner) {
-      throw new Error(
-        'Access denied. Only the resource owner or the TOTP account owner can unlink.'
-      );
+    const unlinkDecision = await this.evaluateCapability(actorPrincipal, 'totp.link.manage', {
+      resourceId,
+      totpAccountId: resource.totpAccountId,
+      totpLinkOperation: 'UNLINK',
+    });
+    if (!unlinkDecision.allowed) {
+      throw new ForbiddenError(unlinkDecision.safeExplanation);
     }
 
     // Update the resource to remove the linked TOTP account
@@ -1151,76 +1055,29 @@ export class ResourceService {
    * Create a link consent for a TOTP account.
    */
   async createTOTPLinkConsent(
-    accountId: string,
-    resourceId: string,
-    ownerDiscordUserId: string,
-    delegationPolicy: Record<string, unknown>
+    _accountId: string,
+    _resourceId: string,
+    _ownerDiscordUserId: string,
+    _delegationPolicy: Record<string, unknown>
   ): Promise<TOTPLinkConsent> {
-    const { repositories } = this.deps;
-    const acc = await repositories.totp.findById(accountId);
-    if (!acc || acc.ownerDiscordUserId !== ownerDiscordUserId) {
-      throw new Error('Only the TOTP account owner can create link consent.');
-    }
-    const expiresAt = new Date(Date.now() + 10 * 60 * 1000); // 10 minutes expiry
-    return repositories.totp.createLinkConsent({
-      accountId,
-      resourceId,
-      ownerDiscordUserId,
-      delegationPolicy,
-      expiresAt,
-    });
+    throw new ForbiddenError(
+      'TOTP link consent is deferred until authenticated, seed-version-bound custody consent lands in #120.'
+    );
   }
 
   /**
    * Create a delegation consent token.
    */
   async createTOTPDelegationConsent(
-    resourceId: string,
-    totpAccountId: string,
-    requesterId: string,
-    operation: string,
-    authFamily: string
+    _resourceId: string,
+    _totpAccountId: string,
+    _requesterId: string,
+    _operation: string,
+    _authFamily: string
   ): Promise<TOTPDelegationConsent> {
-    const { repositories } = this.deps;
-
-    const resource = await repositories.resources.findById(resourceId);
-    if (!resource || resource.totpAccountId !== totpAccountId) {
-      throw new Error('Invalid resource or linked TOTP account.');
-    }
-
-    const envelope = resource.totpDelegationEnvelope;
-    if (!envelope) {
-      throw new Error('No delegation policy found on this link.');
-    }
-
-    const totpAccount = await repositories.totp.findById(totpAccountId);
-    if (!totpAccount || totpAccount.version !== envelope.accountVersion) {
-      throw new Error('Stale link delegation envelope. Seed has rotated.');
-    }
-
-    const policy = envelope.delegationPolicy;
-    if (policy.allowedOperations && Array.isArray(policy.allowedOperations)) {
-      if (!policy.allowedOperations.includes(operation)) {
-        throw new Error(`Operation ${operation} is not permitted by the delegation policy.`);
-      }
-    }
-    if (policy.allowedRequesters && Array.isArray(policy.allowedRequesters)) {
-      if (!policy.allowedRequesters.includes(requesterId)) {
-        throw new Error(`Requester ${requesterId} is not permitted by the delegation policy.`);
-      }
-    }
-
-    const expiresAt = new Date(Date.now() + 5 * 60 * 1000); // 5 minutes short-lived
-    return repositories.totp.createDelegationConsent({
-      resourceId,
-      totpAccountId,
-      operation,
-      requesterId,
-      authFamily,
-      accountVersion: totpAccount.version,
-      linkVersion: envelope.linkVersion,
-      expiresAt,
-    });
+    throw new ForbiddenError(
+      'TOTP delegation consent is deferred until request-bound authenticated custody consent lands in #120/#122.'
+    );
   }
 
   /**
@@ -1250,88 +1107,24 @@ export class ResourceService {
       throw new Error('No 2FA account linked to this resource.');
     }
 
-    const account = await repositories.totp.findById(resource.totpAccountId);
-    if (!account) {
+    const accountMetadata = await repositories.totp.findMetadataById(resource.totpAccountId);
+    if (!accountMetadata) {
       throw new Error('TOTP account not found.');
     }
 
     if (!authorized) {
-      // Delegated access! Must consume ApprovalGrant AND TOTPDelegationConsent atomically.
-      const requesterId = userPrincipal.subjectId;
+      void grantId;
+      void consentId;
+      throw new AccessDeniedError(
+        'Delegated TOTP reveal is deferred until request-bound consent and grant authority lands in #120/#122.'
+      );
+    }
 
-      let resolvedGrantId = grantId;
-      if (!resolvedGrantId) {
-        const activeGrant = await repositories.approvalGrants.findActiveUnconsumed(
-          resourceId,
-          requesterId,
-          'totp.code.read',
-          null
-        );
-        if (!activeGrant) {
-          throw new AccessDeniedError('Access denied. No valid approval grant found.');
-        }
-        resolvedGrantId = activeGrant.id;
-      }
-
-      let resolvedConsentId = consentId;
-      if (!resolvedConsentId) {
-        const activeConsent = await repositories.totp.findActiveDelegationConsent(
-          resourceId,
-          requesterId,
-          'totp.code.read'
-        );
-        if (!activeConsent) {
-          throw new AccessDeniedError(
-            'Access denied. A current unconsumed delegation consent from the seed owner is required.'
-          );
-        }
-        resolvedConsentId = activeConsent.id;
-      }
-
-      try {
-        await this.runTransaction(async (tx) => {
-          // Retrieve and re-verify consent
-          const consent = await repositories.totp.findDelegationConsentById(resolvedConsentId!);
-          if (!consent || consent.usedAt || consent.expiresAt < new Date()) {
-            throw new AccessDeniedError('Invalid or expired delegation consent.');
-          }
-
-          // Revalidate target versions
-          if (consent.accountVersion !== account.version) {
-            throw new AccessDeniedError(
-              'TOTP account seed version has changed. Consent has been invalidated.'
-            );
-          }
-
-          if (consent.linkVersion !== resource.version) {
-            throw new AccessDeniedError(
-              'Resource link state version has changed. Consent has been invalidated.'
-            );
-          }
-
-          // Mark consent as used
-          await repositories.totp.useDelegationConsent(consent.id, tx);
-
-          // Mark grant as consumed
-          if (this.deps.approval) {
-            await this.deps.approval.consumeGrant(
-              resolvedGrantId!,
-              userPrincipal,
-              'totp.code.read',
-              resource.version,
-              resource.version,
-              tx
-            );
-          }
-        });
-      } catch (err) {
-        logger.error('Failed to consume delegated TOTP code grant and consent atomically', {
-          resourceId,
-          requesterId,
-          error: err instanceof Error ? err.message : String(err),
-        });
-        throw err; // Fail closed
-      }
+    // Load value-bearing custody data only after authorization and, for delegated access, after
+    // both exact one-time authorities have been consumed atomically.
+    const account = await repositories.totp.findById(resource.totpAccountId);
+    if (!account || account.version !== accountMetadata.version) {
+      throw new AccessDeniedError('TOTP account changed during authorization.');
     }
 
     const code = generateTOTPCode(account);
