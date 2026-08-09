@@ -124,4 +124,28 @@ describe('Project API', () => {
     });
     assert.strictEqual(response.statusCode, 401);
   });
+
+  it('rejects unsafe correlation and causation headers before routing', async () => {
+    const unsafeCorrelation = await server.inject({
+      method: 'GET',
+      url: '/api/projects',
+      headers: {
+        Authorization: `Bearer ${validToken}`,
+        'x-correlation-id': 'unsafe value',
+      },
+    });
+    assert.strictEqual(unsafeCorrelation.statusCode, 400);
+    assert.deepEqual(unsafeCorrelation.json(), { error: 'Invalid x-correlation-id header' });
+
+    const unsafeCausation = await server.inject({
+      method: 'GET',
+      url: '/api/projects',
+      headers: {
+        Authorization: `Bearer ${validToken}`,
+        'x-causation-id': 'unsafe value',
+      },
+    });
+    assert.strictEqual(unsafeCausation.statusCode, 400);
+    assert.deepEqual(unsafeCausation.json(), { error: 'Invalid x-causation-id header' });
+  });
 });

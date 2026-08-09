@@ -3,6 +3,8 @@ import assert from 'node:assert';
 import { ProjectService } from './project.js';
 import { ProjectRepository } from './repositories.js';
 import { Project, Environment } from './models.js';
+import { AuditService } from './audit.js';
+import { createInMemoryRepositories } from './repositories.mock.js';
 
 type ResourceServiceDependency = ConstructorParameters<typeof ProjectService>[1];
 type MockedProjectRepository = {
@@ -39,9 +41,12 @@ describe('ProjectService', () => {
       createResource: createResourceMock,
     };
 
+    const repositories = createInMemoryRepositories();
     projectService = new ProjectService(
       projectRepo as unknown as ProjectRepository,
-      resourceService
+      resourceService,
+      new AuditService({ repositories }),
+      repositories.transaction
     );
   });
 
@@ -50,6 +55,7 @@ describe('ProjectService', () => {
     const created: Project = {
       ...input,
       id: 'p-1',
+      policyVersion: 'v1',
       description: null,
       policyVersion: 'policy-v1',
       createdAt: new Date(),
@@ -61,7 +67,7 @@ describe('ProjectService', () => {
 
     assert.deepStrictEqual(result, created);
     assert.strictEqual(projectRepo.createProject.mock.callCount(), 1);
-    assert.deepStrictEqual(projectRepo.createProject.mock.calls[0].arguments, [input]);
+    assert.deepStrictEqual(projectRepo.createProject.mock.calls[0].arguments, [input, {}]);
   });
 
   it('should list projects by owner', async () => {
@@ -71,6 +77,7 @@ describe('ProjectService', () => {
         id: 'p-1',
         name: 'P1',
         ownerId: userId,
+        policyVersion: 'v1',
         description: null,
         policyVersion: 'policy-v1',
         createdAt: new Date(),
@@ -92,6 +99,7 @@ describe('ProjectService', () => {
       id: projectId,
       name: 'P1',
       ownerId: 'user-1',
+      policyVersion: 'v1',
       description: null,
       policyVersion: 'policy-v1',
       createdAt: new Date(),
@@ -111,6 +119,7 @@ describe('ProjectService', () => {
       id: 'p-1',
       name: 'My Project',
       ownerId: 'user-1',
+      policyVersion: 'v1',
       description: null,
       policyVersion: 'policy-v1',
       createdAt: new Date(),

@@ -22,11 +22,22 @@ export async function handleGet2FA(
     });
 
     await context.services.audit.log({
+      eventFamily: 'AUTHORIZATION',
       eventType: 'TOTP_ACCESS_THROTTLED',
+      surface: 'DISCORD',
+      operation: 'totp.get',
       outcomeCode: 'DENIED',
+      capability: getBackup ? 'totp.recovery.read' : 'totp.code.read',
+      decisionCode: 'DENY',
+      reasonCode: 'INSUFFICIENT_SCOPES',
+      authoritySources: [],
+      targetType: 'TOTP_ACCOUNT',
+      targetId: accountName,
       actorType: 'DISCORD_USER',
+      principalId: `discord-interaction:${interaction.id}`,
       actorId: requesterId,
       authKind: 'DISCORD',
+      correlationId: interaction.id,
       payload: { reason: 'Rate limit exceeded', accountName },
     });
     return;
@@ -53,11 +64,22 @@ export async function handleGet2FA(
     }
 
     await context.services.audit.log({
+      eventFamily: 'TOTP_LIFECYCLE',
       eventType: 'TOTP_RECOVERY_REVEAL',
+      surface: 'DISCORD',
+      operation: 'totp.recovery.reveal',
       outcomeCode: 'SUCCESS',
+      capability: 'totp.recovery.read',
+      decisionCode: 'ALLOW',
+      reasonCode: 'AUTHENTICATED_SUBJECT',
+      authoritySources: ['AUTHENTICATED_SUBJECT'],
+      targetType: 'TOTP_ACCOUNT',
+      targetId: account.id,
       actorType: 'DISCORD_USER',
+      principalId: `discord-interaction:${interaction.id}`,
       actorId: requesterId,
       authKind: 'DISCORD',
+      correlationId: interaction.id,
       payload: { totpAccountId: account.id },
     });
 
@@ -80,11 +102,22 @@ export async function handleGet2FA(
   const code = generateTOTPCode(account);
 
   await context.services.audit.log({
+    eventFamily: 'TOTP_LIFECYCLE',
     eventType: 'TOTP_CODE_REVEAL',
+    surface: 'DISCORD',
+    operation: 'totp.code.reveal',
     outcomeCode: 'SUCCESS',
+    capability: 'totp.code.read',
+    decisionCode: 'ALLOW',
+    reasonCode: 'AUTHENTICATED_SUBJECT',
+    authoritySources: ['AUTHENTICATED_SUBJECT'],
+    targetType: 'TOTP_ACCOUNT',
+    targetId: account.id,
     actorType: 'DISCORD_USER',
+    principalId: `discord-interaction:${interaction.id}`,
     actorId: requesterId,
     authKind: 'DISCORD',
+    correlationId: interaction.id,
     payload: { totpAccountId: account.id },
   });
 

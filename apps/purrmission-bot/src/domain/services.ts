@@ -29,7 +29,7 @@ import {
 } from './models.js';
 import type { Repositories } from './repositories.js';
 import { logger } from '../logging/logger.js';
-import { AuditService } from './audit.js';
+import { AuditService, buildOutboxEvent } from './audit.js';
 import { AuthService, AccessDeniedError, ForbiddenError } from './auth.js';
 import { ProjectService } from './project.js';
 import { ResourceNotFoundError, DuplicateError, ValidationError } from './errors.js';
@@ -39,19 +39,19 @@ import {
   isEffectiveOwner,
   hasCapability,
 } from './policy.js';
-import { createDiscordPrincipal } from './principal.js';
-import { getPrismaClient } from '../infra/prismaClient.js';
+import { createDiscordPrincipal, validatePrincipal } from './principal.js';
 import { generateTOTPCode } from './totp.js';
 import { computeKeyedDigest, deterministicUUID } from './crypto.js';
 import { DomainPorts } from './ports.js';
 import { DomainPortsImpl } from './ports_impl.js';
+import { correlationStorage } from '../logging/correlationContext.js';
 
 /**
  * Service dependencies.
  */
 export interface ServiceDependencies {
   repositories: Repositories;
-  audit?: AuditService; // Optional to avoid circular dep during creation if not careful, but intended to be present
+  audit: AuditService;
   approval?: ApprovalService;
 }
 
@@ -63,6 +63,7 @@ export interface ServiceDependencies {
  */
 export interface CreateApprovalRequestInput {
   resourceId: string;
+  principal?: Principal;
   context?: Record<string, unknown>;
   callbackUrl?: string;
   expiresInMs?: number;
@@ -93,18 +94,18 @@ export interface CreateApprovalRequestResult {
  */
 export class ApprovalService {
   readonly deps: ServiceDependencies;
+  private readonly audit: AuditService;
 
   constructor(deps: ServiceDependencies) {
+    if (!deps.audit) throw new TypeError('ApprovalService requires an audit dependency.');
     this.deps = deps;
+    this.audit = deps.audit;
   }
 
-  private async runTransaction<T>(callback: (tx: any) => Promise<T>): Promise<T> {
-    const isMock = this.deps.repositories.resources.constructor.name.includes('InMemory');
-    if (isMock) {
-      return callback(undefined);
-    }
-    const prisma = getPrismaClient();
-    return prisma.$transaction(callback);
+  private async runTransaction<T>(
+    callback: (tx: Prisma.TransactionClient) => Promise<T>
+  ): Promise<T> {
+    return this.deps.repositories.transaction(callback);
   }
 
   /**
@@ -200,37 +201,87 @@ export class ApprovalService {
           tx
         );
 
-        if (this.deps.audit) {
-          await this.deps.audit.log(
-            {
-              eventType: 'REQUEST_CREATE',
-              outcomeCode: 'SUCCESS',
-              actorType: requesterId !== 'legacy' ? requesterType : 'DISCORD_USER',
-              actorId: requesterId,
-              authKind,
-              resourceId: input.resourceId,
-              requestId: req.id,
-              payload: {
-                action,
-                targetKey,
-                targetVersion,
-                policyVersion,
-                expiresAt: expiresAt.toISOString(),
-              },
+        await this.audit.log(
+          {
+            eventFamily: 'REQUEST_GRANT_LIFECYCLE',
+            eventType: 'REQUEST_CREATE',
+            surface: 'DOMAIN',
+            operation: 'request.create',
+            outcomeCode: 'SUCCESS',
+            capability: 'request.create',
+            decisionCode: 'ALLOW',
+            reasonCode: 'AUTHENTICATED_SUBJECT',
+            authoritySources: ['AUTHENTICATED_SUBJECT'],
+            targetType: 'APPROVAL_REQUEST',
+            targetId: req.id,
+            actorType:
+              input.principal?.type ??
+              (authKind === 'API_KEY'
+                ? 'RESOURCE_API_KEY'
+                : requesterType === 'PAWTHY_TOKEN'
+                  ? 'PAWTHY_TOKEN'
+                  : requesterType === 'SERVICE'
+                    ? 'SERVICE'
+                    : 'DISCORD_USER'),
+            principalId: input.principal?.id ?? `legacy-${authKind}:${requesterId}`,
+            actorId: input.principal?.subjectId ?? requesterId,
+            authKind:
+              input.principal?.authKind ??
+              (authKind === 'PAWTHY'
+                ? 'PAWTHY'
+                : authKind === 'API_KEY'
+                  ? 'API_KEY'
+                  : authKind === 'SERVICE'
+                    ? 'SERVICE'
+                    : 'DISCORD'),
+            resourceId: input.resourceId,
+            requestId: req.id,
+            correlationId: input.principal?.correlationId,
+            payload: {
+              action,
+              targetKey,
+              targetVersion,
+              policyVersion,
+              expiresAt: expiresAt.toISOString(),
             },
-            tx
-          );
-        }
+          },
+          tx
+        );
 
         // Enqueue Outbox event to notify guardians deterministically
-        await repositories.outbox.create(
+        const delivery = buildOutboxEvent({
+          id: deterministicUUID(req.id + '_REQUEST_CREATED'),
+          eventType: 'REQUEST_CREATED',
+          resourceId: input.resourceId,
+          requestId: req.id,
+          causationId: req.id,
+          payload: {
+            requestId: req.id,
+            resourceId: input.resourceId,
+          },
+        });
+        await repositories.outbox.create(delivery, tx);
+        await this.audit.log(
           {
-            id: deterministicUUID(req.id + '_REQUEST_CREATED'),
-            eventType: 'REQUEST_CREATED',
-            payload: {
-              requestId: req.id,
-              resourceId: input.resourceId,
-            },
+            eventFamily: 'DELIVERY',
+            eventType: 'DELIVERY_ENQUEUE',
+            surface: 'DOMAIN',
+            operation: 'delivery.guardian.enqueue',
+            outcomeCode: 'QUEUED',
+            decisionCode: 'ALLOW',
+            reasonCode: 'AUTHENTICATED_SUBJECT',
+            authoritySources: ['AUTHENTICATED_SUBJECT'],
+            targetType: 'DELIVERY',
+            targetId: delivery.id,
+            actorType: input.principal?.type ?? 'DISCORD_USER',
+            principalId: input.principal?.id ?? `legacy-${authKind}:${requesterId}`,
+            actorId: input.principal?.subjectId ?? requesterId,
+            authKind: input.principal?.authKind ?? 'DISCORD',
+            resourceId: input.resourceId,
+            requestId: req.id,
+            correlationId: delivery.correlationId,
+            causationId: delivery.causationId,
+            payload: { deliveryType: 'REQUEST_CREATED' },
           },
           tx
         );
@@ -296,7 +347,31 @@ export class ApprovalService {
 
     // Check if request has expired
     if (request.expiresAt < new Date()) {
-      await repositories.approvalRequests.updateStatus(requestId, 'EXPIRED');
+      await this.runTransaction(async (tx) => {
+        await repositories.approvalRequests.updateStatus(requestId, 'EXPIRED', undefined, tx);
+        await this.audit.log(
+          {
+            eventFamily: 'REQUEST_GRANT_LIFECYCLE',
+            eventType: 'REQUEST_EXPIRE',
+            surface: correlationStorage.getStore()?.surface ?? 'DOMAIN',
+            operation: 'request.expire',
+            outcomeCode: 'SUCCESS',
+            decisionCode: 'ALLOW',
+            reasonCode: 'SERVICE',
+            authoritySources: [],
+            targetType: 'APPROVAL_REQUEST',
+            targetId: request.id,
+            actorType: principal.type,
+            principalId: principal.id,
+            actorId: principal.subjectId,
+            authKind: principal.authKind,
+            resourceId: request.resourceId,
+            requestId: request.id,
+            payload: {},
+          },
+          tx
+        );
+      });
       return {
         success: false,
         error: 'Request has expired',
@@ -309,6 +384,26 @@ export class ApprovalService {
       resourceId: request.resourceId,
     });
     if (!authorization.allowed) {
+      await this.audit.log({
+        eventFamily: 'AUTHORIZATION',
+        eventType: 'AUTHORIZATION_DECISION',
+        surface: 'DOMAIN',
+        operation: 'request.decide.authorize',
+        outcomeCode: 'DENIED',
+        capability: 'request.decide',
+        decisionCode: authorization.decisionCode,
+        reasonCode: authorization.reasonCode,
+        authoritySources: authorization.authoritySources,
+        targetType: 'APPROVAL_REQUEST',
+        targetId: request.id,
+        actorType: principal.type,
+        principalId: principal.id,
+        actorId: principal.subjectId,
+        authKind: principal.authKind,
+        resourceId: request.resourceId,
+        requestId: request.id,
+        payload: {},
+      });
       if (authorization.reasonCode === 'SELF_APPROVAL_FORBIDDEN') {
         logger.warn('Self-approval rejected', {
           requestId,
@@ -337,6 +432,29 @@ export class ApprovalService {
 
     try {
       await this.runTransaction(async (tx) => {
+        await this.audit.log(
+          {
+            eventFamily: 'AUTHORIZATION',
+            eventType: 'AUTHORIZATION_DECISION',
+            surface: 'DOMAIN',
+            operation: 'request.decide.authorize',
+            outcomeCode: 'SUCCESS',
+            capability: 'request.decide',
+            decisionCode: authorization.decisionCode,
+            reasonCode: authorization.reasonCode,
+            authoritySources: authorization.authoritySources,
+            targetType: 'APPROVAL_REQUEST',
+            targetId: request.id,
+            actorType: principal.type,
+            principalId: principal.id,
+            actorId: principal.subjectId,
+            authKind: principal.authKind,
+            resourceId: request.resourceId,
+            requestId: request.id,
+            payload: {},
+          },
+          tx
+        );
         await repositories.approvalRequests.updateStatus(
           requestId,
           newStatus,
@@ -347,34 +465,69 @@ export class ApprovalService {
         // APPROVED is decision state, not reveal authority. The conditional transition and
         // request-bound immutable grant model lands in #122; #117 deliberately mints no grant.
 
-        if (this.deps.audit) {
-          await this.deps.audit.log(
-            {
-              eventType: 'APPROVAL_DECISION',
-              outcomeCode: newStatus === 'APPROVED' ? 'SUCCESS' : 'DENIED',
-              actorType: principal.type,
-              actorId: byGuardianDiscordId,
-              authKind: principal.authKind,
-              resourceId: request.resourceId,
-              requestId: request.id,
-              payload: {
-                decision,
-                requesterId: request.requesterId,
-              },
+        await this.audit.log(
+          {
+            eventFamily: 'REQUEST_GRANT_LIFECYCLE',
+            eventType: 'APPROVAL_DECISION',
+            surface: 'DOMAIN',
+            operation: 'request.decide',
+            outcomeCode: newStatus === 'APPROVED' ? 'SUCCESS' : 'DENIED',
+            capability: 'request.decide',
+            decisionCode: 'ALLOW',
+            reasonCode: authorization.reasonCode,
+            authoritySources: authorization.authoritySources,
+            targetType: 'APPROVAL_REQUEST',
+            targetId: request.id,
+            actorType: principal.type,
+            principalId: principal.id,
+            actorId: byGuardianDiscordId,
+            authKind: principal.authKind,
+            resolverType: principal.type,
+            resolverId: principal.subjectId,
+            resourceId: request.resourceId,
+            requestId: request.id,
+            payload: {
+              decision,
+              requesterId: request.requesterId,
             },
-            tx
-          );
-        }
+          },
+          tx
+        );
 
         // Always enqueue a callback delivery event deterministically
-        await repositories.outbox.create(
+        const delivery = buildOutboxEvent({
+          id: deterministicUUID(request.id + '_APPROVAL_CALLBACK'),
+          eventType: 'APPROVAL_CALLBACK',
+          resourceId: request.resourceId,
+          requestId: request.id,
+          causationId: request.id,
+          payload: {
+            requestId: request.id,
+            status: newStatus,
+          },
+        });
+        await repositories.outbox.create(delivery, tx);
+        await this.audit.log(
           {
-            id: deterministicUUID(request.id + '_APPROVAL_CALLBACK'),
-            eventType: 'APPROVAL_CALLBACK',
-            payload: {
-              requestId: request.id,
-              status: newStatus,
-            },
+            eventFamily: 'DELIVERY',
+            eventType: 'DELIVERY_ENQUEUE',
+            surface: 'DOMAIN',
+            operation: 'delivery.callback.enqueue',
+            outcomeCode: 'QUEUED',
+            decisionCode: 'ALLOW',
+            reasonCode: authorization.reasonCode,
+            authoritySources: authorization.authoritySources,
+            targetType: 'DELIVERY',
+            targetId: delivery.id,
+            actorType: principal.type,
+            principalId: principal.id,
+            actorId: principal.subjectId,
+            authKind: principal.authKind,
+            resourceId: request.resourceId,
+            requestId: request.id,
+            correlationId: delivery.correlationId,
+            causationId: delivery.causationId,
+            payload: { deliveryType: 'APPROVAL_CALLBACK' },
           },
           tx
         );
@@ -525,6 +678,31 @@ export class ApprovalService {
       throw new AccessDeniedError('Failed to consume approval grant atomically.');
     }
 
+    await this.audit.log(
+      {
+        eventFamily: 'REQUEST_GRANT_LIFECYCLE',
+        eventType: 'GRANT_CONSUME',
+        surface: 'DOMAIN',
+        operation: 'grant.consume',
+        outcomeCode: 'SUCCESS',
+        capability: 'grant.consume',
+        decisionCode: 'ALLOW',
+        reasonCode: 'GRANT',
+        authoritySources: ['APPROVAL_GRANT'],
+        targetType: 'APPROVAL_GRANT',
+        targetId: grant.id,
+        actorType: principal.type,
+        principalId: principal.id,
+        actorId: principal.subjectId,
+        authKind: principal.authKind,
+        resourceId: grant.resourceId,
+        requestId: grant.requestId,
+        grantId: grant.id,
+        payload: {},
+      },
+      tx
+    );
+
     logger.info('Consumed approval grant', {
       grantId: grant.id,
       requestId: grant.requestId,
@@ -537,7 +715,30 @@ export class ApprovalService {
    * @returns The number of expired requests
    */
   async cleanupExpiredRequests(): Promise<number> {
-    const count = await this.deps.repositories.approvalRequests.expireRequests();
+    const count = await this.runTransaction(async (tx) => {
+      const expired = await this.deps.repositories.approvalRequests.expireRequests(tx);
+      if (expired > 0) {
+        await this.audit.log(
+          {
+            eventFamily: 'REQUEST_GRANT_LIFECYCLE',
+            eventType: 'REQUEST_EXPIRY_SWEEP',
+            surface: correlationStorage.getStore()?.surface ?? 'SYSTEM',
+            operation: 'request.expiry.sweep',
+            outcomeCode: 'SUCCESS',
+            decisionCode: 'ALLOW',
+            reasonCode: 'SERVICE',
+            authoritySources: [],
+            targetType: 'SYSTEM',
+            actorType: 'SERVICE',
+            principalId: 'service:request-expiry',
+            authKind: 'SERVICE',
+            payload: { expiredCount: expired },
+          },
+          tx
+        );
+      }
+      return expired;
+    });
     if (count > 0) {
       logger.info(`Cleaned up expired approval requests`, { count });
     }
@@ -550,18 +751,18 @@ export class ApprovalService {
  */
 export class ResourceService {
   readonly deps: ServiceDependencies;
+  private readonly audit: AuditService;
 
   constructor(deps: ServiceDependencies) {
+    if (!deps.audit) throw new TypeError('ResourceService requires an audit dependency.');
     this.deps = deps;
+    this.audit = deps.audit;
   }
 
-  private async runTransaction<T>(callback: (tx: any) => Promise<T>): Promise<T> {
-    const isMock = this.deps.repositories.resources.constructor.name.includes('InMemory');
-    if (isMock) {
-      return callback(undefined);
-    }
-    const prisma = getPrismaClient();
-    return prisma.$transaction(callback);
+  private async runTransaction<T>(
+    callback: (tx: Prisma.TransactionClient) => Promise<T>
+  ): Promise<T> {
+    return this.deps.repositories.transaction(callback);
   }
 
   /**
@@ -605,6 +806,11 @@ export class ResourceService {
     ownerDiscordId: string,
     tx?: Prisma.TransactionClient
   ): Promise<{ resource: Resource; guardian: Guardian }> {
+    if (!tx) {
+      return this.runTransaction((transaction) =>
+        this.createResource(name, ownerDiscordId, transaction)
+      );
+    }
     const { repositories } = this.deps;
 
     // Generate a random API key
@@ -628,6 +834,29 @@ export class ResourceService {
         resourceId: resource.id,
         discordUserId: ownerDiscordId,
         role: 'OWNER',
+      },
+      tx
+    );
+
+    await this.audit.log(
+      {
+        eventFamily: 'RESOURCE_CONFIGURATION',
+        eventType: 'RESOURCE_CREATE',
+        surface: 'DOMAIN',
+        operation: 'resource.create',
+        outcomeCode: 'SUCCESS',
+        capability: 'resource.create',
+        decisionCode: 'ALLOW',
+        reasonCode: 'AUTHENTICATED_SUBJECT',
+        authoritySources: ['AUTHENTICATED_SUBJECT'],
+        targetType: 'RESOURCE',
+        targetId: resource.id,
+        actorType: 'DISCORD_USER',
+        principalId: `discord:${ownerDiscordId}`,
+        actorId: ownerDiscordId,
+        authKind: 'DISCORD',
+        resourceId: resource.id,
+        payload: {},
       },
       tx
     );
@@ -679,12 +908,39 @@ export class ResourceService {
       };
     }
 
-    // Add the guardian
-    const guardian = await repositories.guardians.add({
-      id: crypto.randomUUID(),
-      resourceId,
-      discordUserId,
-      role: 'GUARDIAN',
+    const guardian = await this.runTransaction(async (tx) => {
+      const created = await repositories.guardians.add(
+        {
+          id: crypto.randomUUID(),
+          resourceId,
+          discordUserId,
+          role: 'GUARDIAN',
+        },
+        tx
+      );
+      await this.audit.log(
+        {
+          eventFamily: 'RESOURCE_CONFIGURATION',
+          eventType: 'RESOURCE_UPDATE',
+          surface: 'DOMAIN',
+          operation: 'resource.guardian.add',
+          outcomeCode: 'SUCCESS',
+          capability: 'guardian.manage',
+          decisionCode: 'ALLOW',
+          reasonCode: 'OWNER',
+          authoritySources: ['RESOURCE_OWNER'],
+          targetType: 'RESOURCE',
+          targetId: resourceId,
+          actorType: 'DISCORD_USER',
+          principalId: `discord:${actorId}`,
+          actorId,
+          authKind: 'DISCORD',
+          resourceId,
+          payload: { guardianId: created.id, memberUserId: discordUserId },
+        },
+        tx
+      );
+      return created;
     });
 
     logger.info('Added guardian to resource', {
@@ -724,7 +980,31 @@ export class ResourceService {
       return { success: false, error: 'Cannot remove the resource owner.' };
     }
 
-    await repositories.guardians.remove(resourceId, targetUserId);
+    await this.runTransaction(async (tx) => {
+      await repositories.guardians.remove(resourceId, targetUserId, tx);
+      await this.audit.log(
+        {
+          eventFamily: 'RESOURCE_CONFIGURATION',
+          eventType: 'RESOURCE_UPDATE',
+          surface: 'DOMAIN',
+          operation: 'resource.guardian.remove',
+          outcomeCode: 'SUCCESS',
+          capability: 'guardian.manage',
+          decisionCode: 'ALLOW',
+          reasonCode: 'OWNER',
+          authoritySources: ['RESOURCE_OWNER'],
+          targetType: 'RESOURCE',
+          targetId: resourceId,
+          actorType: 'DISCORD_USER',
+          principalId: `discord:${actorId}`,
+          actorId,
+          authKind: 'DISCORD',
+          resourceId,
+          payload: { memberUserId: targetUserId },
+        },
+        tx
+      );
+    });
 
     logger.info('Removed guardian from resource', {
       resourceId,
@@ -797,8 +1077,43 @@ export class ResourceService {
     ) {
       // Update last used time
       await repositories.credentials.updateLastUsed(credential.id);
-      return repositories.resources.findById(credential.subjectId);
+      const resource = await repositories.resources.findById(credential.subjectId);
+      await this.audit.log({
+        eventFamily: 'AUTHENTICATION',
+        eventType: 'CREDENTIAL_USE',
+        surface: 'DOMAIN',
+        operation: 'resource.api-key.validate',
+        outcomeCode: resource ? 'SUCCESS' : 'DENIED',
+        decisionCode: resource ? 'ALLOW' : 'DENY',
+        reasonCode: resource ? 'AUTHENTICATED_SUBJECT' : 'INVALID_AUTH',
+        authoritySources: resource ? ['SCOPED_CREDENTIAL'] : [],
+        targetType: 'CREDENTIAL',
+        targetId: credential.id,
+        actorType: 'RESOURCE_API_KEY',
+        principalId: credential.id,
+        actorId: credential.subjectId,
+        authKind: 'API_KEY',
+        resourceId: resource?.id ?? credential.subjectId,
+        payload: {},
+      });
+      return resource;
     }
+
+    await this.audit.log({
+      eventFamily: 'AUTHENTICATION',
+      eventType: 'CREDENTIAL_USE',
+      surface: 'DOMAIN',
+      operation: 'resource.api-key.validate',
+      outcomeCode: 'DENIED',
+      decisionCode: 'DENY',
+      reasonCode: 'INVALID_AUTH',
+      authoritySources: [],
+      targetType: 'CREDENTIAL',
+      actorType: 'SERVICE',
+      principalId: 'anonymous:resource-api-key',
+      authKind: 'SERVICE',
+      payload: {},
+    });
 
     return null;
   }
@@ -831,11 +1146,10 @@ export class ResourceService {
 
     const expiresAt = expiresInMs ? new Date(Date.now() + expiresInMs) : null;
 
-    const prisma = getPrismaClient();
     let credential!: Credential;
 
     try {
-      await prisma.$transaction(async (tx) => {
+      await this.runTransaction(async (tx) => {
         credential = await repositories.credentials.create(
           {
             type: 'RESOURCE_API_KEY',
@@ -854,20 +1168,28 @@ export class ResourceService {
         // Update resource version to rotate it
         await repositories.resources.update(resourceId, { version: crypto.randomUUID() }, tx);
 
-        if (this.deps.audit) {
-          await this.deps.audit.log(
-            {
-              eventType: 'API_KEY_MINT',
-              outcomeCode: 'SUCCESS',
-              actorType: 'DISCORD_USER',
-              actorId,
-              authKind: 'DISCORD',
-              resourceId,
-              payload: { credentialId: credential.id },
-            },
-            tx
-          );
-        }
+        await this.audit.log(
+          {
+            eventFamily: 'AUTHENTICATION',
+            eventType: 'API_KEY_MINT',
+            surface: 'DOMAIN',
+            operation: 'resource.api-key.mint',
+            outcomeCode: 'SUCCESS',
+            capability: 'resource.api-key.mint',
+            decisionCode: 'ALLOW',
+            reasonCode: 'OWNER',
+            authoritySources: ['RESOURCE_OWNER'],
+            targetType: 'CREDENTIAL',
+            targetId: credential.id,
+            actorType: 'DISCORD_USER',
+            principalId: `discord:${actorId}`,
+            actorId,
+            authKind: 'DISCORD',
+            resourceId,
+            payload: { credentialId: credential.id },
+          },
+          tx
+        );
       });
     } catch (err) {
       logger.error('Failed to mint API key atomically', {
@@ -898,28 +1220,35 @@ export class ResourceService {
       throw new Error('Credential not found or mismatch.');
     }
 
-    const prisma = getPrismaClient();
     try {
-      await prisma.$transaction(async (tx) => {
+      await this.runTransaction(async (tx) => {
         await repositories.credentials.revoke(credentialId, tx);
 
         // Update resource version
         await repositories.resources.update(resourceId, { version: crypto.randomUUID() }, tx);
 
-        if (this.deps.audit) {
-          await this.deps.audit.log(
-            {
-              eventType: 'API_KEY_REVOKE',
-              outcomeCode: 'SUCCESS',
-              actorType: 'DISCORD_USER',
-              actorId,
-              authKind: 'DISCORD',
-              resourceId,
-              payload: { credentialId },
-            },
-            tx
-          );
-        }
+        await this.audit.log(
+          {
+            eventFamily: 'AUTHENTICATION',
+            eventType: 'API_KEY_REVOKE',
+            surface: 'DOMAIN',
+            operation: 'resource.api-key.revoke',
+            outcomeCode: 'SUCCESS',
+            capability: 'resource.api-key.revoke',
+            decisionCode: 'ALLOW',
+            reasonCode: 'OWNER',
+            authoritySources: ['RESOURCE_OWNER'],
+            targetType: 'CREDENTIAL',
+            targetId: credentialId,
+            actorType: 'DISCORD_USER',
+            principalId: `discord:${actorId}`,
+            actorId,
+            authKind: 'DISCORD',
+            resourceId,
+            payload: { credentialId },
+          },
+          tx
+        );
       });
     } catch (err) {
       logger.error('Failed to revoke API key atomically', {
@@ -1000,29 +1329,36 @@ export class ResourceService {
     }
 
     // Update the resource to remove the linked TOTP account
-    const prisma = getPrismaClient();
     try {
-      await prisma.$transaction(async (tx) => {
+      await this.runTransaction(async (tx) => {
         await repositories.resources.update(
           resourceId,
           { totpAccountId: null, totpDelegationEnvelope: null },
           tx
         );
 
-        if (this.deps.audit) {
-          await this.deps.audit.log(
-            {
-              eventType: 'TOTP_UNLINK',
-              outcomeCode: 'SUCCESS',
-              actorType: actorPrincipal.type,
-              actorId,
-              authKind: actorPrincipal.authKind,
-              resourceId,
-              payload: {},
-            },
-            tx
-          );
-        }
+        await this.audit.log(
+          {
+            eventFamily: 'TOTP_LIFECYCLE',
+            eventType: 'TOTP_UNLINK',
+            surface: 'DOMAIN',
+            operation: 'totp.unlink',
+            outcomeCode: 'SUCCESS',
+            capability: 'totp.link.manage',
+            decisionCode: 'ALLOW',
+            reasonCode: isResourceOwner ? 'OWNER' : 'AUTHENTICATED_SUBJECT',
+            authoritySources: [isResourceOwner ? 'RESOURCE_OWNER' : 'AUTHENTICATED_SUBJECT'],
+            targetType: 'TOTP_ACCOUNT',
+            targetId: resource.totpAccountId,
+            actorType: actorPrincipal.type,
+            principalId: actorPrincipal.id,
+            actorId,
+            authKind: actorPrincipal.authKind,
+            resourceId,
+            payload: {},
+          },
+          tx
+        );
       });
     } catch (err) {
       logger.error('Failed to unlink TOTP account atomically', {
@@ -1063,6 +1399,81 @@ export class ResourceService {
     throw new ForbiddenError(
       'TOTP link consent is deferred until authenticated, seed-version-bound custody consent lands in #120.'
     );
+  }
+
+  /**
+   * Create a personal TOTP account and its required audit event in one transaction.
+   * Secret and recovery material are deliberately excluded from the event envelope.
+   */
+  async createTOTPAccount(
+    input: Omit<TOTPAccount, 'id' | 'createdAt' | 'updatedAt' | 'version'>,
+    principal: Principal
+  ): Promise<TOTPAccount> {
+    if (input.ownerDiscordUserId !== principal.subjectId) {
+      throw new AccessDeniedError('A TOTP account can only be created for the authenticated user.');
+    }
+
+    return this.runTransaction(async (tx) => {
+      const account = await this.deps.repositories.totp.create(input, tx);
+      await this.audit.log(
+        {
+          eventFamily: 'TOTP_LIFECYCLE',
+          eventType: 'TOTP_ACCOUNT_CREATE',
+          surface: correlationStorage.getStore()?.surface ?? 'DOMAIN',
+          operation: 'totp.account.create',
+          outcomeCode: 'SUCCESS',
+          capability: 'totp.account.manage',
+          decisionCode: 'ALLOW',
+          reasonCode: 'AUTHENTICATED_SUBJECT',
+          authoritySources: ['AUTHENTICATED_SUBJECT'],
+          targetType: 'TOTP_ACCOUNT',
+          targetId: account.id,
+          actorType: principal.type,
+          principalId: principal.id,
+          actorId: principal.subjectId,
+          authKind: principal.authKind,
+          payload: { accountName: account.accountName, issuerPresent: Boolean(account.issuer) },
+        },
+        tx
+      );
+      return account;
+    });
+  }
+
+  /** Update personal TOTP metadata without ever putting recovery material in audit or logs. */
+  async updateTOTPAccount(account: TOTPAccount, principal: Principal): Promise<TOTPAccount> {
+    if (account.ownerDiscordUserId !== principal.subjectId) {
+      throw new AccessDeniedError('Only the TOTP account owner can update the account.');
+    }
+
+    return this.runTransaction(async (tx) => {
+      const updated = await this.deps.repositories.totp.update(account, tx);
+      await this.audit.log(
+        {
+          eventFamily: 'TOTP_LIFECYCLE',
+          eventType: 'TOTP_ACCOUNT_UPDATE',
+          surface: correlationStorage.getStore()?.surface ?? 'DOMAIN',
+          operation: 'totp.account.update',
+          outcomeCode: 'SUCCESS',
+          capability: 'totp.account.manage',
+          decisionCode: 'ALLOW',
+          reasonCode: 'AUTHENTICATED_SUBJECT',
+          authoritySources: ['AUTHENTICATED_SUBJECT'],
+          targetType: 'TOTP_ACCOUNT',
+          targetId: updated.id,
+          actorType: principal.type,
+          principalId: principal.id,
+          actorId: principal.subjectId,
+          authKind: principal.authKind,
+          payload: {
+            accountName: updated.accountName,
+            backupKeyConfigured: Boolean(updated.backupKey),
+          },
+        },
+        tx
+      );
+      return updated;
+    });
   }
 
   /**
@@ -1127,20 +1538,29 @@ export class ResourceService {
       throw new AccessDeniedError('TOTP account changed during authorization.');
     }
 
-    const code = generateTOTPCode(account);
+    // Persist the authorized reveal record before materializing the code.
+    await this.audit.log({
+      eventFamily: 'TOTP_LIFECYCLE',
+      eventType: 'TOTP_CODE_REVEAL',
+      surface: 'DOMAIN',
+      operation: 'totp.code.reveal',
+      outcomeCode: 'SUCCESS',
+      capability: 'totp.code.read',
+      decisionCode: 'ALLOW',
+      reasonCode: authorized ? evalResult.reasonCode : 'GRANT',
+      authoritySources: authorized ? evalResult.authoritySources : ['APPROVAL_GRANT'],
+      targetType: 'TOTP_ACCOUNT',
+      targetId: account.id,
+      actorType: userPrincipal.type,
+      principalId: userPrincipal.id,
+      actorId,
+      authKind: userPrincipal.authKind,
+      resourceId,
+      grantId: authorized ? null : grantId,
+      payload: { totpAccountId: account.id },
+    });
 
-    // Audit Log reveal event
-    if (this.deps.audit) {
-      await this.deps.audit.log({
-        eventType: 'TOTP_CODE_REVEAL',
-        outcomeCode: 'SUCCESS',
-        actorType: userPrincipal.type,
-        actorId,
-        authKind: userPrincipal.authKind,
-        resourceId,
-        payload: { totpAccountId: account.id },
-      });
-    }
+    const code = generateTOTPCode(account);
 
     return code;
   }
@@ -1172,17 +1592,25 @@ export class ResourceService {
       throw new Error('No recovery key/backup key configured for this account.');
     }
 
-    // Audit Log reveal event
-    if (this.deps.audit) {
-      await this.deps.audit.log({
-        eventType: 'TOTP_RECOVERY_REVEAL',
-        outcomeCode: 'SUCCESS',
-        actorType: 'DISCORD_USER',
-        actorId,
-        authKind: 'DISCORD',
-        payload: { totpAccountId },
-      });
-    }
+    // Persist the authorized reveal record before returning recovery material.
+    await this.audit.log({
+      eventFamily: 'TOTP_LIFECYCLE',
+      eventType: 'TOTP_RECOVERY_REVEAL',
+      surface: 'DOMAIN',
+      operation: 'totp.recovery.reveal',
+      outcomeCode: 'SUCCESS',
+      capability: 'totp.recovery.read',
+      decisionCode: 'ALLOW',
+      reasonCode: evalResult.reasonCode,
+      authoritySources: evalResult.authoritySources,
+      targetType: 'TOTP_ACCOUNT',
+      targetId: totpAccountId,
+      actorType: principal.type,
+      principalId: principal.id,
+      actorId,
+      authKind: principal.authKind,
+      payload: { totpAccountId },
+    });
 
     return account.backupKey;
   }
@@ -1190,7 +1618,12 @@ export class ResourceService {
   /**
    * Create a new field for a resource.
    */
-  async createField(resourceId: string, name: string, value: string): Promise<ResourceField> {
+  async createField(
+    resourceId: string,
+    name: string,
+    value: string,
+    principal: Principal
+  ): Promise<ResourceField> {
     const { repositories } = this.deps;
 
     // Verify resource exists
@@ -1205,9 +1638,8 @@ export class ResourceService {
       throw new DuplicateError(`Field '${name}' already exists for this resource`);
     }
 
-    const prisma = getPrismaClient();
     try {
-      const field = await prisma.$transaction(async (tx) => {
+      const field = await this.runTransaction(async (tx) => {
         const createdField = await repositories.resourceFields.create(
           {
             resourceId,
@@ -1217,20 +1649,28 @@ export class ResourceService {
           tx
         );
 
-        if (this.deps.audit) {
-          await this.deps.audit.log(
-            {
-              eventType: 'SECRET_CREATE',
-              outcomeCode: 'SUCCESS',
-              actorType: 'SERVICE',
-              actorId: 'system',
-              authKind: 'SERVICE',
-              resourceId,
-              payload: { fieldName: name }, // Redacted value!
-            },
-            tx
-          );
-        }
+        await this.audit.log(
+          {
+            eventFamily: 'SECRET_LIFECYCLE',
+            eventType: 'SECRET_CREATE',
+            surface: 'DOMAIN',
+            operation: 'secret.create',
+            outcomeCode: 'SUCCESS',
+            capability: 'secret.write',
+            decisionCode: 'ALLOW',
+            reasonCode: 'OWNER',
+            authoritySources: ['RESOURCE_OWNER'],
+            targetType: 'SECRET',
+            targetId: `${resourceId}:${name}`,
+            actorType: principal.type,
+            principalId: principal.id,
+            actorId: principal.subjectId,
+            authKind: principal.authKind,
+            resourceId,
+            payload: { fieldName: name }, // Redacted value!
+          },
+          tx
+        );
         return createdField;
       });
 
@@ -1273,6 +1713,57 @@ export class ResourceService {
     return repositories.resourceFields.findByResourceAndName(resourceId, name);
   }
 
+  async revealField(
+    resourceId: string,
+    name: string,
+    principal: Principal
+  ): Promise<ResourceField | null> {
+    const decision = await hasCapability(this.deps.repositories, principal, 'secret.value.read', {
+      resourceId,
+      fieldName: name,
+    });
+    await this.audit.log({
+      eventFamily: 'AUTHORIZATION',
+      eventType: 'AUTHORIZATION_DECISION',
+      surface: 'HTTP',
+      operation: 'secret.value.read.authorize',
+      outcomeCode: decision.allowed ? 'SUCCESS' : 'DENIED',
+      capability: 'secret.value.read',
+      decisionCode: decision.decisionCode,
+      reasonCode: decision.reasonCode,
+      authoritySources: decision.authoritySources,
+      targetType: 'SECRET',
+      targetId: `${resourceId}:${name}`,
+      actorType: principal.type,
+      principalId: principal.id,
+      actorId: principal.subjectId,
+      authKind: principal.authKind,
+      resourceId,
+      payload: { fieldName: name },
+    });
+    if (!decision.allowed) return null;
+    await this.audit.log({
+      eventFamily: 'SECRET_LIFECYCLE',
+      eventType: 'SECRET_REVEAL',
+      surface: 'HTTP',
+      operation: 'secret.value.reveal',
+      outcomeCode: 'SUCCESS',
+      capability: 'secret.value.read',
+      decisionCode: 'ALLOW',
+      reasonCode: decision.reasonCode,
+      authoritySources: decision.authoritySources,
+      targetType: 'SECRET',
+      targetId: `${resourceId}:${name}`,
+      actorType: principal.type,
+      principalId: principal.id,
+      actorId: principal.subjectId,
+      authKind: principal.authKind,
+      resourceId,
+      payload: { fieldName: name },
+    });
+    return this.deps.repositories.resourceFields.findByResourceAndName(resourceId, name);
+  }
+
   async getFieldMetadata(resourceId: string, name: string): Promise<ResourceFieldMetadata | null> {
     const { repositories } = this.deps;
     return repositories.resourceFields.findMetadataByResourceAndName(resourceId, name);
@@ -1281,7 +1772,7 @@ export class ResourceService {
   /**
    * Delete a field from a resource.
    */
-  async deleteField(resourceId: string, name: string): Promise<void> {
+  async deleteField(resourceId: string, name: string, principal: Principal): Promise<void> {
     const { repositories } = this.deps;
 
     const field = await repositories.resourceFields.findByResourceAndName(resourceId, name);
@@ -1291,25 +1782,32 @@ export class ResourceService {
       return;
     }
 
-    const prisma = getPrismaClient();
     try {
-      await prisma.$transaction(async (tx) => {
+      await this.runTransaction(async (tx) => {
         await repositories.resourceFields.delete(field.id, tx);
 
-        if (this.deps.audit) {
-          await this.deps.audit.log(
-            {
-              eventType: 'SECRET_DELETE',
-              outcomeCode: 'SUCCESS',
-              actorType: 'SERVICE',
-              actorId: 'system',
-              authKind: 'SERVICE',
-              resourceId,
-              payload: { fieldName: name },
-            },
-            tx
-          );
-        }
+        await this.audit.log(
+          {
+            eventFamily: 'SECRET_LIFECYCLE',
+            eventType: 'SECRET_DELETE',
+            surface: 'DOMAIN',
+            operation: 'secret.delete',
+            outcomeCode: 'SUCCESS',
+            capability: 'secret.delete',
+            decisionCode: 'ALLOW',
+            reasonCode: 'OWNER',
+            authoritySources: ['RESOURCE_OWNER'],
+            targetType: 'SECRET',
+            targetId: `${resourceId}:${name}`,
+            actorType: principal.type,
+            principalId: principal.id,
+            actorId: principal.subjectId,
+            authKind: principal.authKind,
+            resourceId,
+            payload: { fieldName: name },
+          },
+          tx
+        );
       });
 
       logger.info('Deleted resource field', {
@@ -1386,7 +1884,7 @@ export class ResourceService {
     await this.runTransaction(async (tx) => {
       for (const [key, value] of entries) {
         const existing = await repositories.resourceFields.findByResourceAndName(resourceId, key);
-        let eventType = 'SECRET_CREATE';
+        let eventType: 'SECRET_CREATE' | 'SECRET_UPDATE' = 'SECRET_CREATE';
 
         if (existing) {
           await repositories.resourceFields.update(existing.id, value, tx);
@@ -1402,20 +1900,29 @@ export class ResourceService {
           );
         }
 
-        if (this.deps.audit) {
-          await this.deps.audit.log(
-            {
-              eventType,
-              outcomeCode: 'SUCCESS',
-              actorType: actorPrincipal.type === 'SERVICE' ? 'SERVICE' : 'DISCORD_USER',
-              actorId: actorPrincipal.subjectId,
-              authKind: actorPrincipal.authKind,
-              resourceId,
-              payload: { fieldName: key },
-            },
-            tx
-          );
-        }
+        await this.audit.log(
+          {
+            eventFamily: 'SECRET_LIFECYCLE',
+            eventType,
+            surface: 'DOMAIN',
+            operation: existing ? 'secret.update' : 'secret.create',
+            outcomeCode: 'SUCCESS',
+            capability: 'secret.write',
+            decisionCode: 'ALLOW',
+            reasonCode: actorPrincipal.type === 'SERVICE' ? 'SERVICE' : 'AUTHENTICATED_SUBJECT',
+            authoritySources:
+              actorPrincipal.type === 'SERVICE' ? ['SCOPED_CREDENTIAL'] : ['AUTHENTICATED_SUBJECT'],
+            targetType: 'SECRET',
+            targetId: `${resourceId}:${key}`,
+            actorType: actorPrincipal.type === 'SERVICE' ? 'SERVICE' : 'DISCORD_USER',
+            principalId: actorPrincipal.id,
+            actorId: actorPrincipal.subjectId,
+            authKind: actorPrincipal.authKind,
+            resourceId,
+            payload: { fieldName: key },
+          },
+          tx
+        );
       }
     });
   }
@@ -1429,12 +1936,11 @@ export class ResourceService {
       throw new ResourceNotFoundError(`Resource not found: ${resourceId}`);
     }
 
-    const prisma = getPrismaClient();
     try {
-      const field = await prisma.$transaction(async (tx) => {
+      const field = await this.runTransaction(async (tx) => {
         const existing = await repositories.resourceFields.findByResourceAndName(resourceId, name);
         let resultField;
-        let eventType = 'SECRET_CREATE';
+        let eventType: 'SECRET_CREATE' | 'SECRET_UPDATE' = 'SECRET_CREATE';
 
         if (existing) {
           resultField = await repositories.resourceFields.update(existing.id, value, tx);
@@ -1450,20 +1956,28 @@ export class ResourceService {
           );
         }
 
-        if (this.deps.audit) {
-          await this.deps.audit.log(
-            {
-              eventType,
-              outcomeCode: 'SUCCESS',
-              actorType: 'SERVICE',
-              actorId: 'system',
-              authKind: 'SERVICE',
-              resourceId,
-              payload: { fieldName: name },
-            },
-            tx
-          );
-        }
+        await this.audit.log(
+          {
+            eventFamily: 'SECRET_LIFECYCLE',
+            eventType,
+            surface: 'DOMAIN',
+            operation: existing ? 'secret.update' : 'secret.create',
+            outcomeCode: 'SUCCESS',
+            capability: 'secret.write',
+            decisionCode: 'ALLOW',
+            reasonCode: 'SERVICE',
+            authoritySources: ['SCOPED_CREDENTIAL'],
+            targetType: 'SECRET',
+            targetId: `${resourceId}:${name}`,
+            actorType: 'SERVICE',
+            principalId: 'service:system',
+            actorId: 'system',
+            authKind: 'SERVICE',
+            resourceId,
+            payload: { fieldName: name },
+          },
+          tx
+        );
         return resultField;
       });
 
@@ -1505,14 +2019,24 @@ export function createServices(baseDeps: { repositories: Repositories }): Servic
   const approval = new ApprovalService(fullDeps);
   fullDeps.approval = approval;
   const resource = new ResourceService(fullDeps);
-  const project = new ProjectService(baseDeps.repositories.projects, resource);
+  const project = new ProjectService(
+    baseDeps.repositories.projects,
+    resource,
+    audit,
+    baseDeps.repositories.transaction
+  );
 
   return {
     approval,
     resource,
     audit,
-    auth: new AuthService(baseDeps.repositories.auth, baseDeps.repositories.credentials),
+    auth: new AuthService(
+      baseDeps.repositories.auth,
+      baseDeps.repositories.credentials,
+      audit,
+      baseDeps.repositories.transaction
+    ),
     project,
-    ports: new DomainPortsImpl(project, resource, approval),
+    ports: new DomainPortsImpl(project, resource, approval, audit, baseDeps.repositories),
   };
 }

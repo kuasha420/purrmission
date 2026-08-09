@@ -13,6 +13,7 @@ import { randomUUID } from 'crypto';
 import { decryptValue, encryptValue } from '../infra/crypto.js';
 import { logger } from '../logging/logger.js';
 import { DuplicateError } from './errors.js';
+import type { AuditScope } from './audit.js';
 import type {
   AddGuardianInput,
   ApiToken,
@@ -22,6 +23,7 @@ import type {
   ApprovalGrant,
   CreateApprovalGrantInput,
   AuditLog,
+  AuditCheckpoint,
   AuthSession,
   AuthSessionStatus,
   CreateApiTokenInput,
@@ -131,7 +133,6 @@ export interface ApprovalRequestRepository {
     resolvedBy?: string,
     tx?: Prisma.TransactionClient
   ): Promise<void>;
-
   /** Store the Discord delivery reference after an outbox notification succeeds. */
   updateDeliveryReference(
     id: string,
@@ -296,7 +297,7 @@ export class PrismaResourceRepository implements ResourceRepository {
     const client = tx || this.prisma;
     const created = await client.resource.create({
       data: {
-        id: input.id,
+        id: input.id ?? undefined,
         name: input.name,
         mode: input.mode,
         apiKey: input.apiKey,
@@ -744,6 +745,22 @@ export class PrismaTOTPRepository implements TOTPRepository {
     return result.count === 1;
   }
 
+  private mapDelegationConsent(row: {
+    id: string;
+    resourceId: string;
+    totpAccountId: string;
+    operation: string;
+    requesterId: string;
+    authFamily: string;
+    accountVersion: string;
+    linkVersion: string;
+    expiresAt: Date;
+    usedAt: Date | null;
+    createdAt: Date;
+  }): TOTPDelegationConsent {
+    return { ...row };
+  }
+
   private mapPrismaToDomain(row: {
     id: string;
     ownerDiscordUserId: string;
@@ -944,6 +961,8 @@ export class PrismaResourceFieldRepository implements ResourceFieldRepository {
  * Used for dependency injection throughout the application.
  */
 export interface Repositories {
+  /** Required unit-of-work capability for mutations paired with audit/outbox writes. */
+  transaction: <T>(callback: (tx: Prisma.TransactionClient) => Promise<T>) => Promise<T>;
   resources: ResourceRepository;
   guardians: GuardianRepository;
   approvalRequests: ApprovalRequestRepository;
@@ -963,8 +982,11 @@ export interface Repositories {
  */
 export interface AuditRepository {
   create(input: CreateAuditLogInput, tx?: Prisma.TransactionClient): Promise<AuditLog>;
-  findByResourceId(resourceId: string): Promise<AuditLog[]>;
-  findByProjectId(projectId: string): Promise<AuditLog[]>;
+  findByScope(scope: AuditScope): Promise<AuditLog[]>;
+  findThrough?(through: Date): Promise<AuditLog[]>;
+  createCheckpoint?(checkpoint: AuditCheckpoint): Promise<AuditCheckpoint>;
+  findLatestCheckpoint?(): Promise<AuditCheckpoint | null>;
+  deleteRetainedBefore?(cutoff: Date): Promise<number>;
 }
 
 /**
@@ -975,9 +997,9 @@ export interface OutboxRepository {
   findPending(): Promise<OutboxEvent[]>;
   updateStatus(
     id: string,
-    status: 'PENDING' | 'PROCESSED' | 'FAILED',
+    status: 'PENDING' | 'DELIVERED_PENDING_AUDIT' | 'PROCESSED' | 'FAILED',
     attempts: number,
-    lastError?: string,
+    lastErrorCode?: string,
     tx?: Prisma.TransactionClient
   ): Promise<void>;
 }
@@ -996,12 +1018,25 @@ export class PrismaAuditRepository implements AuditRepository {
     const client = tx || this.prisma;
     const created = await client.auditLog.create({
       data: {
+        id: input.id,
         schemaVersion: input.schemaVersion,
+        eventFamily: input.eventFamily,
         eventType: input.eventType,
+        surface: input.surface,
+        operation: input.operation,
         outcomeCode: input.outcomeCode,
+        capability: input.capability ?? null,
+        decisionCode: input.decisionCode,
+        reasonCode: input.reasonCode,
+        targetType: input.targetType,
+        targetId: input.targetId ?? null,
+        authoritySources: input.authoritySources as Prisma.InputJsonValue,
         actorType: input.actorType,
+        principalId: input.principalId,
         actorId: input.actorId ?? null,
         authKind: input.authKind ?? null,
+        resolverType: input.resolverType ?? null,
+        resolverId: input.resolverId ?? null,
         resourceId: input.resourceId ?? null,
         projectId: input.projectId ?? null,
         environmentId: input.environmentId ?? null,
@@ -1009,36 +1044,80 @@ export class PrismaAuditRepository implements AuditRepository {
         grantId: input.grantId ?? null,
         correlationId: input.correlationId ?? null,
         causationId: input.causationId ?? null,
-        payload: input.payload ? (input.payload as Prisma.InputJsonValue) : Prisma.JsonNull,
+        statusCode: input.statusCode ?? null,
+        durationMs: input.durationMs ?? null,
+        retentionClass: input.retentionClass,
+        integrityKeyId: input.integrityKeyId,
+        integrityHash: input.integrityHash,
+        payload:
+          input.payload === null || input.payload === undefined
+            ? Prisma.JsonNull
+            : (input.payload as Prisma.InputJsonValue),
+        createdAt: input.createdAt,
       },
     });
     return this.mapPrismaToDomain(created);
   }
 
-  async findByResourceId(resourceId: string): Promise<AuditLog[]> {
+  async findByScope(scope: AuditScope): Promise<AuditLog[]> {
+    const where: Prisma.AuditLogWhereInput =
+      scope.type === 'PROJECT'
+        ? { projectId: scope.id }
+        : scope.type === 'RESOURCE'
+          ? { resourceId: scope.id }
+          : scope.type === 'REQUEST'
+            ? { requestId: scope.id }
+            : { actorId: scope.id };
     const rows = await this.prisma.auditLog.findMany({
-      where: { resourceId },
+      where,
       orderBy: { createdAt: 'desc' },
     });
     return rows.map((row) => this.mapPrismaToDomain(row));
   }
 
-  async findByProjectId(projectId: string): Promise<AuditLog[]> {
+  async findThrough(through: Date): Promise<AuditLog[]> {
     const rows = await this.prisma.auditLog.findMany({
-      where: { projectId },
-      orderBy: { createdAt: 'desc' },
+      where: { createdAt: { lte: through } },
+      orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
     });
     return rows.map((row) => this.mapPrismaToDomain(row));
+  }
+
+  async createCheckpoint(checkpoint: AuditCheckpoint): Promise<AuditCheckpoint> {
+    return this.prisma.auditCheckpoint.create({ data: checkpoint });
+  }
+
+  async findLatestCheckpoint(): Promise<AuditCheckpoint | null> {
+    return this.prisma.auditCheckpoint.findFirst({ orderBy: { createdAt: 'desc' } });
+  }
+
+  async deleteRetainedBefore(cutoff: Date): Promise<number> {
+    const result = await this.prisma.auditLog.deleteMany({
+      where: { createdAt: { lt: cutoff }, retentionClass: { in: ['OPERATIONAL', 'PRIVACY'] } },
+    });
+    return result.count;
   }
 
   private mapPrismaToDomain(row: {
     id: string;
     schemaVersion: number;
+    eventFamily: string;
     eventType: string;
+    surface: string;
+    operation: string;
     outcomeCode: string;
+    capability: string | null;
+    decisionCode: string;
+    reasonCode: string;
+    targetType: string;
+    targetId: string | null;
+    authoritySources: Prisma.JsonValue;
     actorType: string;
+    principalId: string;
     actorId: string | null;
     authKind: string | null;
+    resolverType: string | null;
+    resolverId: string | null;
     resourceId: string | null;
     projectId: string | null;
     environmentId: string | null;
@@ -1046,17 +1125,34 @@ export class PrismaAuditRepository implements AuditRepository {
     grantId: string | null;
     correlationId: string | null;
     causationId: string | null;
+    statusCode: number | null;
+    durationMs: number | null;
+    retentionClass: string;
+    integrityKeyId: string;
+    integrityHash: string;
     payload: Prisma.JsonValue;
     createdAt: Date;
   }): AuditLog {
     return {
       id: row.id,
       schemaVersion: row.schemaVersion,
+      eventFamily: row.eventFamily as AuditLog['eventFamily'],
       eventType: row.eventType,
-      outcomeCode: row.outcomeCode,
-      actorType: row.actorType,
+      surface: row.surface as AuditLog['surface'],
+      operation: row.operation,
+      outcomeCode: row.outcomeCode as AuditLog['outcomeCode'],
+      capability: row.capability as AuditLog['capability'],
+      decisionCode: row.decisionCode as AuditLog['decisionCode'],
+      reasonCode: row.reasonCode as AuditLog['reasonCode'],
+      targetType: row.targetType as AuditLog['targetType'],
+      targetId: row.targetId,
+      authoritySources: row.authoritySources as AuditLog['authoritySources'],
+      actorType: row.actorType as AuditLog['actorType'],
+      principalId: row.principalId,
       actorId: row.actorId,
-      authKind: row.authKind,
+      authKind: row.authKind as AuditLog['authKind'],
+      resolverType: row.resolverType as AuditLog['resolverType'],
+      resolverId: row.resolverId,
       resourceId: row.resourceId,
       projectId: row.projectId,
       environmentId: row.environmentId,
@@ -1064,7 +1160,12 @@ export class PrismaAuditRepository implements AuditRepository {
       grantId: row.grantId,
       correlationId: row.correlationId,
       causationId: row.causationId,
-      payload: row.payload as Record<string, unknown> | null,
+      statusCode: row.statusCode,
+      durationMs: row.durationMs,
+      retentionClass: row.retentionClass as AuditLog['retentionClass'],
+      integrityKeyId: row.integrityKeyId,
+      integrityHash: row.integrityHash,
+      payload: row.payload as AuditLog['payload'],
       createdAt: row.createdAt,
     };
   }
@@ -1084,9 +1185,17 @@ export class PrismaOutboxRepository implements OutboxRepository {
     const client = tx || this.prisma;
     const created = await client.outboxEvent.create({
       data: {
-        id: input.id || undefined,
+        id: input.id,
+        schemaVersion: input.schemaVersion,
         eventType: input.eventType,
+        resourceId: input.resourceId ?? null,
+        requestId: input.requestId ?? null,
+        correlationId: input.correlationId,
+        causationId: input.causationId ?? null,
+        integrityKeyId: input.integrityKeyId,
+        integrityHash: input.integrityHash,
         payload: input.payload as Prisma.InputJsonValue,
+        createdAt: input.createdAt,
       },
     });
     return this.mapPrismaToDomain(created);
@@ -1102,9 +1211,9 @@ export class PrismaOutboxRepository implements OutboxRepository {
 
   async updateStatus(
     id: string,
-    status: 'PENDING' | 'PROCESSED' | 'FAILED',
+    status: 'PENDING' | 'DELIVERED_PENDING_AUDIT' | 'PROCESSED' | 'FAILED',
     attempts: number,
-    lastError?: string,
+    lastErrorCode?: string,
     tx?: Prisma.TransactionClient
   ): Promise<void> {
     const client = tx || this.prisma;
@@ -1113,28 +1222,42 @@ export class PrismaOutboxRepository implements OutboxRepository {
       data: {
         status,
         attempts,
-        lastError: lastError ?? null,
+        lastErrorCode: lastErrorCode ?? null,
       },
     });
   }
 
   private mapPrismaToDomain(row: {
     id: string;
+    schemaVersion: number;
     eventType: string;
+    resourceId: string | null;
+    requestId: string | null;
+    correlationId: string;
+    causationId: string | null;
+    integrityKeyId: string;
+    integrityHash: string;
     payload: Prisma.JsonValue;
     status: string;
     attempts: number;
-    lastError: string | null;
+    lastErrorCode: string | null;
     createdAt: Date;
     updatedAt: Date;
   }): OutboxEvent {
     return {
       id: row.id,
+      schemaVersion: row.schemaVersion,
       eventType: row.eventType,
-      payload: row.payload as Record<string, unknown>,
-      status: row.status as 'PENDING' | 'PROCESSED' | 'FAILED',
+      resourceId: row.resourceId,
+      requestId: row.requestId,
+      correlationId: row.correlationId,
+      causationId: row.causationId,
+      integrityKeyId: row.integrityKeyId,
+      integrityHash: row.integrityHash,
+      payload: row.payload as OutboxEvent['payload'],
+      status: row.status as OutboxEvent['status'],
       attempts: row.attempts,
-      lastError: row.lastError,
+      lastErrorCode: row.lastErrorCode,
       createdAt: row.createdAt,
       updatedAt: row.updatedAt,
     };
@@ -1522,24 +1645,33 @@ export class PrismaApprovalGrantRepository implements ApprovalGrantRepository {
 }
 
 export interface AuthRepository {
-  createSession(input: {
-    deviceCode: string;
-    userCode: string;
-    expiresAt: Date;
-  }): Promise<AuthSession>;
+  createSession(
+    input: {
+      deviceCode: string;
+      userCode: string;
+      expiresAt: Date;
+    },
+    tx?: Prisma.TransactionClient
+  ): Promise<AuthSession>;
   findSessionByDeviceCode(deviceCode: string): Promise<AuthSession | null>;
   findSessionByUserCode(userCode: string): Promise<AuthSession | null>;
-  updateSessionStatus(id: string, status: AuthSessionStatus, userId?: string): Promise<void>;
+  updateSessionStatus(
+    id: string,
+    status: AuthSessionStatus,
+    userId?: string,
+    tx?: Prisma.TransactionClient
+  ): Promise<void>;
   transitionSessionStatus(
     id: string,
     fromStatus: AuthSessionStatus,
     toStatus: AuthSessionStatus,
-    userId?: string
+    userId?: string,
+    tx?: Prisma.TransactionClient
   ): Promise<boolean>;
-  createApiToken(input: CreateApiTokenInput): Promise<ApiToken>;
+  createApiToken(input: CreateApiTokenInput, tx?: Prisma.TransactionClient): Promise<ApiToken>;
   findApiToken(token: string): Promise<ApiToken | null>;
-  updateApiTokenLastUsed(id: string): Promise<void>;
-  deleteExpiredSessions(): Promise<number>;
+  updateApiTokenLastUsed(id: string, tx?: Prisma.TransactionClient): Promise<void>;
+  deleteExpiredSessions(tx?: Prisma.TransactionClient): Promise<number>;
 }
 
 export interface CredentialRepository {
@@ -1552,7 +1684,7 @@ export interface CredentialRepository {
 }
 
 export interface ProjectRepository {
-  createProject(input: CreateProjectInput): Promise<Project>;
+  createProject(input: CreateProjectInput, tx?: Prisma.TransactionClient): Promise<Project>;
   findById(id: string): Promise<Project | null>;
   listProjectsByOwner(ownerId: string): Promise<Project[]>;
 
@@ -1565,8 +1697,8 @@ export interface ProjectRepository {
   getEnvironmentById(projectId: string, envId: string): Promise<Environment | null>;
   findEnvironmentByResourceId(resourceId: string): Promise<Environment | null>;
 
-  addMember(input: CreateProjectMemberInput): Promise<ProjectMember>;
-  removeMember(projectId: string, userId: string): Promise<void>;
+  addMember(input: CreateProjectMemberInput, tx?: Prisma.TransactionClient): Promise<ProjectMember>;
+  removeMember(projectId: string, userId: string, tx?: Prisma.TransactionClient): Promise<void>;
   getMemberRole(projectId: string, userId: string): Promise<ProjectMemberRole | null>;
   listMembers(projectId: string): Promise<ProjectMember[]>;
   listMembershipsByUser(userId: string): Promise<ProjectMember[]>;
@@ -1579,12 +1711,12 @@ export class PrismaAuthRepository implements AuthRepository {
     this.prisma = prisma;
   }
 
-  async createSession(input: {
-    deviceCode: string;
-    userCode: string;
-    expiresAt: Date;
-  }): Promise<AuthSession> {
-    const session = await this.prisma.authSession.create({
+  async createSession(
+    input: { deviceCode: string; userCode: string; expiresAt: Date },
+    tx?: Prisma.TransactionClient
+  ): Promise<AuthSession> {
+    const client = tx || this.prisma;
+    const session = await client.authSession.create({
       data: {
         deviceCode: input.deviceCode,
         userCode: input.userCode,
@@ -1605,12 +1737,18 @@ export class PrismaAuthRepository implements AuthRepository {
     return session ? this.mapSession(session) : null;
   }
 
-  async updateSessionStatus(id: string, status: AuthSessionStatus, userId?: string): Promise<void> {
+  async updateSessionStatus(
+    id: string,
+    status: AuthSessionStatus,
+    userId?: string,
+    tx?: Prisma.TransactionClient
+  ): Promise<void> {
     if (status === 'APPROVED' && !userId) {
       throw new Error('userId is required for APPROVED status');
     }
 
-    await this.prisma.authSession.update({
+    const client = tx || this.prisma;
+    await client.authSession.update({
       where: { id },
       data: { status, userId: userId || null },
     });
@@ -1620,13 +1758,15 @@ export class PrismaAuthRepository implements AuthRepository {
     id: string,
     fromStatus: AuthSessionStatus,
     toStatus: AuthSessionStatus,
-    userId?: string
+    userId?: string,
+    tx?: Prisma.TransactionClient
   ): Promise<boolean> {
     const data: Prisma.AuthSessionUpdateInput = { status: toStatus };
     if (userId !== undefined) {
       data.userId = userId;
     }
-    const result = await this.prisma.authSession.updateMany({
+    const client = tx || this.prisma;
+    const result = await client.authSession.updateMany({
       where: {
         id,
         status: fromStatus,
@@ -1636,8 +1776,12 @@ export class PrismaAuthRepository implements AuthRepository {
     return result.count === 1;
   }
 
-  async createApiToken(input: CreateApiTokenInput): Promise<ApiToken> {
-    const token = await this.prisma.apiToken.create({
+  async createApiToken(
+    input: CreateApiTokenInput,
+    tx?: Prisma.TransactionClient
+  ): Promise<ApiToken> {
+    const client = tx || this.prisma;
+    const token = await client.apiToken.create({
       data: {
         token: input.token,
         userId: input.userId,
@@ -1653,15 +1797,17 @@ export class PrismaAuthRepository implements AuthRepository {
     return row ? this.mapToken(row) : null;
   }
 
-  async updateApiTokenLastUsed(id: string): Promise<void> {
-    await this.prisma.apiToken.update({
+  async updateApiTokenLastUsed(id: string, tx?: Prisma.TransactionClient): Promise<void> {
+    const client = tx || this.prisma;
+    await client.apiToken.update({
       where: { id },
       data: { lastUsedAt: new Date() },
     });
   }
 
-  async deleteExpiredSessions(): Promise<number> {
-    const result = await this.prisma.authSession.deleteMany({
+  async deleteExpiredSessions(tx?: Prisma.TransactionClient): Promise<number> {
+    const client = tx || this.prisma;
+    const result = await client.authSession.deleteMany({
       where: {
         OR: [{ status: 'EXPIRED' }, { status: 'CONSUMED' }, { expiresAt: { lt: new Date() } }],
       },
@@ -1735,8 +1881,9 @@ export class PrismaProjectRepository implements ProjectRepository {
     this.prisma = prisma;
   }
 
-  async createProject(input: CreateProjectInput): Promise<Project> {
-    const project = await this.prisma.project.create({
+  async createProject(input: CreateProjectInput, tx?: Prisma.TransactionClient): Promise<Project> {
+    const client = tx || this.prisma;
+    const project = await client.project.create({
       data: {
         name: input.name,
         description: input.description ?? null,
@@ -1844,9 +1991,13 @@ export class PrismaProjectRepository implements ProjectRepository {
     };
   }
 
-  async addMember(input: CreateProjectMemberInput): Promise<ProjectMember> {
+  async addMember(
+    input: CreateProjectMemberInput,
+    tx?: Prisma.TransactionClient
+  ): Promise<ProjectMember> {
+    const client = tx || this.prisma;
     try {
-      const member = await this.prisma.projectMember.create({
+      const member = await client.projectMember.create({
         data: {
           projectId: input.projectId,
           userId: input.userId,
@@ -1855,7 +2006,7 @@ export class PrismaProjectRepository implements ProjectRepository {
         },
       });
       // Rotate project policyVersion
-      await this.prisma.project.update({
+      await client.project.update({
         where: { id: input.projectId },
         data: { policyVersion: randomUUID() },
       });
@@ -1872,12 +2023,12 @@ export class PrismaProjectRepository implements ProjectRepository {
       ) {
         // Already exists, try to update role? Or just throw duplicate.
         // For now, let's treat it as an update if they try to add again
-        const member = await this.prisma.projectMember.update({
+        const member = await client.projectMember.update({
           where: { projectId_userId: { projectId: input.projectId, userId: input.userId } },
           data: { role: input.role ?? 'READER' },
         });
         // Rotate project policyVersion
-        await this.prisma.project.update({
+        await client.project.update({
           where: { id: input.projectId },
           data: { policyVersion: randomUUID() },
         });
@@ -1887,13 +2038,18 @@ export class PrismaProjectRepository implements ProjectRepository {
     }
   }
 
-  async removeMember(projectId: string, userId: string): Promise<void> {
+  async removeMember(
+    projectId: string,
+    userId: string,
+    tx?: Prisma.TransactionClient
+  ): Promise<void> {
+    const client = tx || this.prisma;
     try {
-      await this.prisma.projectMember.delete({
+      await client.projectMember.delete({
         where: { projectId_userId: { projectId, userId } },
       });
       // Rotate project policyVersion
-      await this.prisma.project.update({
+      await client.project.update({
         where: { id: projectId },
         data: { policyVersion: randomUUID() },
       });

@@ -1,6 +1,7 @@
 import type { ChatInputCommandInteraction } from 'discord.js';
 import type { CommandContext } from '../../context.js';
 import { resolveUserAccessibleAccount } from '../helpers.js';
+import { createDiscordPrincipal } from '../../../../domain/principal.js';
 
 export async function handleUpdate2FA(
   interaction: ChatInputCommandInteraction,
@@ -32,7 +33,10 @@ export async function handleUpdate2FA(
 
   account.backupKey = backupKey;
 
-  await totpRepository.update(account);
+  await context.services.resource.updateTOTPAccount(
+    account,
+    createDiscordPrincipal(requesterId, interaction.id)
+  );
 
   await interaction.reply({
     content: [

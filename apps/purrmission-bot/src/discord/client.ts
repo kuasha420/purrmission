@@ -22,6 +22,7 @@ import { handleApprovalButton } from './interactions/approvalButtons.js';
 
 import type { Repositories } from '../domain/repositories.js';
 import { getGuardedResourcesForUser } from '../domain/policy.js';
+import { correlationStorage } from '../logging/correlationContext.js';
 
 /**
  * Dependencies for the Discord client.
@@ -58,52 +59,57 @@ export function createDiscordClient(deps: DiscordClientDeps): Client {
 
   // Interaction handler
   client.on(Events.InteractionCreate, async (interaction: Interaction) => {
-    try {
-      // Handle slash commands
-      if (interaction.isChatInputCommand()) {
-        await handleChatInputCommand(interaction, deps);
-        return;
-      }
+    await correlationStorage.run(
+      { correlationId: interaction.id, surface: 'DISCORD' },
+      async () => {
+        try {
+          // Handle slash commands
+          if (interaction.isChatInputCommand()) {
+            await handleChatInputCommand(interaction, deps);
+            return;
+          }
 
-      // Handle autocomplete
-      if (interaction.isAutocomplete()) {
-        await handleAutocomplete(interaction, {
-          services: deps.services,
-          repositories: deps.repositories,
-        });
-        return;
-      }
+          // Handle autocomplete
+          if (interaction.isAutocomplete()) {
+            await handleAutocomplete(interaction, {
+              services: deps.services,
+              repositories: deps.repositories,
+            });
+            return;
+          }
 
-      // Handle button interactions
-      if (interaction.isButton()) {
-        await handleButtonInteraction(interaction, deps);
-        return;
-      }
+          // Handle button interactions
+          if (interaction.isButton()) {
+            await handleButtonInteraction(interaction, deps);
+            return;
+          }
 
-      // TODO: Handle other interaction types as needed
-      // - Select menus
-      // - Modal submissions
-      // - Autocomplete
-    } catch (error) {
-      logger.error('Error handling interaction', {
-        interactionId: interaction.id,
-        error: error instanceof Error ? error.message : String(error),
-      });
+          // TODO: Handle other interaction types as needed
+          // - Select menus
+          // - Modal submissions
+          // - Autocomplete
+        } catch (error) {
+          logger.error('Error handling interaction', {
+            interactionId: interaction.id,
+            error: error instanceof Error ? error.message : String(error),
+          });
 
-      // Try to respond with an error message
-      try {
-        if (interaction.isRepliable()) {
-          const errorMessage = 'An error occurred while processing your request.';
-          if (interaction.replied || interaction.deferred) {
-            await interaction.followUp({ content: errorMessage, ephemeral: true });
-          } else {
-            await interaction.reply({ content: errorMessage, ephemeral: true });
+          // Try to respond with an error message
+          try {
+            if (interaction.isRepliable()) {
+              const errorMessage = 'An error occurred while processing your request.';
+              if (interaction.replied || interaction.deferred) {
+                await interaction.followUp({ content: errorMessage, ephemeral: true });
+              } else {
+                await interaction.reply({ content: errorMessage, ephemeral: true });
+              }
+            }
+          } catch {
+            // Ignore errors when trying to send error response
           }
         }
-      } catch {
-        // Ignore errors when trying to send error response
       }
-    }
+    );
   });
 
   // Error event

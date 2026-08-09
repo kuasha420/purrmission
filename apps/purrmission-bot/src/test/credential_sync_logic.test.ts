@@ -22,7 +22,6 @@ import {
   ResourceField,
   ApprovalRequest,
   ApprovalStatus,
-  AuditLog,
   CreateProjectInput,
   CreateEnvironmentInput,
   CreateResourceInput,
@@ -152,7 +151,7 @@ class MemGuardianRepo implements GuardianRepository {
   guardians: Guardian[] = [];
 
   async add(input: AddGuardianInput, _tx?: any): Promise<Guardian> {
-    const g: Guardian = { ...input, createdAt: new Date() };
+    const g: Guardian = { ...input, id: input.id ?? randomUUID(), createdAt: new Date() };
     this.guardians.push(g);
     return g;
   }
@@ -313,6 +312,23 @@ class MemApprovalRepo implements ApprovalRequestRepository {
   async findByResourceId(resourceId: string): Promise<ApprovalRequest[]> {
     return this.requests.filter((r) => r.resourceId === resourceId);
   }
+  async findPending(
+    resourceId: string,
+    requesterId: string,
+    action: string,
+    targetKey: string | null
+  ): Promise<ApprovalRequest | null> {
+    return (
+      this.requests.find(
+        (r) =>
+          r.resourceId === resourceId &&
+          r.requesterId === requesterId &&
+          r.action === action &&
+          r.targetKey === targetKey &&
+          r.status === 'PENDING'
+      ) ?? null
+    );
+  }
   async findPendingByResourceId(resourceId: string): Promise<ApprovalRequest[]> {
     return this.requests.filter((r) => r.resourceId === resourceId && r.status === 'PENDING');
   }
@@ -334,12 +350,9 @@ class MemOutboxRepo implements OutboxRepository {
 
   async create(input: CreateOutboxEventInput, _tx?: any): Promise<OutboxEvent> {
     const event: OutboxEvent = {
-      id: randomUUID(),
-      eventType: input.eventType,
-      payload: input.payload,
+      ...input,
       status: 'PENDING',
       attempts: 0,
-      createdAt: new Date(),
       updatedAt: new Date(),
     };
     this.events.push(event);
@@ -352,16 +365,16 @@ class MemOutboxRepo implements OutboxRepository {
 
   async updateStatus(
     id: string,
-    status: 'PENDING' | 'PROCESSED' | 'FAILED',
+    status: 'PENDING' | 'DELIVERED_PENDING_AUDIT' | 'PROCESSED' | 'FAILED',
     attempts: number,
-    lastError?: string,
+    lastErrorCode?: string,
     _tx?: any
   ): Promise<void> {
     const event = this.events.find((e) => e.id === id);
     if (event) {
       event.status = status;
       event.attempts = attempts;
-      event.lastError = lastError ?? null;
+      event.lastErrorCode = lastErrorCode ?? null;
       event.updatedAt = new Date();
     }
   }
@@ -385,30 +398,15 @@ describe('Credential Sync Logic Smoke Test', () => {
   const totpRepo = {} as TOTPRepository;
   const auditRepo: AuditRepository = {
     create: async (input: CreateAuditLogInput) => {
-      return {
-        id: randomUUID(),
-        schemaVersion: input.schemaVersion,
-        eventType: input.eventType,
-        outcomeCode: input.outcomeCode,
-        actorType: input.actorType,
-        actorId: input.actorId,
-        authKind: input.authKind,
-        resourceId: input.resourceId,
-        projectId: input.projectId,
-        environmentId: input.environmentId,
-        requestId: input.requestId,
-        grantId: input.grantId,
-        correlationId: input.correlationId,
-        causationId: input.causationId,
-        payload: input.payload,
-        createdAt: new Date(),
-      } as AuditLog;
+      return input;
     },
-    findByResourceId: async () => [],
-    findByProjectId: async () => [],
+    findByScope: async () => [],
   };
 
-  const repositories: Repositories = {
+  const repositories = {
+    transaction: async <T>(
+      callback: (tx: import('@prisma/client').Prisma.TransactionClient) => Promise<T>
+    ) => callback({} as import('@prisma/client').Prisma.TransactionClient),
     projects: projectRepo,
     resources: resourceRepo,
     guardians: guardianRepo,

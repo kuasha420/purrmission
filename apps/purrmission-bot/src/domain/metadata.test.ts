@@ -3,6 +3,7 @@ import assert from 'node:assert';
 import { createInMemoryRepositories } from './repositories.mock.js';
 import { ResourceService } from './services.js';
 import { ProjectService } from './project.js';
+import { AuditService } from './audit.js';
 
 describe('Metadata Projections, Visibility Discovery and Version Rotations', () => {
   let repos: ReturnType<typeof createInMemoryRepositories>;
@@ -11,8 +12,9 @@ describe('Metadata Projections, Visibility Discovery and Version Rotations', () 
 
   beforeEach(() => {
     repos = createInMemoryRepositories();
-    resourceService = new ResourceService({ repositories: repos });
-    projectService = new ProjectService(repos.projects, resourceService);
+    const audit = new AuditService({ repositories: repos });
+    resourceService = new ResourceService({ repositories: repos, audit });
+    projectService = new ProjectService(repos.projects, resourceService, audit, repos.transaction);
   });
 
   describe('Decryption Prevention and Projections', () => {
@@ -195,7 +197,7 @@ describe('Metadata Projections, Visibility Discovery and Version Rotations', () 
 
       // Remove member -> rotates project policyVersion
       const v2 = projectAfterAdd.policyVersion;
-      await projectService.removeMember(project.id, 'user-bob');
+      await projectService.removeMember(project.id, 'user-bob', 'owner-jane');
       const projectAfterRemove = await projectService.getProject(project.id);
       assert.ok(projectAfterRemove);
       assert.notStrictEqual(projectAfterRemove.policyVersion, v2);

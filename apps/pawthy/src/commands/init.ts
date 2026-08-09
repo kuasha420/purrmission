@@ -5,6 +5,7 @@ import chalk from 'chalk';
 import fs from 'fs/promises';
 import path from 'path';
 import { getToken, getApiUrl, findProjectRoot } from '../config.js';
+import { createPawthyCorrelationContext, pawthyRequestHeaders } from '../correlation.js';
 
 interface Project {
   id: string;
@@ -22,6 +23,7 @@ export const initCommand = new Command('init')
   .action(async () => {
     const token = getToken();
     const apiUrl = getApiUrl();
+    const correlation = createPawthyCorrelationContext();
 
     if (!token) {
       console.error(
@@ -35,7 +37,7 @@ export const initCommand = new Command('init')
 
       // 1. Fetch Projects
       const projectsRes = await axios.get<Project[]>(`${apiUrl}/api/projects`, {
-        headers: { Authorization: `Bearer ${token}` },
+        headers: pawthyRequestHeaders(correlation, { Authorization: `Bearer ${token}` }),
       });
 
       let projects = projectsRes.data;
@@ -66,7 +68,11 @@ export const initCommand = new Command('init')
               name: projectName.trim(),
               description: projectDescription?.trim() || undefined,
             },
-            { headers: { Authorization: `Bearer ${token}` } }
+            {
+              headers: pawthyRequestHeaders(correlation, {
+                Authorization: `Bearer ${token}`,
+              }),
+            }
           );
 
           const newProject = createRes.data;
@@ -156,7 +162,7 @@ export const initCommand = new Command('init')
       const envsRes = await axios.get<Environment[]>(
         `${apiUrl}/api/projects/${selectedProjectId}/environments`,
         {
-          headers: { Authorization: `Bearer ${token}` },
+          headers: pawthyRequestHeaders(correlation, { Authorization: `Bearer ${token}` }),
         }
       );
 
@@ -204,7 +210,11 @@ export const initCommand = new Command('init')
               name: envName.trim(),
               slug: envSlug.trim(),
             },
-            { headers: { Authorization: `Bearer ${token}` } }
+            {
+              headers: pawthyRequestHeaders(correlation, {
+                Authorization: `Bearer ${token}`,
+              }),
+            }
           );
 
           const newEnv = createEnvRes.data;

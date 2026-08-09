@@ -7,6 +7,8 @@ import { ProjectService } from './project.js';
 import { DomainPortsImpl } from './ports_impl.js';
 import { ValidationError } from './errors.js';
 import { deterministicUUID } from './crypto.js';
+import { AuditService, buildOutboxEvent } from './audit.js';
+import { OutboxWorker } from './outbox_worker.js';
 
 describe('SSRF Protection, Idempotent Outbox, and Batch Secrets API', () => {
   let repos: ReturnType<typeof createInMemoryRepositories>;
@@ -17,12 +19,13 @@ describe('SSRF Protection, Idempotent Outbox, and Batch Secrets API', () => {
 
   beforeEach(() => {
     repos = createInMemoryRepositories();
-    const deps: any = { repositories: repos };
+    const audit = new AuditService({ repositories: repos });
+    const deps: any = { repositories: repos, audit };
     approvalService = new ApprovalService(deps);
     deps.approval = approvalService;
     resourceService = new ResourceService(deps);
-    projectService = new ProjectService(repos.projects, resourceService);
-    ports = new DomainPortsImpl(projectService, resourceService, approvalService);
+    projectService = new ProjectService(repos.projects, resourceService, audit, repos.transaction);
+    ports = new DomainPortsImpl(projectService, resourceService, approvalService, audit, repos);
   });
 
   describe('SSRF Protection & IP Screening', () => {
@@ -74,6 +77,28 @@ describe('SSRF Protection, Idempotent Outbox, and Batch Secrets API', () => {
       assert.strictEqual(u1, u2);
       assert.notStrictEqual(u1, u3);
       assert.match(u1, /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/);
+    });
+
+    it('does not redeliver after delivery when outcome-audit persistence fails', async () => {
+      const audit = new AuditService({ repositories: repos });
+      const originalLog = audit.log.bind(audit);
+      audit.log = (async (event, tx) => {
+        if (event.eventType === 'DELIVERY_OUTCOME') throw new Error('audit sink unavailable');
+        return originalLog(event, tx);
+      }) as typeof audit.log;
+      await repos.outbox.create(
+        buildOutboxEvent({
+          eventType: 'REQUEST_CREATED',
+          resourceId: 'resource-1',
+          requestId: 'request-1',
+          payload: { requestId: 'request-1', resourceId: 'resource-1' },
+        })
+      );
+      const worker = new OutboxWorker(repos, audit);
+      await worker.processEvents();
+      assert.equal((await repos.outbox.findPending()).length, 0);
+      await worker.processEvents();
+      assert.equal((await repos.outbox.findPending()).length, 0);
     });
   });
 

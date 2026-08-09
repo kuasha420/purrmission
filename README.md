@@ -221,17 +221,23 @@ tables fails closed.
 
 ### Environment Variables
 
-| Variable                       | Description                                              |
-| ------------------------------ | -------------------------------------------------------- |
-| `DISCORD_BOT_TOKEN`            | Your Discord bot token                                   |
-| `DISCORD_CLIENT_ID`            | Your Discord application client ID                       |
-| `DISCORD_GUILD_ID`             | Guild ID for development (commands deploy here)          |
-| `APP_PORT`                     | HTTP server port (default: 3001)                         |
-| `DATABASE_URL`                 | Database URL (e.g., `file:./data/prod.db`)               |
-| `ENCRYPTION_KEY`               | **Required** - 32-byte hex for at-rest encryption        |
-| `EXTERNAL_API_URL`             | Public API URL (e.g., `https://purrmission.example.com`) |
-| `CONTEXT7_API_KEY`             | Optional - API key for Context7 MCP                      |
-| `GITHUB_PERSONAL_ACCESS_TOKEN` | Optional - token for GitHub MCP tooling                  |
+| Variable                       | Description                                                |
+| ------------------------------ | ---------------------------------------------------------- |
+| `DISCORD_BOT_TOKEN`            | Your Discord bot token                                     |
+| `DISCORD_CLIENT_ID`            | Your Discord application client ID                         |
+| `DISCORD_GUILD_ID`             | Guild ID for development (commands deploy here)            |
+| `APP_PORT`                     | HTTP server port (default: 3001)                           |
+| `DATABASE_URL`                 | Database URL (e.g., `file:./data/prod.db`)                 |
+| `ENCRYPTION_KEY`               | **Required** - 32-byte hex for at-rest encryption          |
+| `AUDIT_INTEGRITY_KEY`          | **Required** - purpose-specific 32-byte hex audit HMAC key |
+| `AUDIT_INTEGRITY_KEY_ID`       | Rotatable audit HMAC key identifier (default `audit-v1`)   |
+| `OUTBOX_INTEGRITY_KEY`         | **Required** - distinct 32-byte hex outbox HMAC key        |
+| `OUTBOX_INTEGRITY_KEY_ID`      | Rotatable outbox HMAC key identifier (default `outbox-v1`) |
+| `AUDIT_RETENTION_DAYS`         | Audit retention cutoff in days (default `365`)             |
+| `AUDIT_CHECKPOINT_INTERVAL`    | Integrity checkpoint cadence in events (default `1000`)    |
+| `EXTERNAL_API_URL`             | Public API URL (e.g., `https://purrmission.example.com`)   |
+| `CONTEXT7_API_KEY`             | Optional - API key for Context7 MCP                        |
+| `GITHUB_PERSONAL_ACCESS_TOKEN` | Optional - token for GitHub MCP tooling                    |
 
 Generate an encryption key:
 

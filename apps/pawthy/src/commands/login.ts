@@ -3,12 +3,14 @@ import axios from 'axios';
 import boxen from 'boxen';
 import chalk from 'chalk';
 import { getApiUrl, setToken, ConfigScope } from '../config.js';
+import { createPawthyCorrelationContext, pawthyRequestHeaders } from '../correlation.js';
 
 export const loginCommand = new Command('login')
   .description('Authenticate with Purrmission using Device Flow')
   .option('-l, --local', 'Store session locally in .pawthy/config.json (per-project)')
   .action(async (options: { local?: boolean }) => {
     const apiUrl = getApiUrl();
+    const correlation = createPawthyCorrelationContext();
     console.log(chalk.dim(`Connecting to ${apiUrl}...`));
 
     try {
@@ -19,7 +21,9 @@ export const loginCommand = new Command('login')
         verification_uri: string;
         expires_in: number;
         interval: number;
-      }>(`${apiUrl}/api/auth/device/code`);
+      }>(`${apiUrl}/api/auth/device/code`, undefined, {
+        headers: pawthyRequestHeaders(correlation),
+      });
 
       const { device_code, user_code, verification_uri, interval } = initResponse.data;
 
@@ -57,10 +61,14 @@ export const loginCommand = new Command('login')
             access_token: string;
             token_type: string;
             expires_in: number;
-          }>(`${apiUrl}/api/auth/token`, {
-            device_code,
-            grant_type: 'urn:ietf:params:oauth:grant-type:device_code',
-          });
+          }>(
+            `${apiUrl}/api/auth/token`,
+            {
+              device_code,
+              grant_type: 'urn:ietf:params:oauth:grant-type:device_code',
+            },
+            { headers: pawthyRequestHeaders(correlation) }
+          );
 
           const { access_token } = tokenResponse.data;
           const scope: ConfigScope = options.local ? 'local' : 'global';

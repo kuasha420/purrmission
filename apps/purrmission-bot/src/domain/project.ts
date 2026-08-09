@@ -8,8 +8,8 @@ import {
   ProjectMember,
   ProjectMemberRole,
 } from './models.js';
-import { getPrismaClient } from '../infra/prismaClient.js';
 import { type Prisma } from '@prisma/client';
+import { AuditService } from './audit.js';
 
 export class ProjectService {
   constructor(
@@ -20,20 +20,48 @@ export class ProjectService {
         ownerId: string,
         tx?: Prisma.TransactionClient
       ) => Promise<{ resource: { id: string } }>;
-    }
-  ) {}
+    },
+    private readonly audit: AuditService,
+    private readonly transaction: <T>(
+      callback: (tx: Prisma.TransactionClient) => Promise<T>
+    ) => Promise<T>
+  ) {
+    if (!audit) throw new TypeError('ProjectService requires an audit dependency.');
+  }
 
-  private async runTransaction<T>(callback: (tx: any) => Promise<T>): Promise<T> {
-    const isMock = this.projectRepo.constructor.name.includes('InMemory');
-    if (isMock) {
-      return callback(undefined);
-    }
-    const prisma = getPrismaClient();
-    return prisma.$transaction(callback);
+  private async runTransaction<T>(
+    callback: (tx: Prisma.TransactionClient) => Promise<T>
+  ): Promise<T> {
+    return this.transaction(callback);
   }
 
   async createProject(input: CreateProjectInput): Promise<Project> {
-    return this.projectRepo.createProject(input);
+    return this.runTransaction(async (tx) => {
+      const project = await this.projectRepo.createProject(input, tx);
+      await this.audit.log(
+        {
+          eventFamily: 'PROJECT_MEMBERSHIP',
+          eventType: 'PROJECT_CREATE',
+          surface: 'DOMAIN',
+          operation: 'project.create',
+          outcomeCode: 'SUCCESS',
+          capability: 'project.create',
+          decisionCode: 'ALLOW',
+          reasonCode: 'AUTHENTICATED_SUBJECT',
+          authoritySources: ['AUTHENTICATED_SUBJECT'],
+          targetType: 'PROJECT',
+          targetId: project.id,
+          actorType: 'DISCORD_USER',
+          principalId: `discord:${input.ownerId}`,
+          actorId: input.ownerId,
+          authKind: 'DISCORD',
+          projectId: project.id,
+          payload: {},
+        },
+        tx
+      );
+      return project;
+    });
   }
 
   async listProjects(userId: string): Promise<Project[]> {
@@ -76,13 +104,38 @@ export class ProjectService {
       );
 
       // 3. Create Environment linked to Resource inside the transaction
-      return this.projectRepo.createEnvironment(
+      const environment = await this.projectRepo.createEnvironment(
         {
           ...input,
           resourceId: resource.id,
         },
         tx
       );
+      await this.audit.log(
+        {
+          eventFamily: 'RESOURCE_CONFIGURATION',
+          eventType: 'ENVIRONMENT_CREATE',
+          surface: 'DOMAIN',
+          operation: 'environment.create',
+          outcomeCode: 'SUCCESS',
+          capability: 'environment.create',
+          decisionCode: 'ALLOW',
+          reasonCode: 'OWNER',
+          authoritySources: ['PROJECT_OWNER'],
+          targetType: 'ENVIRONMENT',
+          targetId: environment.id,
+          actorType: 'DISCORD_USER',
+          principalId: `discord:${project.ownerId}`,
+          actorId: project.ownerId,
+          authKind: 'DISCORD',
+          projectId: project.id,
+          environmentId: environment.id,
+          resourceId: resource.id,
+          payload: { slug: environment.slug },
+        },
+        tx
+      );
+      return environment;
     });
   }
 
@@ -104,16 +157,60 @@ export class ProjectService {
     role: ProjectMemberRole,
     addedBy: string
   ): Promise<ProjectMember> {
-    return this.projectRepo.addMember({
-      projectId,
-      userId,
-      role,
-      addedBy,
+    return this.runTransaction(async (tx) => {
+      const member = await this.projectRepo.addMember({ projectId, userId, role, addedBy }, tx);
+      await this.audit.log(
+        {
+          eventFamily: 'PROJECT_MEMBERSHIP',
+          eventType: 'PROJECT_MEMBER_ADD',
+          surface: 'DOMAIN',
+          operation: 'project.member.add',
+          outcomeCode: 'SUCCESS',
+          capability: 'project.members.manage',
+          decisionCode: 'ALLOW',
+          reasonCode: 'OWNER',
+          authoritySources: ['PROJECT_OWNER'],
+          targetType: 'PROJECT',
+          targetId: projectId,
+          actorType: 'DISCORD_USER',
+          principalId: `discord:${addedBy}`,
+          actorId: addedBy,
+          authKind: 'DISCORD',
+          projectId,
+          payload: { memberUserId: userId, role },
+        },
+        tx
+      );
+      return member;
     });
   }
 
-  async removeMember(projectId: string, userId: string): Promise<void> {
-    return this.projectRepo.removeMember(projectId, userId);
+  async removeMember(projectId: string, userId: string, removedBy: string): Promise<void> {
+    await this.runTransaction(async (tx) => {
+      await this.projectRepo.removeMember(projectId, userId, tx);
+      await this.audit.log(
+        {
+          eventFamily: 'PROJECT_MEMBERSHIP',
+          eventType: 'PROJECT_MEMBER_REMOVE',
+          surface: 'DOMAIN',
+          operation: 'project.member.remove',
+          outcomeCode: 'SUCCESS',
+          capability: 'project.members.manage',
+          decisionCode: 'ALLOW',
+          reasonCode: 'OWNER',
+          authoritySources: ['PROJECT_OWNER'],
+          targetType: 'PROJECT',
+          targetId: projectId,
+          actorType: 'DISCORD_USER',
+          principalId: `discord:${removedBy}`,
+          actorId: removedBy,
+          authKind: 'DISCORD',
+          projectId,
+          payload: { memberUserId: userId },
+        },
+        tx
+      );
+    });
   }
 
   async getMemberRole(projectId: string, userId: string): Promise<ProjectMemberRole | null> {

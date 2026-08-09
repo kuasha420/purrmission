@@ -164,7 +164,7 @@ export async function handleRemoveMember(
       return;
     }
 
-    await services.project.removeMember(projectId, targetUser.id);
+    await services.project.removeMember(projectId, targetUser.id, actorId);
 
     await interaction.editReply(`✅ Removed <@${targetUser.id}> from project **${project.name}**.`);
     logger.info('Removed project member', { projectId, targetUserId: targetUser.id, actorId });

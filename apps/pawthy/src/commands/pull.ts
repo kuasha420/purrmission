@@ -5,6 +5,7 @@ import fs from 'fs/promises';
 import path from 'path';
 import { getToken, getApiUrl, getProjectConfig } from '../config.js';
 import { resolveFileAndFormat, SecretFormat, serializeSecrets } from '../format.js';
+import { createPawthyCorrelationContext, pawthyRequestHeaders } from '../correlation.js';
 
 export const pullCommand = new Command('pull')
   .description('Pull secrets from Purrmission to local secret file')
@@ -21,6 +22,7 @@ export const pullCommand = new Command('pull')
   .action(async (options) => {
     const token = getToken();
     const apiUrl = getApiUrl();
+    const correlation = createPawthyCorrelationContext();
     if (!token) {
       console.error(chalk.red('You must be logged in. Run `pawthy login` first.'));
       process.exit(1);
@@ -91,7 +93,7 @@ export const pullCommand = new Command('pull')
         message?: string;
         requestId?: string;
       }>(url.toString(), {
-        headers: { Authorization: `Bearer ${token}` },
+        headers: pawthyRequestHeaders(correlation, { Authorization: `Bearer ${token}` }),
         validateStatus: (status) => status >= 200 && status < 300,
       });
 

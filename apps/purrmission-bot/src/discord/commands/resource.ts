@@ -33,6 +33,7 @@ import {
   isEffectiveOwner,
 } from '../../domain/policy.js';
 import { handleResourceIdAutocomplete } from './resourceAutocomplete.js';
+import { createDiscordPrincipal } from '../../domain/principal.js';
 
 const MAX_RESOURCE_NAME_LENGTH = 100;
 
@@ -672,12 +673,23 @@ async function handleFieldsGet(
     );
 
     await context.services.audit.log({
-      eventType: 'SECRET_VALUE_REVEAL',
+      eventFamily: 'SECRET_LIFECYCLE',
+      eventType: 'SECRET_REVEAL',
+      surface: 'DISCORD',
+      operation: 'resource.field.get',
       outcomeCode: 'SUCCESS',
+      capability: 'secret.value.read',
+      decisionCode: 'ALLOW',
+      reasonCode: 'OWNER',
+      authoritySources: ['RESOURCE_OWNER'],
+      targetType: 'SECRET',
+      targetId: `${resourceId}:${name}`,
       actorType: 'DISCORD_USER',
+      principalId: `discord-interaction:${interaction.id}`,
       resourceId,
       actorId: userId,
       authKind: 'DISCORD',
+      correlationId: interaction.id,
       payload: { fieldName: name },
     });
 
@@ -865,7 +877,7 @@ async function handleUnlink2FA(
   }
 
   try {
-    await context.services.resource.unlinkTOTPAccount(resourceId, userId);
+    await context.services.resource.unlinkTOTPAccount(resourceId, createDiscordPrincipal(userId));
 
     logger.info('Unlinked 2FA account from resource', {
       resourceId,
@@ -964,12 +976,23 @@ async function handleGet2FA(
     });
 
     await context.services.audit.log({
+      eventFamily: 'TOTP_LIFECYCLE',
       eventType: 'TOTP_CODE_REVEAL',
+      surface: 'DISCORD',
+      operation: 'resource.totp.get',
       outcomeCode: 'SUCCESS',
+      capability: 'totp.code.read',
+      decisionCode: 'ALLOW',
+      reasonCode: 'OWNER',
+      authoritySources: ['RESOURCE_OWNER'],
+      targetType: 'TOTP_ACCOUNT',
+      targetId: linkedAccount.id,
       actorType: 'DISCORD_USER',
+      principalId: `discord-interaction:${interaction.id}`,
       resourceId,
       actorId: userId,
       authKind: 'DISCORD',
+      correlationId: interaction.id,
       payload: { totpAccountId: linkedAccount.id },
     });
 

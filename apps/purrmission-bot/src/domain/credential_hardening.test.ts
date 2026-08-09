@@ -6,6 +6,7 @@ import { createServices } from './services.js';
 import { AuthService, InvalidGrantError, SlowDownError } from './auth.js';
 import { hasCapability } from './policy.js';
 import { rateLimiter } from '../infra/rateLimit.js';
+import { AuditService } from './audit.js';
 
 describe('Credential Lifecycle Hardening', () => {
   beforeEach(() => {
@@ -100,7 +101,12 @@ describe('Credential Lifecycle Hardening', () => {
   describe('Atomic OAuth Token Exchange and Rate Limiting', () => {
     test('should exchange code atomically and fail concurrent race exchanges', async () => {
       const repos = createInMemoryRepositories();
-      const authService = new AuthService(repos.auth, repos.credentials);
+      const authService = new AuthService(
+        repos.auth,
+        repos.credentials,
+        new AuditService({ repositories: repos }),
+        repos.transaction
+      );
 
       // Initiate flow
       const flow = await authService.initiateDeviceFlow();
@@ -124,7 +130,12 @@ describe('Credential Lifecycle Hardening', () => {
 
     test('should enforce token poll rate limiting slow-down', async () => {
       const repos = createInMemoryRepositories();
-      const authService = new AuthService(repos.auth, repos.credentials);
+      const authService = new AuthService(
+        repos.auth,
+        repos.credentials,
+        new AuditService({ repositories: repos }),
+        repos.transaction
+      );
 
       const flow = await authService.initiateDeviceFlow();
 
@@ -141,7 +152,12 @@ describe('Credential Lifecycle Hardening', () => {
   describe('Scoped Service Principals and Double-Gated Scopes', () => {
     test('should fail closed for unbound service principal object scopes', async () => {
       const repos = createInMemoryRepositories();
-      const authService = new AuthService(repos.auth, repos.credentials);
+      const authService = new AuthService(
+        repos.auth,
+        repos.credentials,
+        new AuditService({ repositories: repos }),
+        repos.transaction
+      );
 
       // Mint service credential
       const { plaintext, credential } = await authService.mintServiceCredential(
@@ -191,7 +207,12 @@ describe('Credential Lifecycle Hardening', () => {
 
     test('should dual-gate user tokens with both capability roles and scopes', async () => {
       const repos = createInMemoryRepositories();
-      const authService = new AuthService(repos.auth, repos.credentials);
+      const authService = new AuthService(
+        repos.auth,
+        repos.credentials,
+        new AuditService({ repositories: repos }),
+        repos.transaction
+      );
 
       // 1. Mint user token with narrow scope: ['project.view'] (lacks project.delete)
       const flow = await authService.initiateDeviceFlow();

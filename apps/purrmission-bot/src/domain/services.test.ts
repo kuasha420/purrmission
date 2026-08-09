@@ -10,6 +10,7 @@ import {
 } from './repositories.js';
 import type { Guardian } from './models.js';
 import { createDiscordPrincipal } from './principal.js';
+import type { AuditService } from './audit.js';
 
 type MockedFn = {
   mock: {
@@ -23,6 +24,7 @@ describe('ResourceService', () => {
   let mockRepositories: Repositories;
   let mockGuardianRepo: Partial<GuardianRepository>;
   let mockResourceRepo: Partial<ResourceRepository>;
+  let audit: AuditService;
 
   const resourceId = 'res-1';
   const ownerId = 'owner-1';
@@ -42,6 +44,8 @@ describe('ResourceService', () => {
     };
 
     mockRepositories = {
+      transaction: async (callback) =>
+        callback({} as import('@prisma/client').Prisma.TransactionClient),
       guardians: mockGuardianRepo as GuardianRepository,
       resources: mockResourceRepo as ResourceRepository,
       projects: {
@@ -49,7 +53,11 @@ describe('ResourceService', () => {
       } as unknown as ProjectRepository,
     } as Repositories;
 
-    const deps: ServiceDependencies = { repositories: mockRepositories };
+    audit = { log: mock.fn(async () => undefined) } as unknown as AuditService;
+    const deps: ServiceDependencies = {
+      repositories: mockRepositories,
+      audit,
+    };
     resourceService = new ResourceService(deps);
   });
 
@@ -72,7 +80,7 @@ describe('ResourceService', () => {
       assert.strictEqual((mockGuardianRepo.remove as unknown as MockedFn).mock.calls.length, 1);
       assert.deepStrictEqual(
         (mockGuardianRepo.remove as unknown as MockedFn).mock.calls[0].arguments,
-        [resourceId, guardianId]
+        [resourceId, guardianId, {}]
       );
     });
 
@@ -131,7 +139,7 @@ describe('ResourceService', () => {
         projects: customProjectsRepo as unknown as ProjectRepository,
       } as Repositories;
 
-      const customDeps: ServiceDependencies = { repositories: customRepos };
+      const customDeps: ServiceDependencies = { repositories: customRepos, audit };
       const customService = new ResourceService(customDeps);
 
       const result = await customService.removeGuardian(resourceId, ownerId, otherId);
@@ -233,6 +241,8 @@ describe('ApprovalService', () => {
     };
 
     mockRepositories = {
+      transaction: async (callback) =>
+        callback({} as import('@prisma/client').Prisma.TransactionClient),
       approvalRequests: mockApprovalRepo as ApprovalRequestRepository,
       resources: mockResourceRepo as ResourceRepository,
       guardians: mockGuardianRepo as GuardianRepository,
@@ -241,7 +251,10 @@ describe('ApprovalService', () => {
       } as unknown as ProjectRepository,
     } as Repositories;
 
-    const deps: ServiceDependencies = { repositories: mockRepositories };
+    const deps: ServiceDependencies = {
+      repositories: mockRepositories,
+      audit: { log: mock.fn(async () => undefined) } as unknown as AuditService,
+    };
     approvalService = new ApprovalService(deps);
   });
 

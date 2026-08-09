@@ -12,6 +12,29 @@
 import { correlationStorage } from './correlationContext.js';
 
 type LogLevel = 'DEBUG' | 'INFO' | 'WARN' | 'ERROR';
+const REDACTED = '[REDACTED]';
+const SENSITIVE_LOG_KEYS =
+  /(^|_)(value|secret|password|token|api_?key|authorization|cookie|code|csrf|body|context|payload|error|stack)($|_)/i;
+
+function sanitizeLogValue(value: unknown, key = '', seen = new WeakSet<object>()): unknown {
+  if (SENSITIVE_LOG_KEYS.test(key)) return REDACTED;
+  if (typeof value === 'string') {
+    if (/^bearer\s+\S+/i.test(value) || /^otpauth:\/\//i.test(value)) return REDACTED;
+    return value.length > 1024 ? `${value.slice(0, 1024)}…` : value;
+  }
+  if (typeof value === 'bigint') return value.toString();
+  if (!value || typeof value !== 'object') return value;
+  if (seen.has(value)) return '[CIRCULAR]';
+  seen.add(value);
+  if (value instanceof Error) return { errorType: value.name };
+  if (Array.isArray(value)) return value.map((item) => sanitizeLogValue(item, key, seen));
+  return Object.fromEntries(
+    Object.entries(value).map(([childKey, childValue]) => [
+      childKey,
+      sanitizeLogValue(childValue, childKey, seen),
+    ])
+  );
+}
 
 function formatTimestamp(): string {
   return new Date().toISOString();
@@ -31,7 +54,7 @@ function formatMessage(level: LogLevel, message: string, meta?: unknown): string
     }
   }
 
-  const metaStr = finalMeta !== undefined ? ` ${JSON.stringify(finalMeta)}` : '';
+  const metaStr = finalMeta !== undefined ? ` ${JSON.stringify(sanitizeLogValue(finalMeta))}` : '';
   return `[${timestamp}] [${level}] ${message}${metaStr}`;
 }
 

@@ -4,6 +4,7 @@ import { AuthService, ExpiredTokenError, AccessDeniedError } from './auth.js';
 import { AuthRepository } from './repositories.js';
 import { AuthSession, ApiToken } from './models.js';
 import { createHash } from 'node:crypto';
+import type { AuditService } from './audit.js';
 
 type MockedAuthRepository = {
   createSession: Mock<AuthRepository['createSession']>;
@@ -34,7 +35,14 @@ describe('AuthService', () => {
       updateApiTokenLastUsed: mock.fn<AuthRepository['updateApiTokenLastUsed']>(),
       deleteExpiredSessions: mock.fn<AuthRepository['deleteExpiredSessions']>(),
     };
-    authService = new AuthService(mockRepo);
+    authService = new AuthService(
+      mockRepo as unknown as AuthRepository,
+      undefined,
+      {
+        log: mock.fn(async () => undefined),
+      } as unknown as AuditService,
+      async (callback) => callback({} as import('@prisma/client').Prisma.TransactionClient)
+    );
   });
 
   describe('initiateDeviceFlow', () => {
@@ -83,6 +91,7 @@ describe('AuthService', () => {
         'session-1',
         'APPROVED',
         'user-123',
+        {},
       ]);
     });
 
@@ -114,6 +123,8 @@ describe('AuthService', () => {
       assert.deepStrictEqual(mockRepo.updateSessionStatus.mock.calls[0].arguments, [
         'session-1',
         'EXPIRED',
+        undefined,
+        {},
       ]);
     });
   });
@@ -187,6 +198,8 @@ describe('AuthService', () => {
         'session-1',
         'APPROVED',
         'CONSUMED',
+        undefined,
+        {},
       ]);
     });
 
