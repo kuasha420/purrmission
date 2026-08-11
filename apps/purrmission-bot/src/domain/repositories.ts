@@ -132,6 +132,14 @@ export interface ApprovalRequestRepository {
     tx?: Prisma.TransactionClient
   ): Promise<void>;
 
+  /** Store the Discord delivery reference after an outbox notification succeeds. */
+  updateDeliveryReference(
+    id: string,
+    discordMessageId: string,
+    discordChannelId: string,
+    tx?: Prisma.TransactionClient
+  ): Promise<void>;
+
   /**
    * Find an approval request by its ID.
    */
@@ -352,7 +360,7 @@ export class PrismaResourceRepository implements ResourceRepository {
     id: string;
     name: string;
     mode: string;
-    apiKey: string;
+    apiKey: string | null;
     totpAccountId: string | null;
     totpDelegationEnvelope: any;
     version: string;
@@ -1001,7 +1009,7 @@ export class PrismaAuditRepository implements AuditRepository {
         grantId: input.grantId ?? null,
         correlationId: input.correlationId ?? null,
         causationId: input.causationId ?? null,
-        payload: input.payload ? (input.payload as Prisma.InputJsonValue) : null,
+        payload: input.payload ? (input.payload as Prisma.InputJsonValue) : Prisma.JsonNull,
       },
     });
     return this.mapPrismaToDomain(created);
@@ -1246,7 +1254,7 @@ export class PrismaApprovalRequestRepository implements ApprovalRequestRepositor
         id: input.id,
         resourceId: input.resourceId,
         status: input.status,
-        context: input.context ? (input.context as Prisma.InputJsonValue) : null,
+        context: input.context ? (input.context as Prisma.InputJsonValue) : Prisma.JsonNull,
         requesterId: input.requesterId,
         requesterType: input.requesterType,
         authKind: input.authKind,
@@ -1280,6 +1288,19 @@ export class PrismaApprovalRequestRepository implements ApprovalRequestRepositor
     await client.approvalRequest.update({
       where: { id },
       data,
+    });
+  }
+
+  async updateDeliveryReference(
+    id: string,
+    discordMessageId: string,
+    discordChannelId: string,
+    tx?: Prisma.TransactionClient
+  ): Promise<void> {
+    const client = tx || this.prisma;
+    await client.approvalRequest.update({
+      where: { id },
+      data: { discordMessageId, discordChannelId },
     });
   }
 

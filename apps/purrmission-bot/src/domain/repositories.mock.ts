@@ -64,6 +64,7 @@ export class InMemoryResourceRepository implements ResourceRepository {
   async create(input: CreateResourceInput): Promise<Resource> {
     const resource: Resource = {
       ...input,
+      id: input.id ?? crypto.randomUUID(),
       version: input.version || crypto.randomUUID(),
       createdAt: new Date(),
     };
@@ -210,6 +211,18 @@ export class InMemoryApprovalRequestRepository implements ApprovalRequestReposit
         request.resolvedBy = resolvedBy;
         request.resolvedAt = new Date();
       }
+    }
+  }
+
+  async updateDeliveryReference(
+    id: string,
+    discordMessageId: string,
+    discordChannelId: string
+  ): Promise<void> {
+    const request = this.requests.get(id);
+    if (request) {
+      request.discordMessageId = discordMessageId;
+      request.discordChannelId = discordChannelId;
     }
   }
 

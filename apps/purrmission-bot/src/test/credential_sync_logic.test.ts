@@ -34,6 +34,7 @@ import {
   ProjectMemberRole,
   OutboxEvent,
   CreateOutboxEventInput,
+  CreateAuditLogInput,
 } from '../domain/models.js';
 import { randomUUID } from 'crypto';
 
@@ -49,6 +50,7 @@ class MemProjectRepo implements ProjectRepository {
       id: randomUUID(),
       ...input,
       description: input.description || null,
+      policyVersion: randomUUID(),
       createdAt: new Date(),
       updatedAt: new Date(),
     };
@@ -118,10 +120,11 @@ class MemResourceRepo implements ResourceRepository {
 
   async create(input: CreateResourceInput, _tx?: any): Promise<Resource> {
     const r: Resource = {
-      id: input.id,
+      id: input.id ?? randomUUID(),
       name: input.name,
       mode: input.mode,
       apiKey: input.apiKey,
+      version: input.version ?? randomUUID(),
       createdAt: new Date(),
     };
     this.resources.push(r);
@@ -205,6 +208,28 @@ class MemFieldRepo implements ResourceFieldRepository {
   async findById(id: string): Promise<ResourceField | null> {
     return this.fields.find((f) => f.id === id) || null;
   }
+  async findMetadataByResourceId(resourceId: string) {
+    return this.fields
+      .filter((field) => field.resourceId === resourceId)
+      .map(({ id, resourceId: fieldResourceId, name, createdAt, updatedAt }) => ({
+        id,
+        resourceId: fieldResourceId,
+        name,
+        createdAt,
+        updatedAt,
+      }));
+  }
+  async findMetadataByResourceAndName(resourceId: string, name: string) {
+    const field = this.fields.find((item) => item.resourceId === resourceId && item.name === name);
+    if (!field) return null;
+    return {
+      id: field.id,
+      resourceId: field.resourceId,
+      name: field.name,
+      createdAt: field.createdAt,
+      updatedAt: field.updatedAt,
+    };
+  }
 }
 
 class MemApprovalRepo implements ApprovalRequestRepository {
@@ -238,6 +263,17 @@ class MemApprovalRepo implements ApprovalRequestRepository {
       r.resolvedAt = new Date();
     }
   }
+  async updateDeliveryReference(
+    id: string,
+    discordMessageId: string,
+    discordChannelId: string
+  ): Promise<void> {
+    const request = this.requests.find((item) => item.id === id);
+    if (request) {
+      request.discordMessageId = discordMessageId;
+      request.discordChannelId = discordChannelId;
+    }
+  }
   async findActiveByRequester(
     resourceId: string,
     requesterId: string
@@ -251,8 +287,27 @@ class MemApprovalRepo implements ApprovalRequestRepository {
           r.resourceId === resourceId &&
           ['PENDING', 'APPROVED'].includes(r.status) &&
           (!r.expiresAt || r.expiresAt > now) &&
-          r.context['requesterId'] === requesterId
+          r.context?.['requesterId'] === requesterId
       ) || null
+    );
+  }
+  async findPending(
+    resourceId: string,
+    requesterId: string,
+    action: string,
+    targetKey: string | null
+  ): Promise<ApprovalRequest | null> {
+    const now = new Date();
+    return (
+      this.requests.find(
+        (request) =>
+          request.resourceId === resourceId &&
+          request.requesterId === requesterId &&
+          request.action === action &&
+          request.targetKey === targetKey &&
+          request.status === 'PENDING' &&
+          request.expiresAt > now
+      ) ?? null
     );
   }
   async findByResourceId(resourceId: string): Promise<ApprovalRequest[]> {
@@ -363,6 +418,9 @@ describe('Credential Sync Logic Smoke Test', () => {
     totp: totpRepo,
     audit: auditRepo,
     outbox: outboxRepo,
+    credentials: {} as Repositories['credentials'],
+    approvalGrants: {} as Repositories['approvalGrants'],
+    callbackDestinations: {} as Repositories['callbackDestinations'],
   };
 
   beforeEach(() => {

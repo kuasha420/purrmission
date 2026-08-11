@@ -111,11 +111,11 @@ export class OutboxWorker {
     });
 
     // Update message reference inside transaction
-    await this.repos.approvalRequests.update(requestId, {
-      status: request.status,
-      discordMessageId: sentMsg.id,
-      discordChannelId: sentMsg.channelId,
-    });
+    await this.repos.approvalRequests.updateDeliveryReference(
+      requestId,
+      sentMsg.id,
+      sentMsg.channelId
+    );
 
     logger.info('Outbox worker delivered Guardian notification', {
       requestId,

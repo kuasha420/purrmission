@@ -318,7 +318,7 @@ describe('Operations Scripts', () => {
       assert.deepEqual(rows, ['former-owner:OWNER', 'writer-guardian:GUARDIAN']);
     });
 
-    it('reports the #118 populated AuditLog migration blocker after a real-history preflight', () => {
+    it('preserves populated legacy AuditLog rows through the published hardening migration', () => {
       const databasePath = createTemporaryDatabase('audit-history-blocker');
       applyMigrationsBeforeGuardianInvariant(databasePath, true);
       applySql(
@@ -328,13 +328,58 @@ describe('Operations Scripts', () => {
       );
 
       const result = runSupportedDeploy(databasePath);
-      const output = `${result.stdout}\n${result.stderr}`;
-      assert.equal(result.status, 1);
-      assert.match(output, /Migration name: 20260724110200_rbac_dashboard_hardening_remediations/);
-      assert.match(output, /NOT NULL constraint failed: new_AuditLog\.eventType/);
+      assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+
+      const auditRow = execFileSync(
+        'sqlite3',
+        [
+          '-noheader',
+          databasePath,
+          `SELECT "eventType" || ':' || "outcomeCode" || ':' || "actorType"
+           FROM "AuditLog" WHERE "id" = 'legacy-audit';`,
+        ],
+        { encoding: 'utf8' }
+      ).trim();
+      assert.equal(auditRow, 'FIELD_ACCESSED:SUCCESS:SYSTEM');
+      assert.equal(
+        execFileSync(
+          'sqlite3',
+          [
+            '-noheader',
+            databasePath,
+            `SELECT COUNT(*) FROM "sqlite_master"
+             WHERE "type" = 'table' AND "name" LIKE '_purrmission_stage_%';`,
+          ],
+          { encoding: 'utf8' }
+        ).trim(),
+        '0'
+      );
     });
 
-    it('preserves Guardian data before reporting the #119 populated version blocker', () => {
+    it('fails closed instead of silently dropping unmappable legacy audit context', () => {
+      const databasePath = createTemporaryDatabase('audit-context-blocker');
+      applyMigrationsBeforeGuardianInvariant(databasePath, true);
+      applySql(
+        databasePath,
+        `INSERT INTO "AuditLog" ("id", "action", "status", "context")
+         VALUES ('legacy-audit-context', 'FIELD_ACCESSED', 'SUCCESS', '{"unknown":"value"}');`
+      );
+
+      const result = runSupportedDeploy(databasePath);
+      assert.equal(result.status, 1);
+      assert.match(
+        `${result.stdout}\n${result.stderr}`,
+        /cannot be safely mapped by the compatibility preflight/
+      );
+      assert.equal(
+        execFileSync('sqlite3', ['-noheader', databasePath, `SELECT COUNT(*) FROM "AuditLog";`], {
+          encoding: 'utf8',
+        }).trim(),
+        '1'
+      );
+    });
+
+    it('preserves Guardian data and supplies stable compatibility versions on populated deploy', () => {
       const databasePath = createTemporaryDatabase('version-history-blocker');
       applyMigrationsBeforeGuardianInvariant(databasePath, true);
       applySql(
@@ -352,10 +397,7 @@ describe('Operations Scripts', () => {
       );
 
       const result = runSupportedDeploy(databasePath);
-      const output = `${result.stdout}\n${result.stderr}`;
-      assert.equal(result.status, 1);
-      assert.match(output, /Migration name: 20260724110200_rbac_dashboard_hardening_remediations/);
-      assert.match(output, /NOT NULL constraint failed: new_Project\.policyVersion/);
+      assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
 
       const guardianRows = execFileSync(
         'sqlite3',
@@ -367,6 +409,22 @@ describe('Operations Scripts', () => {
         { encoding: 'utf8' }
       ).trim();
       assert.equal(guardianRows, 'writer-guardian:GUARDIAN');
+      const compatibilityVersions = execFileSync(
+        'sqlite3',
+        [
+          '-noheader',
+          databasePath,
+          `SELECT "policyVersion" FROM "Project" WHERE "id" = 'project-1';
+           SELECT "version" FROM "Resource" WHERE "id" = 'resource-1';`,
+        ],
+        { encoding: 'utf8' }
+      )
+        .trim()
+        .split('\n');
+      assert.deepEqual(compatibilityVersions, [
+        'legacy-policy-project-1',
+        'legacy-resource-resource-1',
+      ]);
     });
 
     it('deploys every migration on a fresh empty database through the supported wrapper', () => {

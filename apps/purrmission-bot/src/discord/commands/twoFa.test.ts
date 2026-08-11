@@ -51,6 +51,7 @@ describe('twoFa command module', () => {
   let mockTotpRepository: {
     create: ReturnType<typeof mock.fn>;
     findByOwnerDiscordUserId: ReturnType<typeof mock.fn>;
+    findMetadataByOwnerDiscordUserId: ReturnType<typeof mock.fn>;
     findByOwnerAndName: ReturnType<typeof mock.fn>;
     update: ReturnType<typeof mock.fn>;
   };
@@ -370,8 +371,8 @@ describe('twoFa command module', () => {
         ownerDiscordUserId: 'user-123',
         accountName: 'Google',
         secret: 'JBSWY3DPEHPK3PXP',
-        shared: false,
         backupKey: 'BACKUP-1234',
+        version: 'totp-v1',
         createdAt: new Date(),
         updatedAt: new Date(),
       };
@@ -400,7 +401,7 @@ describe('twoFa command module', () => {
         ownerDiscordUserId: 'user-123',
         accountName: 'Google',
         secret: 'JBSWY3DPEHPK3PXP',
-        shared: false,
+        version: 'totp-v1',
         createdAt: new Date(),
         updatedAt: new Date(),
       };
@@ -431,8 +432,8 @@ describe('twoFa command module', () => {
         ownerDiscordUserId: 'user-123',
         accountName: 'Google',
         secret: 'JBSWY3DPEHPK3PXP',
-        shared: false,
         backupKey: 'BACKUP-KEY',
+        version: 'totp-v1',
         createdAt: new Date(),
         updatedAt: new Date(),
       };
@@ -487,7 +488,7 @@ describe('twoFa command module', () => {
         ownerDiscordUserId: 'user-123',
         accountName: 'MyAccount',
         secret: 'JBSWY3DPEHPK3PXP',
-        shared: false,
+        version: 'totp-v1',
         createdAt: new Date(),
         updatedAt: new Date(),
       };

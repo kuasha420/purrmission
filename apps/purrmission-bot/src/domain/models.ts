@@ -165,7 +165,10 @@ export interface DecisionResult {
 /**
  * Input for creating a new resource.
  */
-export type CreateResourceInput = Omit<Resource, 'createdAt' | 'version'> & { version?: string };
+export type CreateResourceInput = Omit<Resource, 'id' | 'createdAt' | 'version'> & {
+  id?: string;
+  version?: string;
+};
 
 /**
  * Input for adding a new guardian.
