@@ -744,7 +744,7 @@ describe('Principal and exact-object capability policy', () => {
     assert.equal(otherTokens.reasonCode, 'AUTH_SUBJECT_MISMATCH');
   });
 
-  it('double-gates service audit export with a same-credential read scope', async () => {
+  it('fails closed for unbound service object scopes while retaining exact own-subject audit', async () => {
     const service: Principal = {
       type: 'SERVICE',
       id: 'service-credential',
@@ -757,16 +757,16 @@ describe('Principal and exact-object capability policy', () => {
       projectId: PROJECT_ID,
       requiredAudience: 'internal',
     });
-    assert.equal(denied.reasonCode, 'INSUFFICIENT_SCOPES');
+    assert.equal(denied.reasonCode, 'TARGET_SCOPE_MISMATCH');
 
-    const allowed = await hasCapability(
+    const unboundProject = await hasCapability(
       capabilityRepositories(),
       { ...service, scopes: ['audit.export', 'audit.full.read'] },
       'audit.export',
       { projectId: PROJECT_ID, requiredAudience: 'internal' }
     );
-    assert.equal(allowed.allowed, true);
-    assert.deepEqual(allowed.authoritySources, ['SCOPED_CREDENTIAL']);
+    assert.equal(unboundProject.allowed, false);
+    assert.equal(unboundProject.reasonCode, 'TARGET_SCOPE_MISMATCH');
 
     const wrongTargetReadScope = await hasCapability(
       capabilityRepositories(),
@@ -775,7 +775,7 @@ describe('Principal and exact-object capability policy', () => {
       { projectId: PROJECT_ID, requiredAudience: 'internal' }
     );
     assert.equal(wrongTargetReadScope.allowed, false);
-    assert.equal(wrongTargetReadScope.reasonCode, 'INSUFFICIENT_SCOPES');
+    assert.equal(wrongTargetReadScope.reasonCode, 'TARGET_SCOPE_MISMATCH');
 
     const ownTarget = await hasCapability(
       capabilityRepositories(),
@@ -805,6 +805,28 @@ describe('Principal and exact-object capability policy', () => {
 
     assert.equal(result.allowed, false);
     assert.equal(result.reasonCode, 'TARGET_SCOPE_MISMATCH');
+  });
+
+  it('rejects contradictory Project/Resource and approval-request/Resource contexts', async () => {
+    const projectResourceMismatch = await hasCapability(
+      capabilityRepositories(),
+      createDiscordPrincipal(OWNER_ID),
+      'resource.view',
+      { projectId: PROJECT_ID, resourceId: STANDALONE_RESOURCE_ID }
+    );
+    assert.equal(projectResourceMismatch.allowed, false);
+    assert.equal(projectResourceMismatch.reasonCode, 'TARGET_SCOPE_MISMATCH');
+
+    const requestResourceMismatch = await hasCapability(
+      capabilityRepositories({
+        request: approvalRequest(REQUESTER_ID, { resourceId: STANDALONE_RESOURCE_ID }),
+      }),
+      createDiscordPrincipal(OWNER_ID),
+      'request.decide',
+      { projectId: PROJECT_ID, resourceId: RESOURCE_ID, requestId: 'request-1' }
+    );
+    assert.equal(requestResourceMismatch.allowed, false);
+    assert.equal(requestResourceMismatch.reasonCode, 'TARGET_SCOPE_MISMATCH');
   });
 });
 

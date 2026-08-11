@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict';
 import { beforeEach, describe, it } from 'node:test';
 import { AccessDeniedError } from './auth.js';
+import { AuditService } from './audit.js';
+import type { Principal } from './models.js';
 import { createDiscordPrincipal } from './principal.js';
 import { ProjectService } from './project.js';
 import { createInMemoryRepositories } from './repositories.mock.js';
@@ -168,5 +170,34 @@ describe('TOTP custody boundaries', () => {
     await repos.resources.update(resourceId, { totpAccountId: account.id, version: 'link-v1' });
     await resourceService.unlinkTOTPAccount(resourceId, ownerId);
     assert.equal((await repos.resources.findById(resourceId))?.totpAccountId, undefined);
+  });
+
+  it('attributes unlink to the authenticated principal kind', async () => {
+    const ownerId = 'resource-owner';
+    const resourceId = await createOwnedResource(ownerId);
+    const account = await repos.totp.create({
+      ownerDiscordUserId: ownerId,
+      accountName: 'Existing linked seed',
+      secret: 'JBSWY3DPEHPK3PXP',
+    });
+    await repos.resources.update(resourceId, { totpAccountId: account.id, version: 'link-v1' });
+
+    const deps: ServiceDependencies = { repositories: repos };
+    deps.audit = new AuditService(deps);
+    const auditedResourceService = new ResourceService(deps);
+    const pawthyPrincipal: Principal = {
+      type: 'PAWTHY_TOKEN',
+      id: 'pawthy-token-1',
+      subjectId: ownerId,
+      actorDiscordId: ownerId,
+      authKind: 'PAWTHY',
+      scopes: ['totp.link.manage'],
+    };
+
+    await auditedResourceService.unlinkTOTPAccount(resourceId, pawthyPrincipal);
+    const [event] = await repos.audit.findByResourceId(resourceId);
+    assert.equal(event.actorType, 'PAWTHY_TOKEN');
+    assert.equal(event.authKind, 'PAWTHY');
+    assert.equal(event.actorId, ownerId);
   });
 });

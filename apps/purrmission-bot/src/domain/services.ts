@@ -1014,9 +1014,9 @@ export class ResourceService {
             {
               eventType: 'TOTP_UNLINK',
               outcomeCode: 'SUCCESS',
-              actorType: 'DISCORD_USER',
+              actorType: actorPrincipal.type,
               actorId,
-              authKind: 'DISCORD',
+              authKind: actorPrincipal.authKind,
               resourceId,
               payload: {},
             },
