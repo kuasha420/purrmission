@@ -10,6 +10,7 @@ import { runGuardianReconciliation } from './reconcile-guardians-owners.js';
 const RECONCILIATION_TABLES = ['Environment', 'Guardian', 'Project', 'Resource'] as const;
 const HARDENING_MIGRATION = '20260724110200_rbac_dashboard_hardening_remediations';
 const LEGACY_STAGE_TABLES = ['AuditLog', 'Project', 'Resource', 'TOTPAccount'] as const;
+const LEGACY_STAGE_TABLE_NAMES = LEGACY_STAGE_TABLES.map((table) => `_purrmission_stage_${table}`);
 
 export type MigrationDatabaseState = 'FRESH' | 'INITIALIZED';
 
@@ -76,6 +77,22 @@ async function hardeningMigrationApplied(prisma: PrismaClient): Promise<boolean>
   return Number(rows[0]?.count ?? 0) === 1;
 }
 
+async function presentLegacyStageTables(prisma: PrismaClient): Promise<string[]> {
+  const present: string[] = [];
+  for (const tableName of LEGACY_STAGE_TABLE_NAMES) {
+    if (await tableExists(prisma, tableName)) present.push(tableName);
+  }
+  return present;
+}
+
+function assertCompleteLegacyStage(present: readonly string[]): void {
+  if (present.length === 0 || present.length === LEGACY_STAGE_TABLE_NAMES.length) return;
+  const missing = LEGACY_STAGE_TABLE_NAMES.filter((tableName) => !present.includes(tableName));
+  throw new Error(
+    `Incomplete hardening recovery stage detected. Present: ${present.join(', ')}; missing: ${missing.join(', ')}. Refusing to ignore recoverable credential data.`
+  );
+}
+
 /**
  * Preserve rows around the published hardening migration without changing its checksum.
  *
@@ -85,7 +102,9 @@ async function hardeningMigrationApplied(prisma: PrismaClient): Promise<boolean>
  * later invocation resumes instead of overwriting it.
  */
 export async function stageLegacyHardeningRows(prisma: PrismaClient): Promise<boolean> {
-  const stageAlreadyExists = await tableExists(prisma, '_purrmission_stage_Project');
+  const presentStageTables = await presentLegacyStageTables(prisma);
+  assertCompleteLegacyStage(presentStageTables);
+  const stageAlreadyExists = presentStageTables.length > 0;
   if (await hardeningMigrationApplied(prisma)) return stageAlreadyExists;
 
   const unmappableAuditRows = await prisma.$queryRawUnsafe<Array<{ count: bigint }>>(
@@ -98,28 +117,24 @@ export async function stageLegacyHardeningRows(prisma: PrismaClient): Promise<bo
     );
   }
 
-  for (const table of LEGACY_STAGE_TABLES) {
-    await prisma.$executeRawUnsafe(
-      `CREATE TABLE IF NOT EXISTS "_purrmission_stage_${table}" AS SELECT * FROM "${table}" WHERE 0`
-    );
-  }
-
-  for (const table of LEGACY_STAGE_TABLES) {
-    const sourceCount = await rowCount(prisma, table);
-    const stageCount = await rowCount(prisma, `_purrmission_stage_${table}`);
-    if (sourceCount > 0 && stageCount > 0) {
-      throw new Error(
-        `Migration staging found rows in both ${table} and _purrmission_stage_${table}; refusing to overwrite recoverable data.`
-      );
-    }
-  }
-
   await prisma.$executeRawUnsafe('PRAGMA foreign_keys=OFF');
   try {
     await prisma.$transaction(async (tx) => {
+      if (!stageAlreadyExists) {
+        for (const table of LEGACY_STAGE_TABLES) {
+          await tx.$executeRawUnsafe(
+            `CREATE TABLE "_purrmission_stage_${table}" AS SELECT * FROM "${table}" WHERE 0`
+          );
+        }
+      }
       for (const table of LEGACY_STAGE_TABLES) {
         const sourceCount = await rowCount(tx, table);
         const stageCount = await rowCount(tx, `_purrmission_stage_${table}`);
+        if (sourceCount > 0 && stageCount > 0) {
+          throw new Error(
+            `Migration staging found rows in both ${table} and _purrmission_stage_${table}; refusing to overwrite recoverable data.`
+          );
+        }
         if (sourceCount > 0 && stageCount === 0) {
           await tx.$executeRawUnsafe(
             `INSERT INTO "_purrmission_stage_${table}" SELECT * FROM "${table}"`
@@ -135,20 +150,22 @@ export async function stageLegacyHardeningRows(prisma: PrismaClient): Promise<bo
 }
 
 export async function restoreLegacyHardeningRows(prisma: PrismaClient): Promise<void> {
-  if (!(await tableExists(prisma, '_purrmission_stage_Project'))) return;
+  const presentStageTables = await presentLegacyStageTables(prisma);
+  assertCompleteLegacyStage(presentStageTables);
+  if (presentStageTables.length === 0) return;
   if (!(await hardeningMigrationApplied(prisma))) {
     throw new Error('Refusing to restore staged rows before the hardening migration is applied.');
   }
 
-  const expected = new Map<string, number>();
-  for (const table of LEGACY_STAGE_TABLES) {
-    expected.set(table, await rowCount(prisma, `_purrmission_stage_${table}`));
-    if ((await rowCount(prisma, table)) > 0 && (expected.get(table) ?? 0) > 0) {
-      throw new Error(`Refusing to merge staged ${table} rows into a non-empty destination.`);
-    }
-  }
-
   await prisma.$transaction(async (tx) => {
+    const expected = new Map<string, number>();
+    for (const table of LEGACY_STAGE_TABLES) {
+      expected.set(table, await rowCount(tx, `_purrmission_stage_${table}`));
+      if ((await rowCount(tx, table)) > 0 && (expected.get(table) ?? 0) > 0) {
+        throw new Error(`Refusing to merge staged ${table} rows into a non-empty destination.`);
+      }
+    }
+
     await tx.$executeRawUnsafe(
       `INSERT INTO "TOTPAccount"
          ("id", "ownerDiscordUserId", "accountName", "secret", "issuer", "backupKey", "version", "createdAt", "updatedAt")
@@ -179,27 +196,29 @@ export async function restoreLegacyHardeningRows(prisma: PrismaClient): Promise<
               "actorId", "resourceId", NULL, "createdAt"
        FROM "_purrmission_stage_AuditLog"`
     );
-  });
 
-  for (const table of LEGACY_STAGE_TABLES) {
-    const actual = await rowCount(prisma, table);
-    if (actual !== expected.get(table)) {
+    for (const table of LEGACY_STAGE_TABLES) {
+      const actual = await rowCount(tx, table);
+      if (actual !== expected.get(table)) {
+        throw new Error(
+          `Restored ${table} row count ${actual} did not match staged count ${expected.get(table)}.`
+        );
+      }
+    }
+    const foreignKeyViolations = await tx.$queryRawUnsafe<Array<Record<string, unknown>>>(
+      'PRAGMA foreign_key_check'
+    );
+    if (foreignKeyViolations.length > 0) {
       throw new Error(
-        `Restored ${table} row count ${actual} did not match staged count ${expected.get(table)}.`
+        `Restored database has ${foreignKeyViolations.length} foreign-key violation(s); staged recovery tables were retained.`
       );
     }
-  }
-  const foreignKeyViolations = await prisma.$queryRawUnsafe<Array<Record<string, unknown>>>(
-    'PRAGMA foreign_key_check'
-  );
-  if (foreignKeyViolations.length > 0) {
-    throw new Error(
-      `Restored database has ${foreignKeyViolations.length} foreign-key violation(s); staged recovery tables were retained.`
-    );
-  }
-  for (const table of LEGACY_STAGE_TABLES) {
-    await prisma.$executeRawUnsafe(`DROP TABLE "_purrmission_stage_${table}"`);
-  }
+    // Keep value restoration and removal of every seed-bearing recovery table in one SQLite
+    // transaction. An interruption therefore leaves either the complete stage or no stage.
+    for (const table of LEGACY_STAGE_TABLES) {
+      await tx.$executeRawUnsafe(`DROP TABLE "_purrmission_stage_${table}"`);
+    }
+  });
 }
 
 export async function deployMigrations(): Promise<void> {
@@ -210,8 +229,9 @@ export async function deployMigrations(): Promise<void> {
   const prisma = new PrismaClient();
   let stagedHardeningRows = false;
   try {
-    const resumesStagedDeploy = await tableExists(prisma, '_purrmission_stage_Project');
-    if (resumesStagedDeploy) {
+    const presentStageTables = await presentLegacyStageTables(prisma);
+    assertCompleteLegacyStage(presentStageTables);
+    if (presentStageTables.length > 0) {
       console.log('🔒 Recoverable hardening stage detected; resuming migration deployment.');
       stagedHardeningRows = await stageLegacyHardeningRows(prisma);
     } else {

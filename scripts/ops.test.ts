@@ -8,7 +8,11 @@ import { createHash } from 'node:crypto';
 import { PrismaClient } from '@prisma/client';
 import { env } from '../apps/purrmission-bot/src/config/env.js';
 import { backupDatabase } from './backup-db.js';
-import { classifyMigrationDatabaseTables, runMigrationPreflight } from './deploy-migrations.js';
+import {
+  classifyMigrationDatabaseTables,
+  runMigrationPreflight,
+  stageLegacyHardeningRows,
+} from './deploy-migrations.js';
 import { selectCanonicalGuardianRow } from './reconcile-guardians-owners.js';
 
 describe('Operations Scripts', () => {
@@ -425,6 +429,80 @@ describe('Operations Scripts', () => {
         'legacy-policy-project-1',
         'legacy-resource-resource-1',
       ]);
+    });
+
+    it('resumes safely after interruption leaves the complete pre-migration stage', async () => {
+      const databasePath = createTemporaryDatabase('staged-resume');
+      applyMigrationsBeforeGuardianInvariant(databasePath, true);
+      applySql(
+        databasePath,
+        `INSERT INTO "Resource" ("id", "name", "mode", "apiKey")
+           VALUES ('resource-resume', 'Protected', 'ONE_OF_N', 'key');
+         INSERT INTO "Project" ("id", "name", "ownerId", "updatedAt")
+           VALUES ('project-resume', 'Project', 'owner', '2026-07-01T00:00:00Z');
+         INSERT INTO "Environment" ("id", "name", "slug", "projectId", "updatedAt", "resourceId")
+           VALUES ('environment-resume', 'Production', 'prod', 'project-resume', '2026-07-01T00:00:00Z', 'resource-resume');`
+      );
+
+      const prisma = new PrismaClient({
+        datasources: { db: { url: `file:${databasePath}` } },
+      });
+      try {
+        assert.equal(await stageLegacyHardeningRows(prisma), true);
+      } finally {
+        await prisma.$disconnect();
+      }
+      assert.equal(
+        execFileSync('sqlite3', ['-noheader', databasePath, `SELECT COUNT(*) FROM "Resource";`], {
+          encoding: 'utf8',
+        }).trim(),
+        '0'
+      );
+
+      const result = runSupportedDeploy(databasePath);
+      assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+      assert.equal(
+        execFileSync(
+          'sqlite3',
+          [
+            '-noheader',
+            databasePath,
+            `SELECT "version" FROM "Resource" WHERE "id" = 'resource-resume';`,
+          ],
+          { encoding: 'utf8' }
+        ).trim(),
+        'legacy-resource-resource-resume'
+      );
+    });
+
+    it('fails closed when any seed-bearing recovery stage table is residual by itself', () => {
+      const databasePath = createTemporaryDatabase('partial-stage');
+      assert.equal(runSupportedDeploy(databasePath).status, 0);
+      applySql(
+        databasePath,
+        `CREATE TABLE "_purrmission_stage_TOTPAccount" AS
+           SELECT * FROM "TOTPAccount" WHERE 0;
+         INSERT INTO "_purrmission_stage_TOTPAccount"
+           ("id", "ownerDiscordUserId", "accountName", "secret", "version", "createdAt", "updatedAt")
+         VALUES
+           ('residual-totp', 'owner', 'Residual', 'SENSITIVE-SEED', 'v1', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP);`
+      );
+
+      const result = runSupportedDeploy(databasePath);
+      assert.equal(result.status, 1);
+      assert.match(`${result.stdout}\n${result.stderr}`, /Incomplete hardening recovery stage/);
+      assert.equal(
+        execFileSync(
+          'sqlite3',
+          [
+            '-noheader',
+            databasePath,
+            `SELECT "secret" FROM "_purrmission_stage_TOTPAccount" WHERE "id" = 'residual-totp';`,
+          ],
+          { encoding: 'utf8' }
+        ).trim(),
+        'SENSITIVE-SEED'
+      );
     });
 
     it('deploys every migration on a fresh empty database through the supported wrapper', () => {

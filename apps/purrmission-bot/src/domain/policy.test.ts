@@ -827,6 +827,22 @@ describe('Principal and exact-object capability policy', () => {
     );
     assert.equal(requestResourceMismatch.allowed, false);
     assert.equal(requestResourceMismatch.reasonCode, 'TARGET_SCOPE_MISMATCH');
+
+    const repositories = capabilityRepositories({
+      request: approvalRequest(REQUESTER_ID),
+    });
+    repositories.projects.getEnvironmentById = async (projectId, environmentId) =>
+      projectId === PROJECT_ID && environmentId === ENVIRONMENT_ID
+        ? { ...environment, resourceId: undefined }
+        : null;
+    const environmentRequestMismatch = await hasCapability(
+      repositories,
+      createDiscordPrincipal(OWNER_ID),
+      'request.decide',
+      { projectId: PROJECT_ID, environmentId: ENVIRONMENT_ID, requestId: 'request-1' }
+    );
+    assert.equal(environmentRequestMismatch.allowed, false);
+    assert.equal(environmentRequestMismatch.reasonCode, 'TARGET_SCOPE_MISMATCH');
   });
 });
 

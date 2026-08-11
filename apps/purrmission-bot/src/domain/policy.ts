@@ -6,6 +6,7 @@ import type {
   Resource,
   Guardian,
   ApprovalRequest,
+  Environment,
   Principal,
   Capability,
   CapabilityContext,
@@ -396,6 +397,7 @@ export async function hasCapability(
   let projectId = context.projectId;
   let resourceId = context.resourceId;
   let resolvedRequest: ApprovalRequest | null = null;
+  let resolvedEnvironment: Environment | null = null;
 
   if (context.environmentId && !projectId) {
     return deny(
@@ -409,6 +411,7 @@ export async function hasCapability(
     if (!env) {
       return deny('TARGET_SCOPE_MISMATCH', 'Environment does not belong to the requested Project.');
     }
+    resolvedEnvironment = env;
     if (resourceId && env.resourceId !== resourceId) {
       return deny('TARGET_SCOPE_MISMATCH', 'Environment does not contain the requested Resource.');
     }
@@ -430,6 +433,13 @@ export async function hasCapability(
       );
     }
     resourceId = resolvedRequest.resourceId;
+  }
+
+  if (resolvedEnvironment && resourceId && resolvedEnvironment.resourceId !== resourceId) {
+    return deny(
+      'TARGET_SCOPE_MISMATCH',
+      'Resolved Resource does not belong to the requested Environment.'
+    );
   }
 
   if (resourceId && projectId && repositories.projects) {
