@@ -1,6 +1,6 @@
 # Purrmission RBAC and Observability Knowledgebase
 
-- Status: **Prerequisite remediation active — Wave 1 reopened after post-merge No-go; Wave 2 branch execution only (dashboard readiness remains No-go)**
+- Status: **Prerequisite stabilization active — Wave 1 corrective review; Wave 2 merge-blocked (dashboard readiness remains No-go)**
 - Preparation issue: [#107](https://github.com/kuasha420/purrmission/issues/107) (complete)
 - Prerequisite epic: [#116](https://github.com/kuasha420/purrmission/issues/116) (open and active)
 - Execution graph:
@@ -12,23 +12,33 @@
 - Current remediation checkpoint: #117 implementation merged through #139 at
   `edd9c3497909bb71b265300ffa201038edea54ef`, but independent verification against
   `a1f2004141f90376c0084b7b2156297de92dd6f7` returned No-go on 2026-07-31 and reopened the issue.
-  #118 and #119 are open, assigned to `kuasha420`, and claimed for isolated parallel branch
-  execution; their merge gate remains blocked on #117 remediation and re-verification.
-- Last progress update: 2026-07-31
+  On 2026-08-11 the epic owner approved a narrow #117 stabilization correction that may fail-close
+  prematurely merged successor behavior and repair shared build/migration infrastructure only to
+  restore a safe, verifiable baseline. It does not transfer or complete #120/#122 ownership. #118
+  and #119 remain open and merge-blocked until #117 is independently reverified on current
+  `master`.
+- Last progress update: 2026-08-11
 - Applies to: Discord commands, the Fastify API, Pawthy, and the future
   `apps/purrmission-web`
 
 ### Remediation progress ledger
 
-| Wave | Nodes     | State                                                                            |
-| ---- | --------- | -------------------------------------------------------------------------------- |
-| 1    | #117      | Reopened after independent post-merge No-go; remediation required                |
-| 2    | #118/#119 | Claimed in parallel; branch execution authorized, merge-blocked on reopened #117 |
-| 3-9  | #120-#130 | Blocked by the execution graph                                                   |
+| Wave | Nodes     | State                                                                                                          |
+| ---- | --------- | -------------------------------------------------------------------------------------------------------------- |
+| 1    | #117      | Fail-closed corrective candidate approved for publication and security review; not yet merge-ready or Verified |
+| 2    | #118      | Initial candidate returned No-go; corrective audit/outbox work remains merge-blocked on #117                   |
+| 2    | #119      | Additive query-contract checkpoint reviewed locally; persistence completion remains open and merge-blocked     |
+| 3-9  | #120-#130 | Blocked by the execution graph                                                                                 |
 
 Sections 3-5 remain the point-in-time audit record for `e4269cea4d6f`; they are not silently
 rewritten as remediation lands. The ledger above and the execution graph are the live progress
 record until #126 performs a fresh holistic reassessment and updates this knowledgebase after Go.
+
+The temporary #117 stabilization state is deliberately fail-closed: approval decisions do not
+mint provisional grants, and incomplete TOTP link/delegation consent creation and delegated
+non-owner reveal remain unavailable until #120/#122 deliver their owned contracts. Direct Resource
+Owner TOTP reveal and authorized unlink remain available. This operational restriction is not a
+change to the target policy below.
 
 ## 1. Purpose and normative language
 

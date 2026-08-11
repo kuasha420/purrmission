@@ -15,9 +15,12 @@
   merged through [#139](https://github.com/kuasha420/purrmission/pull/139) at
   `edd9c3497909bb71b265300ffa201038edea54ef`, but independent verification against
   `a1f2004141f90376c0084b7b2156297de92dd6f7` returned No-go on 2026-07-31 and reopened the issue.
-  Wave 2 issues #118 and #119 are open, assigned to `kuasha420`, and authorized for parallel branch
-  execution; neither may merge until #117 is remediated and independently reverified.
-- Last assessed: 2026-07-31
+  On 2026-08-11, the epic owner approved a narrow stabilization correction under #117: it may
+  fail-close prematurely merged successor behavior and repair shared build or migration
+  infrastructure solely to restore a safe, verifiable baseline. This does not transfer or complete
+  #120 or #122 ownership. Wave 2 work remains merge-blocked until #117 passes every common and
+  node-specific gate on current `master`.
+- Last assessed: 2026-08-11
 
 All implementation nodes and both gates were reopened after the No-go result. Reopening records
 ownership; it does not make every node ready at once. #117's first implementation merged, failed
@@ -26,6 +29,12 @@ parallel branch-execution lanes under an explicit owner directive, with their me
 the reopened upstream node. Issue #105 remains independently claimable on the parallel
 production-safety lane. Every later node must wait for the incoming dependencies in Section 3 to
 be post-merge verified and closed again.
+
+The approved stabilization intentionally trades availability for authority safety. Until #120 and
+#122 land their owned custody, consent, request, and grant contracts, #117 may disable provisional
+grant issuance, TOTP linking/delegation consent creation, and non-owner delegated TOTP reveal.
+Direct Resource Owner reveal and authorized unlink remain available. A corrective PR must disclose
+this temporary state and must not claim #120 or #122 acceptance.
 
 ## 1. Goal and authority
 
@@ -143,15 +152,38 @@ incomplete at final reassessment, #126 must preserve an explicit production roll
 
 ### 3.1 Current wave ledger
 
-| Node(s)   | Current state                                                  | Evidence / merge gate                                                                            |
-| --------- | -------------------------------------------------------------- | ------------------------------------------------------------------------------------------------ |
-| #117      | Reopened for remediation after independent post-merge No-go    | #139 / `edd9c349`; failing evidence is recorded on #117 against `a1f2004`                        |
-| #118/#119 | Assigned to `kuasha420`; claimed for parallel branch execution | May develop in separate worktrees; merge remains blocked until #117 is remediated and reverified |
-| #120-#130 | Blocked according to the dependency graph                      | Planning and test design may begin only within the one-wave-ahead rule                           |
-| #105      | Open parallel production-safety lane                           | Blocks production migration/deployment, not local branch execution                               |
+| Node(s)   | Current state                                                            | Evidence / merge gate                                                                                                              |
+| --------- | ------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------- |
+| #117      | Corrective candidate independently reviewed locally; publication pending | Fail-closed stabilization is approved, but formal security approval, the common build, and populated-upgrade gates remain blocking |
+| #118      | Initial candidate rejected; corrective work remains in progress          | Must rebase after verified #117 and close audit, migration, integrity, transaction, and build findings before merge                |
+| #119      | Additive contract/query checkpoint independently reviewed locally        | May publish only after verified #117; it is partial and does not close persistence/version acceptance                              |
+| #120-#130 | Blocked according to the dependency graph                                | Planning and test design may begin only within the one-wave-ahead rule                                                             |
+| #105      | Open parallel production-safety lane                                     | Blocks production migration/deployment, not local branch execution                                                                 |
 
 Research, threat modeling, test design, and file-collision planning may begin one wave early.
 Production implementation must not merge before every native blocker is **Verified** and closed.
+
+### 3.2 Approved stabilization and Wave 2 integration order
+
+The #117 corrective lane may change shared code only where necessary to remove authority that was
+merged before its owning node or to make the common build and migration evidence trustworthy. It
+must preserve the target contracts and leave final custody/consent implementation to #120 and
+grant issuance/consumption to #122.
+
+After #117 receives independent security approval, merges, passes clean-`master` post-merge
+verification, and closes, Wave 2 integrates in this order:
+
+1. Rebase and publish #119's additive metadata/query contract checkpoint with `Refs #119`. Keep
+   #119 open; do not claim schema, backfill, transactional version advancement, or production
+   adapter completion.
+2. Rebase and complete #118 on that verified baseline. Resolve overlapping files in favor of
+   #117's fail-closed authority baseline, then reapply only audit/outbox-owned deltas.
+3. Merge, post-merge verify, and close #118.
+4. Complete #119's persistence, versioning, migration, repository, service, and adapter work on
+   verified #118, then merge, post-merge verify, and close #119.
+
+This is a serialization rule for integration, not a dependency-ownership change. #118 and #119
+remain sibling Wave 2 nodes, and Wave 3 stays blocked until both are Verified and closed.
 
 The logical critical path is:
 
