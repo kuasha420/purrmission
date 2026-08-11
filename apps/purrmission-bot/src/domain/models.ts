@@ -348,6 +348,7 @@ export type AuditSurface = 'DISCORD' | 'HTTP' | 'PAWTHY' | 'DOMAIN' | 'WORKER' |
 export type AuditOutcomeCode = 'SUCCESS' | 'DENIED' | 'FAILURE' | 'QUEUED' | 'NOOP';
 export type AuditRetentionClass = 'SECURITY' | 'OPERATIONAL' | 'PRIVACY';
 export type AuditTargetType =
+  | 'SUBJECT'
   | 'PROJECT'
   | 'ENVIRONMENT'
   | 'RESOURCE'
@@ -434,7 +435,7 @@ export interface OutboxEvent {
   integrityKeyId: string;
   integrityHash: string;
   payload: AuditMetadata;
-  status: 'PENDING' | 'DELIVERED_PENDING_AUDIT' | 'PROCESSED' | 'FAILED';
+  status: 'PENDING' | 'DELIVERY_IN_PROGRESS' | 'DELIVERED_PENDING_AUDIT' | 'PROCESSED' | 'FAILED';
   attempts: number;
   lastErrorCode?: string | null;
   createdAt: Date;

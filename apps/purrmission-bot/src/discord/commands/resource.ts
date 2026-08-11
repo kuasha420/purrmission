@@ -385,7 +385,10 @@ async function handleRegisterResource(
   });
 
   try {
-    const { resource, guardian } = await context.services.resource.createResource(name, userId);
+    const { resource, guardian } = await context.services.resource.createResource(
+      name,
+      createDiscordPrincipal(userId)
+    );
 
     await interaction.reply({
       content: [
@@ -482,11 +485,12 @@ async function handleFieldsAdd(
   }
 
   try {
-    const field = await resourceFields.create({
+    const field = await context.services.resource.createField(
       resourceId,
       name,
       value,
-    });
+      createDiscordPrincipal(userId)
+    );
 
     logger.info('Resource field created', {
       fieldId: field.id,
@@ -753,7 +757,7 @@ async function handleFieldsRemove(
   }
 
   try {
-    await resourceFields.delete(field.id);
+    await context.services.resource.deleteField(resourceId, name, createDiscordPrincipal(userId));
 
     logger.info('Resource field deleted', {
       fieldId: field.id,

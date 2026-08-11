@@ -803,15 +803,16 @@ export class ResourceService {
    */
   async createResource(
     name: string,
-    ownerDiscordId: string,
+    principal: Principal,
     tx?: Prisma.TransactionClient
   ): Promise<{ resource: Resource; guardian: Guardian }> {
     if (!tx) {
       return this.runTransaction((transaction) =>
-        this.createResource(name, ownerDiscordId, transaction)
+        this.createResource(name, principal, transaction)
       );
     }
     const { repositories } = this.deps;
+    const ownerDiscordId = principal.subjectId;
 
     // Generate a random API key
     const apiKey = crypto.randomBytes(32).toString('hex');
@@ -851,10 +852,10 @@ export class ResourceService {
         authoritySources: ['AUTHENTICATED_SUBJECT'],
         targetType: 'RESOURCE',
         targetId: resource.id,
-        actorType: 'DISCORD_USER',
-        principalId: `discord:${ownerDiscordId}`,
+        actorType: principal.type,
+        principalId: principal.id,
         actorId: ownerDiscordId,
-        authKind: 'DISCORD',
+        authKind: principal.authKind,
         resourceId: resource.id,
         payload: {},
       },

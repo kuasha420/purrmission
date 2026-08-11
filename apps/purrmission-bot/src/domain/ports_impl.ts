@@ -37,10 +37,13 @@ export class DomainPortsImpl implements DomainPorts {
     if (principal.type === 'SERVICE') {
       throw new ForbiddenError('Service principals cannot create projects');
     }
-    return this.projectService.createProject({
-      name: dto.name,
-      ownerId: principal.subjectId,
-    });
+    return this.projectService.createProject(
+      {
+        name: dto.name,
+        ownerId: principal.subjectId,
+      },
+      principal
+    );
   }
 
   async listProjects(principal: Principal): Promise<Project[]> {
@@ -68,12 +71,7 @@ export class DomainPortsImpl implements DomainPorts {
       throw new ForbiddenError('Only the project owner can add members');
     }
 
-    await this.projectService.addMember(
-      dto.projectId,
-      dto.memberUserId,
-      dto.role,
-      principal.subjectId
-    );
+    await this.projectService.addMember(dto.projectId, dto.memberUserId, dto.role, principal);
   }
 
   async removeProjectMember(
@@ -88,7 +86,7 @@ export class DomainPortsImpl implements DomainPorts {
       throw new ForbiddenError('Only the project owner can remove members');
     }
 
-    await this.projectService.removeMember(projectId, memberUserId, principal.subjectId);
+    await this.projectService.removeMember(projectId, memberUserId, principal);
   }
 
   async listProjectMembers(principal: Principal, projectId: string) {
@@ -105,11 +103,14 @@ export class DomainPortsImpl implements DomainPorts {
       throw new ForbiddenError('Only the project owner can create environments');
     }
 
-    return this.projectService.createEnvironment({
-      projectId: dto.projectId,
-      name: dto.name,
-      slug: dto.slug,
-    });
+    return this.projectService.createEnvironment(
+      {
+        projectId: dto.projectId,
+        name: dto.name,
+        slug: dto.slug,
+      },
+      principal
+    );
   }
 
   async listEnvironments(principal: Principal, projectId: string): Promise<Environment[]> {

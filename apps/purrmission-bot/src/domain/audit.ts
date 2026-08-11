@@ -65,7 +65,8 @@ type SafeAuditPayload = Partial<
     | 'issuerPresent'
     | 'backupKeyConfigured'
     | 'fieldName'
-    | 'reason',
+    | 'reason'
+    | 'priorDigest',
     SafePayloadValue
   >
 >;
@@ -121,6 +122,7 @@ export const AUDIT_EVENT_CATALOG = {
   DELIVERY_OUTCOME: 'DELIVERY',
   AUDIT_READ: 'AUDIT_ACCESS',
   AUDIT_EXPORT: 'AUDIT_ACCESS',
+  PRIVACY_PSEUDONYMIZE: 'AUDIT_ACCESS',
 } as const satisfies Record<string, AuditEventFamily>;
 export type AuditEventType = keyof typeof AUDIT_EVENT_CATALOG;
 
@@ -177,6 +179,7 @@ const PAYLOAD_FIELDS_BY_EVENT = {
   DELIVERY_OUTCOME: keys('attempt', 'deliveryType', 'result', 'errorCode', 'terminal'),
   AUDIT_READ: keys('projection', 'exported'),
   AUDIT_EXPORT: keys('projection', 'exported'),
+  PRIVACY_PSEUDONYMIZE: keys('deletedCount', 'priorDigest'),
 } as const satisfies Record<AuditEventType, readonly (keyof SafeAuditPayload)[]>;
 
 export type AuditPayloadFor<T extends AuditEventType> = Partial<
@@ -231,16 +234,14 @@ export function createOperationContext(
   } = {}
 ): OperationContext {
   const store = correlationStorage.getStore();
+  const correlationId = requireValidCorrelationId(
+    input.correlationId ?? store?.correlationId ?? createCorrelationId()
+  );
+  const inheritedCausation =
+    input.causationId === null ? null : (input.causationId ?? store?.causationId ?? null);
   return {
-    correlationId: requireValidCorrelationId(
-      input.correlationId ?? store?.correlationId ?? createCorrelationId()
-    ),
-    causationId:
-      input.causationId === null
-        ? null
-        : requireValidCorrelationId(
-            input.causationId ?? store?.causationId ?? createCorrelationId()
-          ),
+    correlationId,
+    causationId: inheritedCausation === null ? null : requireValidCorrelationId(inheritedCausation),
   };
 }
 
@@ -403,7 +404,7 @@ export class AuditService {
   }
 
   shouldCheckpoint(eventCount: number): boolean {
-    return eventCount > 0 && eventCount % this.config.checkpointInterval === 0;
+    return eventCount >= this.config.checkpointInterval;
   }
 
   async createCheckpoint(now = new Date()): Promise<AuditCheckpoint | null> {
@@ -466,14 +467,111 @@ export class AuditService {
 
   /** Checkpoint and verify the deletion boundary before executing configured retention. */
   async executeRetention(now = new Date()): Promise<number> {
-    if (!this.deps.repositories.audit.deleteRetainedBefore) {
+    if (
+      !this.deps.repositories.audit.deleteRetainedBefore ||
+      !this.deps.repositories.audit.countRetainedBefore
+    ) {
       throw new Error('Audit repository does not provide the durable retention capability.');
     }
+    const cutoff = this.getRetentionCutoff(now);
+    if ((await this.deps.repositories.audit.countRetainedBefore(cutoff)) === 0) return 0;
     const checkpoint = await this.createCheckpoint(now);
     if (checkpoint && !this.verifyCheckpointSink(checkpoint)) {
       throw new Error('Audit retention checkpoint verification failed.');
     }
-    return this.deps.repositories.audit.deleteRetainedBefore(this.getRetentionCutoff(now));
+    return this.deps.repositories.audit.deleteRetainedBefore(cutoff);
+  }
+
+  /** Runtime maintenance entrypoint used by the application cleanup scheduler. */
+  async runMaintenance(now = new Date()): Promise<{ checkpointed: boolean; deleted: number }> {
+    const repository = this.deps.repositories.audit;
+    if (!repository.countSinceCheckpoint || !repository.findLatestCheckpoint) {
+      throw new Error('Audit repository does not provide the maintenance cadence capability.');
+    }
+    const deleted = await this.executeRetention(now);
+    if (deleted > 0) return { checkpointed: true, deleted };
+    const latest = await repository.findLatestCheckpoint();
+    const pending = await repository.countSinceCheckpoint(
+      latest?.throughCreatedAt ?? null,
+      latest?.throughId ?? null
+    );
+    if (!this.shouldCheckpoint(pending)) return { checkpointed: false, deleted: 0 };
+    return { checkpointed: (await this.createCheckpoint(now)) !== null, deleted: 0 };
+  }
+
+  /**
+   * Privacy workflow: checkpoint original evidence, replace direct subject identifiers with a
+   * keyed pseudonym, re-sign each envelope, then append a non-identifying transformation record.
+   */
+  async pseudonymizeSubject(subjectId: string): Promise<number> {
+    const repository = this.deps.repositories.audit;
+    if (!repository.replace) {
+      throw new Error('Audit repository does not provide privacy pseudonymization capability.');
+    }
+    const events = await repository.findByScope({ type: 'SUBJECT', id: subjectId });
+    if (events.length === 0) return 0;
+    if (events.some((event) => !this.verifyIntegrity(event))) {
+      throw new Error('Cannot pseudonymize unverifiable audit evidence.');
+    }
+    await this.createCheckpoint();
+    const priorDigest = signEnvelope(this.config.auditIntegrityKey, {
+      events: events.map(({ id, integrityHash }) => ({ id, integrityHash })),
+    });
+    const pseudonym = `anon:${createHmac('sha256', this.config.auditIntegrityKey)
+      .update(`subject:${subjectId}`)
+      .digest('hex')}`;
+    await this.deps.repositories.transaction(async (tx) => {
+      for (const event of events) {
+        const payload = event.payload
+          ? Object.fromEntries(
+              Object.entries(event.payload).map(([key, value]) => [
+                key,
+                value === subjectId ? pseudonym : value,
+              ])
+            )
+          : null;
+        const unsigned = {
+          ...event,
+          targetId: event.targetId === subjectId ? pseudonym : event.targetId,
+          principalId: event.principalId === subjectId ? pseudonym : event.principalId,
+          actorId: event.actorId === subjectId ? pseudonym : event.actorId,
+          resolverId: event.resolverId === subjectId ? pseudonym : event.resolverId,
+          integrityKeyId: this.config.auditIntegrityKeyId,
+          payload,
+        };
+        const toSign = Object.fromEntries(
+          Object.entries(unsigned).filter(([key]) => key !== 'integrityHash')
+        ) as Omit<AuditLog, 'integrityHash'>;
+        await repository.replace(
+          {
+            ...toSign,
+            integrityHash: signEnvelope(this.config.auditIntegrityKey, toSign),
+          },
+          tx
+        );
+      }
+      await this.log(
+        {
+          eventFamily: 'AUDIT_ACCESS',
+          eventType: 'PRIVACY_PSEUDONYMIZE',
+          surface: 'SYSTEM',
+          operation: 'audit.privacy.pseudonymize',
+          outcomeCode: 'SUCCESS',
+          decisionCode: 'ALLOW',
+          reasonCode: 'SERVICE',
+          authoritySources: [],
+          targetType: 'SUBJECT',
+          targetId: pseudonym,
+          actorType: 'SERVICE',
+          principalId: 'service:audit-privacy',
+          actorId: null,
+          authKind: 'SERVICE',
+          payload: { deletedCount: events.length, priorDigest },
+        },
+        tx
+      );
+    });
+    return events.length;
   }
 
   async read(principal: Principal, request: AuditReadRequest): Promise<AuditLog[]> {

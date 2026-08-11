@@ -56,7 +56,7 @@ export class RateLimiter {
       return true;
     }
 
-    logger.warn(`Rate limit exceeded for key: ${key}`);
+    logger.warn('Rate limit exceeded', { limiterKey: key });
     return false;
   }
 

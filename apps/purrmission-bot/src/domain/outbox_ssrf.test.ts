@@ -9,6 +9,7 @@ import { ValidationError } from './errors.js';
 import { deterministicUUID } from './crypto.js';
 import { AuditService, buildOutboxEvent } from './audit.js';
 import { OutboxWorker } from './outbox_worker.js';
+import type { Client } from 'discord.js';
 
 describe('SSRF Protection, Idempotent Outbox, and Batch Secrets API', () => {
   let repos: ReturnType<typeof createInMemoryRepositories>;
@@ -99,6 +100,74 @@ describe('SSRF Protection, Idempotent Outbox, and Batch Secrets API', () => {
       assert.equal((await repos.outbox.findPending()).length, 0);
       await worker.processEvents();
       assert.equal((await repos.outbox.findPending()).length, 0);
+    });
+
+    it('durably exits the delivery queue before sending and never redelivers after marker failure', async () => {
+      await repos.resources.create({ id: 'resource-1', name: 'resource', mode: 'ONE_OF_N' });
+      await repos.guardians.add({
+        id: 'guardian-1',
+        resourceId: 'resource-1',
+        discordUserId: 'owner-1',
+        role: 'OWNER',
+      });
+      await repos.approvalRequests.create({
+        id: 'request-1',
+        resourceId: 'resource-1',
+        status: 'PENDING',
+        requesterId: 'requester-1',
+        requesterType: 'DISCORD_USER',
+        authKind: 'DISCORD',
+        action: 'resource.view',
+        targetKey: null,
+        targetVersion: 'v1',
+        policyVersion: 'v1',
+        constraints: null,
+        expiresAt: new Date(Date.now() + 60_000),
+      });
+      const event = await repos.outbox.create(
+        buildOutboxEvent({
+          eventType: 'REQUEST_CREATED',
+          resourceId: 'resource-1',
+          requestId: 'request-1',
+          payload: { requestId: 'request-1', resourceId: 'resource-1' },
+        })
+      );
+
+      let sendCalls = 0;
+      const discord = {
+        users: {
+          fetch: async () => ({
+            createDM: async () => ({
+              send: async () => {
+                sendCalls += 1;
+                return { id: 'message-1', channelId: 'channel-1' };
+              },
+            }),
+          }),
+        },
+      } as unknown as Client;
+      const statuses: string[] = [];
+      const updateStatus = repos.outbox.updateStatus.bind(repos.outbox);
+      let failDeliveredMarker = true;
+      repos.outbox.updateStatus = async (id, status, attempts, errorCode, tx) => {
+        statuses.push(status);
+        if (status === 'DELIVERED_PENDING_AUDIT' && failDeliveredMarker) {
+          failDeliveredMarker = false;
+          throw new Error('marker persistence failed');
+        }
+        return updateStatus(id, status, attempts, errorCode, tx);
+      };
+
+      const worker = new OutboxWorker(repos, new AuditService({ repositories: repos }), discord);
+      await worker.processEvents();
+      await worker.processEvents();
+
+      assert.equal(sendCalls, 1);
+      assert.deepEqual(statuses.slice(0, 2), ['DELIVERY_IN_PROGRESS', 'DELIVERED_PENDING_AUDIT']);
+      assert.ok(statuses.includes('FAILED'));
+      assert.equal((await repos.outbox.findPending()).length, 0);
+      assert.equal(event.status, 'FAILED');
+      assert.equal(event.attempts, 1);
     });
   });
 

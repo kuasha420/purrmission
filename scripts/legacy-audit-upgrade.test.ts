@@ -309,6 +309,23 @@ describe('legacy AuditLog populated upgrade', () => {
       0
     );
     assert.equal(restoreLegacyAuditLogs(db).state, 'ALREADY_COMPLETE');
+
+    const originalKey = process.env.AUDIT_INTEGRITY_KEY;
+    const originalId = process.env.AUDIT_INTEGRITY_KEY_ID;
+    const originalRing = process.env.AUDIT_INTEGRITY_KEYS_JSON;
+    try {
+      process.env.AUDIT_INTEGRITY_KEY = '33'.repeat(32);
+      process.env.AUDIT_INTEGRITY_KEY_ID = 'audit-test-v2';
+      process.env.AUDIT_INTEGRITY_KEYS_JSON = JSON.stringify({
+        [originalId ?? 'audit-test-v1']: originalKey ?? '11'.repeat(32),
+      });
+      assert.equal(restoreLegacyAuditLogs(db).state, 'ALREADY_COMPLETE');
+    } finally {
+      process.env.AUDIT_INTEGRITY_KEY = originalKey;
+      process.env.AUDIT_INTEGRITY_KEY_ID = originalId;
+      if (originalRing === undefined) delete process.env.AUDIT_INTEGRITY_KEYS_JSON;
+      else process.env.AUDIT_INTEGRITY_KEYS_JSON = originalRing;
+    }
   });
 
   it('retains staging and fails nonzero when integrity validation is interrupted', () => {

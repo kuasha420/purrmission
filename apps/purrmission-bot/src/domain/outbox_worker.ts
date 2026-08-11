@@ -13,6 +13,13 @@ class OutboxIntegrityError extends Error {
   }
 }
 
+class DeliverySideEffectError extends Error {
+  constructor(readonly safeCode: string) {
+    super('Delivery side effect requires operator reconciliation.');
+    this.name = 'DeliverySideEffectError';
+  }
+}
+
 function requirePayloadString(payload: OutboxEvent['payload'], key: string): string {
   const value = payload[key];
   if (typeof value !== 'string' || value.length === 0) {
@@ -62,12 +69,20 @@ export class OutboxWorker {
             operation: `delivery.${event.eventType.toLowerCase()}`,
           },
           async () => {
+            const attempt = event.attempts + 1;
             try {
-              await this.processEvent(event);
+              await this.processEvent(event, attempt);
             } catch (err: unknown) {
-              const nextAttempts = event.attempts + 1;
-              const status = nextAttempts >= this.maxAttempts ? 'FAILED' : 'PENDING';
-              const errorCode = err instanceof Error ? err.name : 'UNKNOWN_DELIVERY_ERROR';
+              const status =
+                err instanceof DeliverySideEffectError || attempt >= this.maxAttempts
+                  ? 'FAILED'
+                  : 'PENDING';
+              const errorCode =
+                err instanceof DeliverySideEffectError
+                  ? err.safeCode
+                  : err instanceof Error
+                    ? err.name
+                    : 'UNKNOWN_DELIVERY_ERROR';
               await this.audit.log({
                 eventFamily: 'DELIVERY',
                 eventType: 'DELIVERY_OUTCOME',
@@ -85,13 +100,13 @@ export class OutboxWorker {
                 authKind: 'SERVICE',
                 resourceId: event.resourceId,
                 requestId: event.requestId,
-                payload: { attempt: nextAttempts, errorCode, terminal: status === 'FAILED' },
+                payload: { attempt, errorCode, terminal: status === 'FAILED' },
               });
-              await this.repos.outbox.updateStatus(event.id, status, nextAttempts, errorCode);
+              await this.repos.outbox.updateStatus(event.id, status, attempt, errorCode);
               logger.error('Failed to process outbox event', {
                 eventId: event.id,
                 eventType: event.eventType,
-                attempts: nextAttempts,
+                attempts: attempt,
                 status,
                 errorType: errorCode,
               });
@@ -104,7 +119,7 @@ export class OutboxWorker {
     }
   }
 
-  private async processEvent(event: OutboxEvent): Promise<void> {
+  private async processEvent(event: OutboxEvent, attempt: number): Promise<void> {
     // 1. Calculate exponential backoff delay (2^attempts seconds)
     if (event.attempts > 0) {
       const delayMs = Math.pow(2, event.attempts) * 1000;
@@ -136,27 +151,38 @@ export class OutboxWorker {
       authKind: 'SERVICE',
       resourceId: event.resourceId,
       requestId: event.requestId,
-      payload: { attempt: event.attempts + 1, deliveryType: event.eventType },
+      payload: { attempt, deliveryType: event.eventType },
     });
+
+    // Enter a durable non-redelivery state before any external side effect. A crash or ambiguous
+    // network result is reconciled by #123 and is never returned to the normal pending queue.
+    await this.repos.outbox.updateStatus(
+      event.id,
+      'DELIVERY_IN_PROGRESS',
+      attempt,
+      'DELIVERY_RECONCILIATION_REQUIRED'
+    );
 
     // 2. Dispatch event based on type
     let result: 'DELIVERED' | 'NOOP';
-    if (event.eventType === 'REQUEST_CREATED') {
-      result = await this.handleRequestCreated(event.payload);
-    } else if (event.eventType === 'APPROVAL_CALLBACK') {
-      result = await this.handleApprovalCallback(event.payload);
-    } else {
-      throw new Error(`Unknown outbox event type: ${event.eventType}`);
-    }
+    try {
+      if (event.eventType === 'REQUEST_CREATED') {
+        result = await this.handleRequestCreated(event.payload);
+      } else if (event.eventType === 'APPROVAL_CALLBACK') {
+        result = await this.handleApprovalCallback(event.payload);
+      } else {
+        throw new Error(`Unknown outbox event type: ${event.eventType}`);
+      }
 
-    // Persist a non-redelivery state immediately after the external side effect. If the outcome
-    // audit fails, #123 can reconcile this marker without repeating the obvious side effect.
-    await this.repos.outbox.updateStatus(
-      event.id,
-      'DELIVERED_PENDING_AUDIT',
-      event.attempts + 1,
-      'OUTCOME_AUDIT_PENDING'
-    );
+      await this.repos.outbox.updateStatus(
+        event.id,
+        'DELIVERED_PENDING_AUDIT',
+        attempt,
+        'OUTCOME_AUDIT_PENDING'
+      );
+    } catch (error) {
+      throw new DeliverySideEffectError(error instanceof Error ? error.name : 'DELIVERY_UNKNOWN');
+    }
 
     try {
       await this.audit.log({
@@ -176,7 +202,7 @@ export class OutboxWorker {
         authKind: 'SERVICE',
         resourceId: event.resourceId,
         requestId: event.requestId,
-        payload: { attempt: event.attempts + 1, deliveryType: event.eventType, result },
+        payload: { attempt, deliveryType: event.eventType, result },
       });
     } catch (error) {
       logger.error('Delivery completed but outcome audit is pending operator reconciliation', {
@@ -188,7 +214,7 @@ export class OutboxWorker {
     }
 
     // 3. Mark processed only after the delivery outcome is durable.
-    await this.repos.outbox.updateStatus(event.id, 'PROCESSED', event.attempts + 1);
+    await this.repos.outbox.updateStatus(event.id, 'PROCESSED', attempt);
   }
 
   private async handleRequestCreated(

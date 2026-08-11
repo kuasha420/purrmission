@@ -604,6 +604,13 @@ export class InMemoryAuditRepository implements AuditRepository {
     return log;
   }
 
+  async replace(event: AuditLog, _tx?: Prisma.TransactionClient): Promise<AuditLog> {
+    const index = this.logs.findIndex(({ id }) => id === event.id);
+    if (index < 0) throw new Error('audit event not found');
+    this.logs[index] = event;
+    return event;
+  }
+
   async findByScope(scope: AuditScope): Promise<AuditLog[]> {
     return this.logs.filter((log) => {
       if (scope.type === 'PROJECT') return log.projectId === scope.id;
@@ -638,6 +645,25 @@ export class InMemoryAuditRepository implements AuditRepository {
       (event) => event.createdAt >= cutoff || event.retentionClass === 'SECURITY'
     );
     return before - this.logs.length;
+  }
+
+  async countRetainedBefore(cutoff: Date): Promise<number> {
+    return this.logs.filter(
+      (event) =>
+        event.createdAt < cutoff && ['OPERATIONAL', 'PRIVACY'].includes(event.retentionClass)
+    ).length;
+  }
+
+  async countSinceCheckpoint(
+    throughCreatedAt: Date | null,
+    throughId: string | null
+  ): Promise<number> {
+    if (!throughCreatedAt) return this.logs.length;
+    return this.logs.filter(
+      ({ createdAt, id }) =>
+        createdAt > throughCreatedAt ||
+        (createdAt.getTime() === throughCreatedAt.getTime() && throughId !== null && id > throughId)
+    ).length;
   }
 }
 
@@ -678,7 +704,7 @@ export class InMemoryOutboxRepository implements OutboxRepository {
 
   async updateStatus(
     id: string,
-    status: 'PENDING' | 'DELIVERED_PENDING_AUDIT' | 'PROCESSED' | 'FAILED',
+    status: 'PENDING' | 'DELIVERY_IN_PROGRESS' | 'DELIVERED_PENDING_AUDIT' | 'PROCESSED' | 'FAILED',
     attempts: number,
     lastErrorCode?: string,
     _tx?: Prisma.TransactionClient

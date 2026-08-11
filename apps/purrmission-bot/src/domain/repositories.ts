@@ -982,11 +982,14 @@ export interface Repositories {
  */
 export interface AuditRepository {
   create(input: CreateAuditLogInput, tx?: Prisma.TransactionClient): Promise<AuditLog>;
+  replace(event: AuditLog, tx?: Prisma.TransactionClient): Promise<AuditLog>;
   findByScope(scope: AuditScope): Promise<AuditLog[]>;
   findThrough?(through: Date): Promise<AuditLog[]>;
   createCheckpoint?(checkpoint: AuditCheckpoint): Promise<AuditCheckpoint>;
   findLatestCheckpoint?(): Promise<AuditCheckpoint | null>;
   deleteRetainedBefore?(cutoff: Date): Promise<number>;
+  countRetainedBefore?(cutoff: Date): Promise<number>;
+  countSinceCheckpoint?(throughCreatedAt: Date | null, throughId: string | null): Promise<number>;
 }
 
 /**
@@ -997,7 +1000,7 @@ export interface OutboxRepository {
   findPending(): Promise<OutboxEvent[]>;
   updateStatus(
     id: string,
-    status: 'PENDING' | 'DELIVERED_PENDING_AUDIT' | 'PROCESSED' | 'FAILED',
+    status: 'PENDING' | 'DELIVERY_IN_PROGRESS' | 'DELIVERED_PENDING_AUDIT' | 'PROCESSED' | 'FAILED',
     attempts: number,
     lastErrorCode?: string,
     tx?: Prisma.TransactionClient
@@ -1059,6 +1062,49 @@ export class PrismaAuditRepository implements AuditRepository {
     return this.mapPrismaToDomain(created);
   }
 
+  async replace(event: AuditLog, tx?: Prisma.TransactionClient): Promise<AuditLog> {
+    const client = tx ?? this.prisma;
+    const updated = await client.auditLog.update({
+      where: { id: event.id },
+      data: {
+        schemaVersion: event.schemaVersion,
+        eventFamily: event.eventFamily,
+        eventType: event.eventType,
+        surface: event.surface,
+        operation: event.operation,
+        outcomeCode: event.outcomeCode,
+        capability: event.capability,
+        decisionCode: event.decisionCode,
+        reasonCode: event.reasonCode,
+        targetType: event.targetType,
+        targetId: event.targetId,
+        authoritySources: event.authoritySources as Prisma.InputJsonValue,
+        actorType: event.actorType,
+        principalId: event.principalId,
+        actorId: event.actorId,
+        authKind: event.authKind,
+        resolverType: event.resolverType,
+        resolverId: event.resolverId,
+        resourceId: event.resourceId,
+        projectId: event.projectId,
+        environmentId: event.environmentId,
+        requestId: event.requestId,
+        grantId: event.grantId,
+        correlationId: event.correlationId,
+        causationId: event.causationId,
+        statusCode: event.statusCode,
+        durationMs: event.durationMs,
+        retentionClass: event.retentionClass,
+        integrityKeyId: event.integrityKeyId,
+        integrityHash: event.integrityHash,
+        payload:
+          event.payload === null ? Prisma.JsonNull : (event.payload as Prisma.InputJsonValue),
+        createdAt: event.createdAt,
+      },
+    });
+    return this.mapPrismaToDomain(updated);
+  }
+
   async findByScope(scope: AuditScope): Promise<AuditLog[]> {
     const where: Prisma.AuditLogWhereInput =
       scope.type === 'PROJECT'
@@ -1096,6 +1142,27 @@ export class PrismaAuditRepository implements AuditRepository {
       where: { createdAt: { lt: cutoff }, retentionClass: { in: ['OPERATIONAL', 'PRIVACY'] } },
     });
     return result.count;
+  }
+
+  async countRetainedBefore(cutoff: Date): Promise<number> {
+    return this.prisma.auditLog.count({
+      where: { createdAt: { lt: cutoff }, retentionClass: { in: ['OPERATIONAL', 'PRIVACY'] } },
+    });
+  }
+
+  async countSinceCheckpoint(
+    throughCreatedAt: Date | null,
+    throughId: string | null
+  ): Promise<number> {
+    if (!throughCreatedAt) return this.prisma.auditLog.count();
+    return this.prisma.auditLog.count({
+      where: {
+        OR: [
+          { createdAt: { gt: throughCreatedAt } },
+          ...(throughId ? [{ createdAt: throughCreatedAt, id: { gt: throughId } }] : []),
+        ],
+      },
+    });
   }
 
   private mapPrismaToDomain(row: {
@@ -1211,7 +1278,7 @@ export class PrismaOutboxRepository implements OutboxRepository {
 
   async updateStatus(
     id: string,
-    status: 'PENDING' | 'DELIVERED_PENDING_AUDIT' | 'PROCESSED' | 'FAILED',
+    status: 'PENDING' | 'DELIVERY_IN_PROGRESS' | 'DELIVERED_PENDING_AUDIT' | 'PROCESSED' | 'FAILED',
     attempts: number,
     lastErrorCode?: string,
     tx?: Prisma.TransactionClient

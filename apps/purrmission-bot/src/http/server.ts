@@ -470,12 +470,16 @@ export function createHttpServer(deps: HttpServerDeps): FastifyInstance {
     async (req, rep) => {
       const { name, description } = req.body as z.infer<typeof CreateProjectSchema>;
       const userId = req.user.id;
+      const principal = extractPrincipal(req, userId);
 
-      const project = await services.project.createProject({
-        name,
-        description,
-        ownerId: userId,
-      });
+      const project = await services.project.createProject(
+        {
+          name,
+          description,
+          ownerId: userId,
+        },
+        principal
+      );
 
       return rep.status(201).send(project);
     }
@@ -528,16 +532,20 @@ export function createHttpServer(deps: HttpServerDeps): FastifyInstance {
       const { projectId } = req.params as z.infer<typeof ProjectParamsSchema>;
       const { name, slug } = req.body as z.infer<typeof CreateEnvironmentSchema>;
       const userId = req.user.id;
+      const principal = extractPrincipal(req, userId);
 
       const project = await services.project.getProject(projectId);
       if (!project) throw new ResourceNotFoundError('Project not found');
       if (project.ownerId !== userId) throw new AccessDeniedError('Access denied');
 
-      const env = await services.project.createEnvironment({
-        name,
-        slug,
-        projectId,
-      });
+      const env = await services.project.createEnvironment(
+        {
+          name,
+          slug,
+          projectId,
+        },
+        principal
+      );
       return rep.status(201).send(env);
     }
   );

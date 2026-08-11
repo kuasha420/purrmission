@@ -205,10 +205,33 @@ function integrityKey(): { id: string; key: Buffer } {
   if (!value || !/^[0-9a-fA-F]{64}$/.test(value)) {
     throw new Error('AUDIT_INTEGRITY_KEY is required to restore staged legacy AuditLog rows');
   }
+  const id = process.env.AUDIT_INTEGRITY_KEY_ID || 'audit-v1';
+  if (id === 'legacy-unverified') {
+    throw new Error('legacy-unverified cannot be used as an audit integrity key ID');
+  }
   return {
-    id: process.env.AUDIT_INTEGRITY_KEY_ID || 'audit-v1',
+    id,
     key: Buffer.from(value, 'hex'),
   };
+}
+
+function integrityKeyById(id: string): Buffer {
+  if (id === 'legacy-unverified') {
+    throw new Error('legacy-unverified cannot verify completed migration evidence');
+  }
+  const current = integrityKey();
+  if (current.id === id) return current.key;
+  const raw = process.env.AUDIT_INTEGRITY_KEYS_JSON;
+  if (!raw) throw new Error(`Audit integrity key is unavailable for completed migration: ${id}`);
+  const parsed = JSON.parse(raw) as unknown;
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    throw new Error('AUDIT_INTEGRITY_KEYS_JSON must be an object of key IDs to hex keys');
+  }
+  const value = (parsed as Record<string, unknown>)[id];
+  if (typeof value !== 'string' || !/^[0-9a-fA-F]{64}$/.test(value)) {
+    throw new Error(`Audit integrity key is unavailable for completed migration: ${id}`);
+  }
+  return Buffer.from(value, 'hex');
 }
 
 /** Restore staged rows into the final v2 envelope and remove raw staging only after verification. */
@@ -415,7 +438,7 @@ function verifyCompletedRestore(
     integrityKeyId: string;
     anchorHash: string;
   }>;
-  const integrity = integrityKey();
+  const manifestKey = integrityKeyById(manifest.integrityKeyId);
   const unsignedManifest = {
     migration: MIGRATION,
     rowCount: manifest.rowCount,
@@ -425,18 +448,17 @@ function verifyCompletedRestore(
     completedAt: manifest.completedAt,
   };
   if (
-    manifest.integrityKeyId !== integrity.id ||
-    createHmac('sha256', integrity.key).update(canonicalize(unsignedManifest)).digest('hex') !==
-      manifest.manifestHash
+    createHmac('sha256', manifestKey).update(canonicalize(unsignedManifest)).digest('hex') !==
+    manifest.manifestHash
   ) {
     throw new Error('Legacy AuditLog completion manifest integrity validation failed');
   }
   for (const anchor of anchors) {
     const { anchorHash, ...unsignedAnchor } = anchor;
     if (
-      anchor.integrityKeyId !== integrity.id ||
-      createHmac('sha256', integrity.key).update(canonicalize(unsignedAnchor)).digest('hex') !==
-        anchorHash
+      createHmac('sha256', integrityKeyById(anchor.integrityKeyId))
+        .update(canonicalize(unsignedAnchor))
+        .digest('hex') !== anchorHash
     ) {
       throw new Error('Legacy AuditLog completion anchor integrity validation failed');
     }
@@ -462,7 +484,7 @@ function verifyCompletedRestore(
     delete unsigned.integrityHash;
     unsigned.authoritySources = JSON.parse(String(unsigned.authoritySources)) as never;
     unsigned.payload = JSON.parse(String(unsigned.payload)) as never;
-    const expected = createHmac('sha256', integrity.key)
+    const expected = createHmac('sha256', integrityKeyById(String(rawRow.integrityKeyId)))
       .update(canonicalize(unsigned))
       .digest('hex');
     if (integrityHash !== expected) {

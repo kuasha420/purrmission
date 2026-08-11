@@ -69,6 +69,12 @@ describe('Project API', () => {
     assert.strictEqual(body.name, 'My Project');
     assert.strictEqual(body.ownerId, userId);
     assert.ok(body.id);
+    const events = await repositories.audit.findByScope({ type: 'PROJECT', id: body.id });
+    const created = events.find(({ eventType }) => eventType === 'PROJECT_CREATE');
+    assert.ok(created);
+    assert.strictEqual(created.actorType, 'PAWTHY_TOKEN');
+    assert.strictEqual(created.authKind, 'PAWTHY');
+    assert.strictEqual(created.actorId, userId);
   });
 
   it('should list projects', async () => {

@@ -113,6 +113,15 @@ describe('AuditService', () => {
     );
   });
 
+  it('does not invent unrelated causation IDs for root events', async () => {
+    const repositories = createInMemoryRepositories();
+    const service = new AuditService({ repositories }, config);
+    const first = await service.log(event({ correlationId: 'operation-1' }));
+    const second = await service.log(event({ correlationId: 'operation-1' }));
+    assert.equal(first.causationId, null);
+    assert.equal(second.causationId, null);
+  });
+
   it('constructs only registered scalar payloads and rejects adversarial fields', () => {
     assert.deepEqual(buildAuditPayload('SECRET_REVEAL', { fieldName: 'production' }), {
       fieldName: 'production',
@@ -158,8 +167,10 @@ describe('AuditService', () => {
   });
 
   it('fails closed and emits only a redacted persistence-failure envelope', async () => {
+    let createCalls = 0;
     const brokenAudit = {
       create: async () => {
+        createCalls += 1;
         throw new Error('database rejected raw-secret-value');
       },
     } as unknown as AuditRepository;
@@ -170,8 +181,8 @@ describe('AuditService', () => {
     console.error = (...args: unknown[]) => captured.push(args.join(' '));
     try {
       await assert.rejects(
-        service.log(event({ payload: { secret: 'raw-secret-value' } as never })),
-        /not registered/
+        service.log(event({ payload: { route: '/safe' } })),
+        /database rejected raw-secret-value/
       );
     } finally {
       console.error = original;
@@ -180,6 +191,7 @@ describe('AuditService', () => {
       captured.some((line) => line.includes('raw-secret-value')),
       false
     );
+    assert.equal(createCalls, 1);
   });
 
   it('enforces same-object read plus export authority and audits authorized access', async () => {
@@ -307,5 +319,58 @@ describe('AuditService', () => {
       service.createCheckpoint(),
       /Cannot extend an unverifiable audit checkpoint chain/
     );
+  });
+
+  it('operationally checkpoints at cadence and deletes only eligible retention classes', async () => {
+    const repositories = createInMemoryRepositories();
+    const service = new AuditService({ repositories }, config);
+    for (let index = 0; index < 10; index += 1) {
+      await service.log(event({ targetId: `resource-${index}` }));
+    }
+    assert.deepEqual(await service.runMaintenance(), { checkpointed: true, deleted: 0 });
+    assert.deepEqual(await service.runMaintenance(), { checkpointed: false, deleted: 0 });
+
+    await service.log(event({ retentionClass: 'OPERATIONAL' }));
+    await service.log(event({ retentionClass: 'PRIVACY' }));
+    await service.log(event({ retentionClass: 'SECURITY' }));
+    const future = new Date(Date.now() + 31 * 24 * 60 * 60 * 1000);
+    assert.equal(await service.executeRetention(future), 2);
+    const findThrough = repositories.audit.findThrough;
+    assert.ok(findThrough);
+    const retained = await findThrough.call(repositories.audit, future);
+    assert.equal(retained.filter(({ retentionClass }) => retentionClass === 'SECURITY').length, 11);
+    assert.equal(
+      retained.some(({ retentionClass }) => retentionClass === 'OPERATIONAL'),
+      false
+    );
+    assert.equal(
+      retained.some(({ retentionClass }) => retentionClass === 'PRIVACY'),
+      false
+    );
+  });
+
+  it('checkpoints, pseudonymizes, re-signs, and audits privacy transformations', async () => {
+    const repositories = createInMemoryRepositories();
+    const service = new AuditService({ repositories }, config);
+    await service.log(
+      event({
+        actorId: 'privacy-user',
+        resolverId: 'privacy-user',
+        targetType: 'SUBJECT',
+        targetId: 'privacy-user',
+        payload: { reason: 'privacy-user' },
+      })
+    );
+    assert.equal(await service.pseudonymizeSubject('privacy-user'), 1);
+    assert.equal(
+      (await repositories.audit.findByScope({ type: 'SUBJECT', id: 'privacy-user' })).length,
+      0
+    );
+    const findThrough = repositories.audit.findThrough;
+    assert.ok(findThrough);
+    const transformed = await findThrough.call(repositories.audit, new Date(Date.now() + 1000));
+    assert.equal(JSON.stringify(transformed).includes('privacy-user'), false);
+    assert.ok(transformed.every((entry) => service.verifyIntegrity(entry)));
+    assert.ok(transformed.some(({ eventType }) => eventType === 'PRIVACY_PSEUDONYMIZE'));
   });
 });

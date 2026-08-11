@@ -39,9 +39,13 @@ fails closed and remains available for operator recovery.
   verifies an `AuditCheckpoint`, then deletes only expired `OPERATIONAL` and `PRIVACY` events;
   `SECURITY` evidence is retained.
 - `AUDIT_CHECKPOINT_INTERVAL` configures cadence. Checkpoints are HMAC-protected, chain to the
-  preceding checkpoint digest, and are persisted in the dedicated `AuditCheckpoint` sink.
-- Privacy deletion removes or pseudonymizes subject identifiers only through an audited operator
-  workflow. It must preserve event type, object scope, timestamp, decision, and integrity evidence.
+  preceding checkpoint digest, and are persisted in the dedicated `AuditCheckpoint` sink. Startup
+  and the 15-minute cleanup scheduler call `runMaintenance`, so both cadence and retention are
+  enforced operationally rather than remaining library-only capabilities.
+- `pseudonymizeSubject` checkpoints verified original evidence, replaces direct subject identifiers
+  with a keyed pseudonym, re-signs each transformed envelope, and appends a
+  `PRIVACY_PSEUDONYMIZE` event linked to the original-event digest. The mutation and transformation
+  audit event share one repository transaction and fail closed together.
 - Raw legacy context is not copied into the version 2 payload because its shape and secret status
   cannot be proven. The transformed event records that legacy context was discarded and retains
   the original-row checksum as migration evidence.
@@ -88,9 +92,10 @@ requirement that the listed current operations emit durable events today.
 outbox envelope before dispatch, retain the enqueue correlation ID across attempts, use the outbox
 ID as causation, and persist only stable error codes. The repository container requires an explicit
 unit-of-work capability; audited mutations cannot silently fall back to non-transactional writes.
-After an external side effect the worker first
-marks `DELIVERED_PENDING_AUDIT`; an outcome-audit failure is therefore handed to #123
-reconciliation without making that side effect eligible for normal redelivery. Leasing and complete
-reconciliation mechanics remain #123-owned. Later lifecycle issues can add new mechanics and event
-types, but must use these required primitives rather than introducing optional or best-effort audit
-paths.
+Before an external side effect the worker durably marks `DELIVERY_IN_PROGRESS`, removing the event
+from the normal pending queue. After a known success it marks `DELIVERED_PENDING_AUDIT`; ambiguous
+network outcomes, partial multi-destination delivery, marker failures after dispatch, and outcome
+audit failures are therefore handed to #123 reconciliation without automatically repeating a side
+effect. Leasing and complete reconciliation mechanics remain #123-owned. Later lifecycle issues can
+add new mechanics and event types, but must use these required primitives rather than introducing
+optional or best-effort audit paths.

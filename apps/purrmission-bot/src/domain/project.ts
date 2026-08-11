@@ -7,6 +7,7 @@ import {
   ResourceNotFoundError,
   ProjectMember,
   ProjectMemberRole,
+  Principal,
 } from './models.js';
 import { type Prisma } from '@prisma/client';
 import { AuditService } from './audit.js';
@@ -17,7 +18,7 @@ export class ProjectService {
     private readonly resourceService: {
       createResource: (
         name: string,
-        ownerId: string,
+        principal: Principal,
         tx?: Prisma.TransactionClient
       ) => Promise<{ resource: { id: string } }>;
     },
@@ -35,7 +36,10 @@ export class ProjectService {
     return this.transaction(callback);
   }
 
-  async createProject(input: CreateProjectInput): Promise<Project> {
+  async createProject(input: CreateProjectInput, principal: Principal): Promise<Project> {
+    if (input.ownerId !== principal.subjectId) {
+      throw new Error('Project owner must match the authenticated principal.');
+    }
     return this.runTransaction(async (tx) => {
       const project = await this.projectRepo.createProject(input, tx);
       await this.audit.log(
@@ -51,10 +55,10 @@ export class ProjectService {
           authoritySources: ['AUTHENTICATED_SUBJECT'],
           targetType: 'PROJECT',
           targetId: project.id,
-          actorType: 'DISCORD_USER',
-          principalId: `discord:${input.ownerId}`,
-          actorId: input.ownerId,
-          authKind: 'DISCORD',
+          actorType: principal.type,
+          principalId: principal.id,
+          actorId: principal.subjectId,
+          authKind: principal.authKind,
           projectId: project.id,
           payload: {},
         },
@@ -89,19 +93,21 @@ export class ProjectService {
     return this.projectRepo.findById(id);
   }
 
-  async createEnvironment(input: CreateEnvironmentInput): Promise<Environment> {
+  async createEnvironment(
+    input: CreateEnvironmentInput,
+    principal: Principal
+  ): Promise<Environment> {
     // 1. Get Project to find owner
     const project = await this.getProject(input.projectId);
     if (!project) throw new ResourceNotFoundError('Project not found');
+    if (project.ownerId !== principal.subjectId) {
+      throw new Error('Only the project owner can create environments.');
+    }
 
     return this.runTransaction(async (tx) => {
       // 2. Create Resource for this environment inside the transaction
       const resourceName = `${project.name}:${input.name}`; // e.g., web-app:dev
-      const { resource } = await this.resourceService.createResource(
-        resourceName,
-        project.ownerId,
-        tx
-      );
+      const { resource } = await this.resourceService.createResource(resourceName, principal, tx);
 
       // 3. Create Environment linked to Resource inside the transaction
       const environment = await this.projectRepo.createEnvironment(
@@ -124,10 +130,10 @@ export class ProjectService {
           authoritySources: ['PROJECT_OWNER'],
           targetType: 'ENVIRONMENT',
           targetId: environment.id,
-          actorType: 'DISCORD_USER',
-          principalId: `discord:${project.ownerId}`,
-          actorId: project.ownerId,
-          authKind: 'DISCORD',
+          actorType: principal.type,
+          principalId: principal.id,
+          actorId: principal.subjectId,
+          authKind: principal.authKind,
           projectId: project.id,
           environmentId: environment.id,
           resourceId: resource.id,
@@ -155,10 +161,13 @@ export class ProjectService {
     projectId: string,
     userId: string,
     role: ProjectMemberRole,
-    addedBy: string
+    principal: Principal
   ): Promise<ProjectMember> {
     return this.runTransaction(async (tx) => {
-      const member = await this.projectRepo.addMember({ projectId, userId, role, addedBy }, tx);
+      const member = await this.projectRepo.addMember(
+        { projectId, userId, role, addedBy: principal.subjectId },
+        tx
+      );
       await this.audit.log(
         {
           eventFamily: 'PROJECT_MEMBERSHIP',
@@ -172,10 +181,10 @@ export class ProjectService {
           authoritySources: ['PROJECT_OWNER'],
           targetType: 'PROJECT',
           targetId: projectId,
-          actorType: 'DISCORD_USER',
-          principalId: `discord:${addedBy}`,
-          actorId: addedBy,
-          authKind: 'DISCORD',
+          actorType: principal.type,
+          principalId: principal.id,
+          actorId: principal.subjectId,
+          authKind: principal.authKind,
           projectId,
           payload: { memberUserId: userId, role },
         },
@@ -185,7 +194,7 @@ export class ProjectService {
     });
   }
 
-  async removeMember(projectId: string, userId: string, removedBy: string): Promise<void> {
+  async removeMember(projectId: string, userId: string, principal: Principal): Promise<void> {
     await this.runTransaction(async (tx) => {
       await this.projectRepo.removeMember(projectId, userId, tx);
       await this.audit.log(
@@ -201,10 +210,10 @@ export class ProjectService {
           authoritySources: ['PROJECT_OWNER'],
           targetType: 'PROJECT',
           targetId: projectId,
-          actorType: 'DISCORD_USER',
-          principalId: `discord:${removedBy}`,
-          actorId: removedBy,
-          authKind: 'DISCORD',
+          actorType: principal.type,
+          principalId: principal.id,
+          actorId: principal.subjectId,
+          authKind: principal.authKind,
           projectId,
           payload: { memberUserId: userId },
         },

@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { describe, it } from 'node:test';
 
 import { createDiscordPrincipal } from './principal.js';
@@ -10,6 +11,16 @@ import { ProjectService } from './project.js';
 import { DomainPortsImpl } from './ports_impl.js';
 
 describe('required current-surface audit coverage', () => {
+  it('routes Discord field mutations through the audited resource service', () => {
+    const source = readFileSync(
+      new URL('../discord/commands/resource.ts', import.meta.url),
+      'utf8'
+    );
+    assert.doesNotMatch(source, /resourceFields\.(?:create|delete)\s*\(/);
+    assert.match(source, /services\.resource\.createField\s*\(/);
+    assert.match(source, /services\.resource\.deleteField\s*\(/);
+  });
+
   it('rejects construction of fail-closed services without audit', () => {
     const repositories = createInMemoryRepositories();
     assert.throws(
@@ -68,19 +79,18 @@ describe('required current-surface audit coverage', () => {
     assert.ok(exchange);
     assert.ok(await services.auth.validateToken(exchange.token));
 
-    const project = await services.project.createProject({
-      name: 'audit-project',
-      ownerId: 'owner-1',
-    });
-    await services.project.addMember(project.id, 'writer-1', 'WRITER', 'owner-1');
-    const environment = await services.project.createEnvironment({
-      projectId: project.id,
-      name: 'Production',
-      slug: 'production',
-    });
+    const owner = createDiscordPrincipal('owner-1');
+    const project = await services.project.createProject(
+      { name: 'audit-project', ownerId: 'owner-1' },
+      owner
+    );
+    await services.project.addMember(project.id, 'writer-1', 'WRITER', owner);
+    const environment = await services.project.createEnvironment(
+      { projectId: project.id, name: 'Production', slug: 'production' },
+      owner
+    );
     assert.ok(environment.resourceId);
 
-    const owner = createDiscordPrincipal('owner-1');
     await services.resource.setSecrets(
       environment.resourceId,
       { DATABASE_PASSWORD: 'must-never-enter-audit' },

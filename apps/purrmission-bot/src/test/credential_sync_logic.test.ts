@@ -400,6 +400,7 @@ describe('Credential Sync Logic Smoke Test', () => {
     create: async (input: CreateAuditLogInput) => {
       return input;
     },
+    replace: async (input: CreateAuditLogInput) => input,
     findByScope: async () => [],
   };
 
@@ -440,20 +441,19 @@ describe('Credential Sync Logic Smoke Test', () => {
     const guardianId = 'guardian-456';
 
     // 1. Create Project
-    const project = await services.project.createProject({
-      name: 'smoke-test-proj',
-      ownerId,
-      description: 'A test project',
-    });
+    const owner = createDiscordPrincipal(ownerId);
+    const project = await services.project.createProject(
+      { name: 'smoke-test-proj', ownerId, description: 'A test project' },
+      owner
+    );
     assert.ok(project);
     assert.strictEqual(project.name, 'smoke-test-proj');
 
     // 2. Create Environment
-    const env = await services.project.createEnvironment({
-      name: 'Development',
-      slug: 'dev',
-      projectId: project.id,
-    });
+    const env = await services.project.createEnvironment(
+      { name: 'Development', slug: 'dev', projectId: project.id },
+      owner
+    );
     assert.ok(env);
     assert.ok(env.resourceId);
 
@@ -515,15 +515,15 @@ describe('Credential Sync Logic Smoke Test', () => {
     const requesterId = 'user-555';
 
     // Create a project and environment first
-    const project = await services.project.createProject({
-      name: 'expiry-test-proj',
-      ownerId,
-    });
-    const env = await services.project.createEnvironment({
-      name: 'Development',
-      slug: 'dev',
-      projectId: project.id,
-    });
+    const owner = createDiscordPrincipal(ownerId);
+    const project = await services.project.createProject(
+      { name: 'expiry-test-proj', ownerId },
+      owner
+    );
+    const env = await services.project.createEnvironment(
+      { name: 'Development', slug: 'dev', projectId: project.id },
+      owner
+    );
     assert.ok(env.resourceId, 'env.resourceId must be defined');
     const resourceId = env.resourceId;
 

@@ -4,6 +4,7 @@ import { ProjectService } from './project.js';
 import { ProjectRepository } from './repositories.js';
 import { Project, Environment } from './models.js';
 import { AuditService } from './audit.js';
+import { createDiscordPrincipal } from './principal.js';
 import { createInMemoryRepositories } from './repositories.mock.js';
 
 type ResourceServiceDependency = ConstructorParameters<typeof ProjectService>[1];
@@ -63,7 +64,7 @@ describe('ProjectService', () => {
     };
     projectRepo.createProject.mock.mockImplementation(async () => created);
 
-    const result = await projectService.createProject(input);
+    const result = await projectService.createProject(input, createDiscordPrincipal(input.ownerId));
 
     assert.deepStrictEqual(result, created);
     assert.strictEqual(projectRepo.createProject.mock.callCount(), 1);
@@ -136,7 +137,10 @@ describe('ProjectService', () => {
     projectRepo.findById.mock.mockImplementation(async () => project);
     projectRepo.createEnvironment.mock.mockImplementation(async () => created);
 
-    const result = await projectService.createEnvironment(input);
+    const result = await projectService.createEnvironment(
+      input,
+      createDiscordPrincipal(project.ownerId)
+    );
 
     assert.deepStrictEqual(result, created);
     assert.strictEqual(projectRepo.createEnvironment.mock.callCount(), 1);

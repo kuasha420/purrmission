@@ -4,6 +4,7 @@ import { createInMemoryRepositories } from './repositories.mock.js';
 import { ResourceService } from './services.js';
 import { ProjectService } from './project.js';
 import { AuditService } from './audit.js';
+import { createDiscordPrincipal } from './principal.js';
 
 describe('Metadata Projections, Visibility Discovery and Version Rotations', () => {
   let repos: ReturnType<typeof createInMemoryRepositories>;
@@ -86,15 +87,15 @@ describe('Metadata Projections, Visibility Discovery and Version Rotations', () 
       const readerId = 'reader-bob';
       const strangerId = 'stranger-evil';
 
-      const project = await projectService.createProject({
-        name: 'Alpha Project',
-        description: 'First system',
-        ownerId,
-      });
+      const owner = createDiscordPrincipal(ownerId);
+      const project = await projectService.createProject(
+        { name: 'Alpha Project', description: 'First system', ownerId },
+        owner
+      );
 
       // Add memberships
-      await projectService.addMember(project.id, writerId, 'WRITER', ownerId);
-      await projectService.addMember(project.id, readerId, 'READER', ownerId);
+      await projectService.addMember(project.id, writerId, 'WRITER', owner);
+      await projectService.addMember(project.id, readerId, 'READER', owner);
 
       // Check visibility for owner
       const ownerProjects = await projectService.listProjects(ownerId);
@@ -182,22 +183,23 @@ describe('Metadata Projections, Visibility Discovery and Version Rotations', () 
     });
 
     it('should rotate project policyVersion when memberships change', async () => {
-      const project = await projectService.createProject({
-        name: 'Beta Project',
-        ownerId: 'owner-jane',
-      });
+      const owner = createDiscordPrincipal('owner-jane');
+      const project = await projectService.createProject(
+        { name: 'Beta Project', ownerId: 'owner-jane' },
+        owner
+      );
       const initialPolicyVersion = project.policyVersion;
       assert.ok(initialPolicyVersion);
 
       // Add member -> rotates project policyVersion
-      await projectService.addMember(project.id, 'user-bob', 'READER', 'owner-jane');
+      await projectService.addMember(project.id, 'user-bob', 'READER', owner);
       const projectAfterAdd = await projectService.getProject(project.id);
       assert.ok(projectAfterAdd);
       assert.notStrictEqual(projectAfterAdd.policyVersion, initialPolicyVersion);
 
       // Remove member -> rotates project policyVersion
       const v2 = projectAfterAdd.policyVersion;
-      await projectService.removeMember(project.id, 'user-bob', 'owner-jane');
+      await projectService.removeMember(project.id, 'user-bob', owner);
       const projectAfterRemove = await projectService.getProject(project.id);
       assert.ok(projectAfterRemove);
       assert.notStrictEqual(projectAfterRemove.policyVersion, v2);

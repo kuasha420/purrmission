@@ -109,10 +109,18 @@ async function main(): Promise<void> {
     try {
       const expiredRequestsCount = await services.approval.cleanupExpiredRequests();
       const expiredSessionsCount = await services.auth.cleanupExpiredSessions();
-      if (expiredRequestsCount > 0 || expiredSessionsCount > 0) {
+      const auditMaintenance = await services.audit.runMaintenance();
+      if (
+        expiredRequestsCount > 0 ||
+        expiredSessionsCount > 0 ||
+        auditMaintenance.checkpointed ||
+        auditMaintenance.deleted > 0
+      ) {
         logger.info('Periodic cleanup executed', {
           expiredRequests: expiredRequestsCount,
           expiredSessions: expiredSessionsCount,
+          auditCheckpointed: auditMaintenance.checkpointed,
+          auditDeleted: auditMaintenance.deleted,
         });
       }
     } catch (error) {

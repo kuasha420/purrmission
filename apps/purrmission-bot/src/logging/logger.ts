@@ -13,11 +13,43 @@ import { correlationStorage } from './correlationContext.js';
 
 type LogLevel = 'DEBUG' | 'INFO' | 'WARN' | 'ERROR';
 const REDACTED = '[REDACTED]';
-const SENSITIVE_LOG_KEYS =
-  /(^|_)(value|secret|password|token|api_?key|authorization|cookie|code|csrf|body|context|payload|error|stack)($|_)/i;
+const SENSITIVE_LOG_KEYS = new Set([
+  'authorization',
+  'body',
+  'code',
+  'context',
+  'cookie',
+  'csrf',
+  'error',
+  'password',
+  'payload',
+  'secret',
+  'stack',
+  'token',
+  'value',
+]);
+const SAFE_CODE_KEYS = new Set(['decision_code', 'error_code', 'reason_code', 'status_code']);
+
+function keyParts(key: string): string[] {
+  return key
+    .replace(/([a-z0-9])([A-Z])/g, '$1_$2')
+    .toLowerCase()
+    .split(/[^a-z0-9]+/)
+    .filter(Boolean);
+}
+
+function isSensitiveLogKey(key: string): boolean {
+  const parts = keyParts(key);
+  const normalized = parts.join('_');
+  if (SAFE_CODE_KEYS.has(normalized)) return false;
+  if (SENSITIVE_LOG_KEYS.has(normalized)) return true;
+  return ['secret', 'token', 'key', 'code', 'password'].some(
+    (suffix) => normalized.endsWith(`_${suffix}`) || normalized.startsWith(`${suffix}_`)
+  );
+}
 
 function sanitizeLogValue(value: unknown, key = '', seen = new WeakSet<object>()): unknown {
-  if (SENSITIVE_LOG_KEYS.test(key)) return REDACTED;
+  if (isSensitiveLogKey(key)) return REDACTED;
   if (typeof value === 'string') {
     if (/^bearer\s+\S+/i.test(value) || /^otpauth:\/\//i.test(value)) return REDACTED;
     return value.length > 1024 ? `${value.slice(0, 1024)}…` : value;
@@ -55,7 +87,8 @@ function formatMessage(level: LogLevel, message: string, meta?: unknown): string
   }
 
   const metaStr = finalMeta !== undefined ? ` ${JSON.stringify(sanitizeLogValue(finalMeta))}` : '';
-  return `[${timestamp}] [${level}] ${message}${metaStr}`;
+  const safeMessage = /bearer\s+\S+|otpauth:\/\/\S+/i.test(message) ? REDACTED : message;
+  return `[${timestamp}] [${level}] ${safeMessage}${metaStr}`;
 }
 
 export const logger = {
