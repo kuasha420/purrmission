@@ -11,24 +11,21 @@
   routing are recorded in the
   [2026-07-26 prerequisite conformance report](../reports/2026-07-26-prerequisite-conformance-report.md)
   and [#138](https://github.com/kuasha420/purrmission/pull/138)
-- Current execution checkpoint: Wave 1 implementation [#117](https://github.com/kuasha420/purrmission/issues/117)
-  merged through [#139](https://github.com/kuasha420/purrmission/pull/139) at
-  `edd9c3497909bb71b265300ffa201038edea54ef`, but independent verification against
-  `a1f2004141f90376c0084b7b2156297de92dd6f7` returned No-go on 2026-07-31 and reopened the issue.
-  On 2026-08-11, the epic owner approved a narrow stabilization correction under #117: it may
-  fail-close prematurely merged successor behavior and repair shared build or migration
-  infrastructure solely to restore a safe, verifiable baseline. This does not transfer or complete
-  #120 or #122 ownership. Wave 2 work remains merge-blocked until #117 passes every common and
-  node-specific gate on current `master`.
-- Last assessed: 2026-08-11
+- Current execution checkpoint: Wave 1 [#117](https://github.com/kuasha420/purrmission/issues/117)
+  is Verified and closed. Corrective [#143](https://github.com/kuasha420/purrmission/pull/143)
+  merged via `a0144d46e92aceb9638b9609610896583a337162` and passed clean-`master` generation,
+  lint, full tests, build, and fresh/populated migration rehearsals on 2026-08-13. Wave 2 is
+  unblocked. Its approved integration order starts with #119's additive contract checkpoint,
+  followed by completed/rebased #118, then #119 persistence completion.
+- Last assessed: 2026-08-13
 
 All implementation nodes and both gates were reopened after the No-go result. Reopening records
-ownership; it does not make every node ready at once. #117's first implementation merged, failed
-independent post-merge verification, and is reopened for remediation. #118 and #119 are the current
-parallel branch-execution lanes under an explicit owner directive, with their merge gate held on
-the reopened upstream node. Issue #105 remains independently claimable on the parallel
-production-safety lane. Every later node must wait for the incoming dependencies in Section 3 to
-be post-merge verified and closed again.
+ownership; it does not make every node ready at once. #117's first implementation failed
+independent post-merge verification, then its corrective lane passed review and post-merge
+verification. #118 and #119 are now the active Wave 2 lanes, serialized for integration as defined
+in Section 3.2. Issue #105 remains independently claimable on the parallel production-safety lane.
+Every later node must wait for the incoming dependencies in Section 3 to be post-merge verified
+and closed.
 
 The approved stabilization intentionally trades availability for authority safety. Until #120 and
 #122 land their owned custody, consent, request, and grant contracts, #117 may disable provisional
@@ -81,9 +78,9 @@ cannot relabel a failed prerequisite as future work.
 flowchart TD
   BASE["#107 / #115<br/>Baseline audit and knowledgebase<br/>Complete"]
   EPIC["#116<br/>Pre-dashboard remediation epic"]
-  I117["#117<br/>Principal and capability contract<br/>Reopened; post-merge No-go"]
-  I118["#118<br/>Audit, outbox, and correlation<br/>Claimed; merge-blocked"]
-  I119["#119<br/>Metadata projections and target versions<br/>Claimed; merge-blocked"]
+  I117["#117<br/>Principal and capability contract<br/>Verified and closed"]
+  I118["#118<br/>Audit, outbox, and correlation<br/>Unblocked; remediation active"]
+  I119["#119<br/>Metadata projections and target versions<br/>Unblocked; contract checkpoint next"]
   I120["#120<br/>TOTP custody and consent"]
   I121["#121<br/>Credential lifecycle"]
   I122["#122<br/>Approval Request V2 and grants"]
@@ -152,13 +149,13 @@ incomplete at final reassessment, #126 must preserve an explicit production roll
 
 ### 3.1 Current wave ledger
 
-| Node(s)   | Current state                                                            | Evidence / merge gate                                                                                                              |
-| --------- | ------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------- |
-| #117      | Corrective candidate independently reviewed locally; publication pending | Fail-closed stabilization is approved, but formal security approval, the common build, and populated-upgrade gates remain blocking |
-| #118      | Initial candidate rejected; corrective work remains in progress          | Must rebase after verified #117 and close audit, migration, integrity, transaction, and build findings before merge                |
-| #119      | Additive contract/query checkpoint independently reviewed locally        | May publish only after verified #117; it is partial and does not close persistence/version acceptance                              |
-| #120-#130 | Blocked according to the dependency graph                                | Planning and test design may begin only within the one-wave-ahead rule                                                             |
-| #105      | Open parallel production-safety lane                                     | Blocks production migration/deployment, not local branch execution                                                                 |
+| Node(s)   | Current state                                                    | Evidence / merge gate                                                                                                  |
+| --------- | ---------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------- |
+| #117      | Verified and closed at merge `a0144d46`                          | Human and independent review complete; clean-master common and migration gates pass                                    |
+| #118      | Unblocked; corrective work remains under independent review      | Integrates after partial #119; must preserve #117's fail-closed baseline and close all intrinsic audit/outbox findings |
+| #119      | Unblocked; additive contract/query checkpoint is next to publish | First PR is partial and leaves the issue open; persistence/version acceptance completes after verified #118            |
+| #120-#130 | Blocked according to the dependency graph                        | Planning and test design may begin only within the one-wave-ahead rule                                                 |
+| #105      | Open parallel production-safety lane                             | Blocks production migration/deployment, not local branch execution                                                     |
 
 Research, threat modeling, test design, and file-collision planning may begin one wave early.
 Production implementation must not merge before every native blocker is **Verified** and closed.
@@ -170,8 +167,8 @@ merged before its owning node or to make the common build and migration evidence
 must preserve the target contracts and leave final custody/consent implementation to #120 and
 grant issuance/consumption to #122.
 
-After #117 receives independent security approval, merges, passes clean-`master` post-merge
-verification, and closes, Wave 2 integrates in this order:
+With #117 independently reviewed, merged, post-merge verified, and closed, Wave 2 integrates in
+this order:
 
 1. Rebase and publish #119's additive metadata/query contract checkpoint with `Refs #119`. Keep
    #119 open; do not claim schema, backfill, transactional version advancement, or production
