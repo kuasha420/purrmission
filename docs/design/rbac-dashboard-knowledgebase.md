@@ -1,6 +1,6 @@
 # Purrmission RBAC and Observability Knowledgebase
 
-- Status: **Prerequisite stabilization active — Wave 1 corrective review; Wave 2 merge-blocked (dashboard readiness remains No-go)**
+- Status: **Prerequisite remediation active — Wave 1 Verified; Wave 2 integration underway (dashboard readiness remains No-go)**
 - Preparation issue: [#107](https://github.com/kuasha420/purrmission/issues/107) (complete)
 - Prerequisite epic: [#116](https://github.com/kuasha420/purrmission/issues/116) (open and active)
 - Execution graph:
@@ -9,26 +9,23 @@
 - Conformance Report: [2026-07-26 Prerequisite Conformance Report](../reports/2026-07-26-prerequisite-conformance-report.md)
 - Dashboard readiness: **No-go** (do not file Discord OAuth/session or Web Dashboard backend/frontend implementation phases until the prerequisite remediation and independent gate are complete)
 - Baseline audited revision: `e4269cea4d6f` (`master`, 2026-07-26)
-- Current remediation checkpoint: #117 implementation merged through #139 at
-  `edd9c3497909bb71b265300ffa201038edea54ef`, but independent verification against
-  `a1f2004141f90376c0084b7b2156297de92dd6f7` returned No-go on 2026-07-31 and reopened the issue.
-  On 2026-08-11 the epic owner approved a narrow #117 stabilization correction that may fail-close
-  prematurely merged successor behavior and repair shared build/migration infrastructure only to
-  restore a safe, verifiable baseline. It does not transfer or complete #120/#122 ownership. #118
-  and #119 remain open and merge-blocked until #117 is independently reverified on current
-  `master`.
-- Last progress update: 2026-08-11
+- Current remediation checkpoint: #117 corrective PR #143 merged via
+  `a0144d46e92aceb9638b9609610896583a337162` and passed clean-`master` post-merge verification on
+  2026-08-13. #117 is Verified and closed. #118 and #119 are unblocked; Wave 2 begins with #119's
+  independently reviewed additive contract checkpoint, then rebased/completed #118, then #119
+  persistence completion.
+- Last progress update: 2026-08-13
 - Applies to: Discord commands, the Fastify API, Pawthy, and the future
   `apps/purrmission-web`
 
 ### Remediation progress ledger
 
-| Wave | Nodes     | State                                                                                                          |
-| ---- | --------- | -------------------------------------------------------------------------------------------------------------- |
-| 1    | #117      | Fail-closed corrective candidate approved for publication and security review; not yet merge-ready or Verified |
-| 2    | #118      | Initial candidate returned No-go; corrective audit/outbox work remains merge-blocked on #117                   |
-| 2    | #119      | Additive query-contract checkpoint reviewed locally; persistence completion remains open and merge-blocked     |
-| 3-9  | #120-#130 | Blocked by the execution graph                                                                                 |
+| Wave | Nodes     | State                                                                                               |
+| ---- | --------- | --------------------------------------------------------------------------------------------------- |
+| 1    | #117      | Verified and closed at `a0144d46`; common and representative migration gates pass                   |
+| 2    | #118      | Unblocked; corrective audit/outbox candidate remains under review and integrates after partial #119 |
+| 2    | #119      | Unblocked; additive query-contract checkpoint is next, while persistence completion remains open    |
+| 3-9  | #120-#130 | Blocked by the execution graph                                                                      |
 
 Sections 3-5 remain the point-in-time audit record for `e4269cea4d6f`; they are not silently
 rewritten as remediation lands. The ledger above and the execution graph are the live progress
