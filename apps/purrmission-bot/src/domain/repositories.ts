@@ -48,6 +48,9 @@ import type {
   CreateOutboxEventInput,
   TOTPAccountMetadata,
   ResourceFieldMetadata,
+  TOTPLinkConsent,
+  TOTPDelegationConsent,
+  TOTPLinkEnvelope,
   CallbackDestination,
   CreateCallbackDestinationInput,
 } from './models.js';
@@ -129,6 +132,14 @@ export interface ApprovalRequestRepository {
     tx?: Prisma.TransactionClient
   ): Promise<void>;
 
+  /** Store the Discord delivery reference after an outbox notification succeeds. */
+  updateDeliveryReference(
+    id: string,
+    discordMessageId: string,
+    discordChannelId: string,
+    tx?: Prisma.TransactionClient
+  ): Promise<void>;
+
   /**
    * Find an approval request by its ID.
    */
@@ -203,6 +214,7 @@ export interface TOTPRepository {
   findById(id: string): Promise<TOTPAccount | null>;
   findByOwnerDiscordUserId(ownerDiscordUserId: string): Promise<TOTPAccount[]>;
   findByOwnerAndName(ownerDiscordUserId: string, accountName: string): Promise<TOTPAccount | null>;
+  findMetadataById(id: string): Promise<TOTPAccountMetadata | null>;
   findMetadataByOwnerDiscordUserId(ownerDiscordUserId: string): Promise<TOTPAccountMetadata[]>;
 
   createLinkConsent(
@@ -210,7 +222,7 @@ export interface TOTPRepository {
     tx?: Prisma.TransactionClient
   ): Promise<TOTPLinkConsent>;
   findLinkConsentById(id: string): Promise<TOTPLinkConsent | null>;
-  useLinkConsent(id: string, tx?: Prisma.TransactionClient): Promise<void>;
+  useLinkConsent(id: string, tx?: Prisma.TransactionClient): Promise<boolean>;
 
   createDelegationConsent(
     input: Omit<TOTPDelegationConsent, 'id' | 'createdAt' | 'usedAt'>,
@@ -222,7 +234,7 @@ export interface TOTPRepository {
     requesterId: string,
     operation: string
   ): Promise<TOTPDelegationConsent | null>;
-  useDelegationConsent(id: string, tx?: Prisma.TransactionClient): Promise<void>;
+  useDelegationConsent(id: string, tx?: Prisma.TransactionClient): Promise<boolean>;
 }
 
 /**
@@ -348,7 +360,7 @@ export class PrismaResourceRepository implements ResourceRepository {
     id: string;
     name: string;
     mode: string;
-    apiKey: string;
+    apiKey: string | null;
     totpAccountId: string | null;
     totpDelegationEnvelope: any;
     version: string;
@@ -550,6 +562,21 @@ export class PrismaTOTPRepository implements TOTPRepository {
     return row ? this.mapPrismaToDomain(row) : null;
   }
 
+  async findMetadataById(id: string): Promise<TOTPAccountMetadata | null> {
+    return this.prisma.tOTPAccount.findUnique({
+      where: { id },
+      select: {
+        id: true,
+        ownerDiscordUserId: true,
+        accountName: true,
+        issuer: true,
+        version: true,
+        createdAt: true,
+        updatedAt: true,
+      },
+    });
+  }
+
   async findMetadataByOwnerDiscordUserId(
     ownerDiscordUserId: string
   ): Promise<TOTPAccountMetadata[]> {
@@ -612,12 +639,13 @@ export class PrismaTOTPRepository implements TOTPRepository {
     };
   }
 
-  async useLinkConsent(id: string, tx?: Prisma.TransactionClient): Promise<void> {
+  async useLinkConsent(id: string, tx?: Prisma.TransactionClient): Promise<boolean> {
     const client = tx || this.prisma;
-    await client.tOTPLinkConsent.update({
-      where: { id },
+    const result = await client.tOTPLinkConsent.updateMany({
+      where: { id, usedAt: null, expiresAt: { gt: new Date() } },
       data: { usedAt: new Date() },
     });
+    return result.count === 1;
   }
 
   async createDelegationConsent(
@@ -690,15 +718,30 @@ export class PrismaTOTPRepository implements TOTPRepository {
         createdAt: 'desc',
       },
     });
-    return found ? this.mapDelegationConsent(found) : null;
+    return found
+      ? {
+          id: found.id,
+          resourceId: found.resourceId,
+          totpAccountId: found.totpAccountId,
+          operation: found.operation,
+          requesterId: found.requesterId,
+          authFamily: found.authFamily,
+          accountVersion: found.accountVersion,
+          linkVersion: found.linkVersion,
+          expiresAt: found.expiresAt,
+          usedAt: found.usedAt,
+          createdAt: found.createdAt,
+        }
+      : null;
   }
 
-  async useDelegationConsent(id: string, tx?: Prisma.TransactionClient): Promise<void> {
+  async useDelegationConsent(id: string, tx?: Prisma.TransactionClient): Promise<boolean> {
     const client = tx || this.prisma;
-    await client.tOTPDelegationConsent.update({
-      where: { id },
+    const result = await client.tOTPDelegationConsent.updateMany({
+      where: { id, usedAt: null, expiresAt: { gt: new Date() } },
       data: { usedAt: new Date() },
     });
+    return result.count === 1;
   }
 
   private mapPrismaToDomain(row: {
@@ -966,7 +1009,7 @@ export class PrismaAuditRepository implements AuditRepository {
         grantId: input.grantId ?? null,
         correlationId: input.correlationId ?? null,
         causationId: input.causationId ?? null,
-        payload: input.payload ? (input.payload as Prisma.InputJsonValue) : null,
+        payload: input.payload ? (input.payload as Prisma.InputJsonValue) : Prisma.JsonNull,
       },
     });
     return this.mapPrismaToDomain(created);
@@ -1211,7 +1254,7 @@ export class PrismaApprovalRequestRepository implements ApprovalRequestRepositor
         id: input.id,
         resourceId: input.resourceId,
         status: input.status,
-        context: input.context ? (input.context as Prisma.InputJsonValue) : null,
+        context: input.context ? (input.context as Prisma.InputJsonValue) : Prisma.JsonNull,
         requesterId: input.requesterId,
         requesterType: input.requesterType,
         authKind: input.authKind,
@@ -1245,6 +1288,19 @@ export class PrismaApprovalRequestRepository implements ApprovalRequestRepositor
     await client.approvalRequest.update({
       where: { id },
       data,
+    });
+  }
+
+  async updateDeliveryReference(
+    id: string,
+    discordMessageId: string,
+    discordChannelId: string,
+    tx?: Prisma.TransactionClient
+  ): Promise<void> {
+    const client = tx || this.prisma;
+    await client.approvalRequest.update({
+      where: { id },
+      data: { discordMessageId, discordChannelId },
     });
   }
 

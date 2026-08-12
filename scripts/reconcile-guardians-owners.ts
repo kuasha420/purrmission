@@ -1,22 +1,80 @@
 import { PrismaClient } from '@prisma/client';
+import path from 'node:path';
+import { pathToFileURL } from 'node:url';
 
-const prisma = new PrismaClient();
+export interface GuardianReconciliationRow {
+  id: string;
+  resourceId: string;
+  discordUserId: string;
+  role: 'OWNER' | 'GUARDIAN';
+  createdAt: Date;
+}
 
-async function runReconciliation() {
-  const args = process.argv.slice(2);
-  const isExecute = args.includes('--execute');
+interface EnvironmentOwnerRow {
+  resourceId: string;
+  ownerId: string;
+}
+
+export interface GuardianReconciliationDatabase {
+  $queryRawUnsafe<T>(query: string, ...values: unknown[]): Promise<T>;
+  $executeRawUnsafe(query: string, ...values: unknown[]): Promise<number>;
+}
+
+export interface GuardianReconciliationSummary {
+  duplicatesDeleted: number;
+  ownerRowsRetainedForReview: string[];
+}
+
+/**
+ * Select the one assignment that preserves the canonical authority model.
+ *
+ * For project-linked resources, a noncanonical OWNER row is a stale mirror and must never win
+ * over an explicit GUARDIAN row. For the canonical Project Owner (and standalone Resources), an
+ * OWNER row remains authoritative. Timestamp/ID ordering makes same-role reconciliation stable.
+ */
+export function selectCanonicalGuardianRow<T extends GuardianReconciliationRow>(
+  group: readonly T[],
+  canonicalProjectOwnerId?: string
+): T {
+  if (group.length === 0) {
+    throw new Error('Cannot reconcile an empty Guardian assignment group.');
+  }
+
+  const subjectId = group[0].discordUserId;
+  const preferGuardian =
+    canonicalProjectOwnerId !== undefined && subjectId !== canonicalProjectOwnerId;
+
+  return [...group].sort((a, b) => {
+    if (a.role !== b.role) {
+      if (preferGuardian) return a.role === 'GUARDIAN' ? -1 : 1;
+      return a.role === 'OWNER' ? -1 : 1;
+    }
+    const createdAtOrder = a.createdAt.getTime() - b.createdAt.getTime();
+    return createdAtOrder !== 0 ? createdAtOrder : a.id.localeCompare(b.id);
+  })[0];
+}
+
+export async function runGuardianReconciliation(
+  prisma: GuardianReconciliationDatabase,
+  isExecute: boolean
+): Promise<GuardianReconciliationSummary> {
   const isDryRun = !isExecute;
 
   console.log(`🚀 Starting Database Reconciliation (Mode: ${isDryRun ? 'DRY-RUN' : 'EXECUTE'})`);
   console.log('================================================================');
 
   // 1. Fetch data
-  const environments = await prisma.environment.findMany({
-    where: { resourceId: { not: null } },
-    include: { project: true },
-  });
-
-  const guardians = await prisma.guardian.findMany();
+  // Select only columns that exist before and after the published hardening migrations. Using the
+  // generated model shape here would request newer columns from a pre-migration database.
+  const environments = await prisma.$queryRawUnsafe<EnvironmentOwnerRow[]>(
+    `SELECT "Environment"."resourceId", "Project"."ownerId"
+       FROM "Environment"
+       INNER JOIN "Project" ON "Project"."id" = "Environment"."projectId"
+      WHERE "Environment"."resourceId" IS NOT NULL`
+  );
+  const guardians = await prisma.$queryRawUnsafe<GuardianReconciliationRow[]>(
+    `SELECT "id", "resourceId", "discordUserId", "role", "createdAt" FROM "Guardian"`
+  );
 
   console.log(`Found ${environments.length} environment-linked resources.`);
   console.log(`Found ${guardians.length} total explicit guardian rows.`);
@@ -27,7 +85,7 @@ async function runReconciliation() {
   const resourceToProjectOwnerMap = new Map<string, string>(); // resourceId -> project.ownerId
   for (const env of environments) {
     if (env.resourceId) {
-      resourceToProjectOwnerMap.set(env.resourceId, env.project.ownerId);
+      resourceToProjectOwnerMap.set(env.resourceId, env.ownerId);
     }
   }
 
@@ -54,20 +112,22 @@ async function runReconciliation() {
     }
 
     console.log(`⚠️ Found duplicate assignments for key "${key}" (count: ${group.length})`);
-    // Choose primary row to keep:
-    // Prefer OWNER role first. If roles match, keep the oldest (smallest createdAt or id)
-    const sorted = [...group].sort((a, b) => {
-      if (a.role === 'OWNER' && b.role !== 'OWNER') return -1;
-      if (a.role !== 'OWNER' && b.role === 'OWNER') return 1;
-      const createdAtOrder = a.createdAt.getTime() - b.createdAt.getTime();
-      return createdAtOrder !== 0 ? createdAtOrder : a.id.localeCompare(b.id);
-    });
-
-    const primary = sorted[0];
+    const canonicalProjectOwnerId = resourceToProjectOwnerMap.get(group[0].resourceId);
+    const primary = selectCanonicalGuardianRow(group, canonicalProjectOwnerId);
+    const sorted = [primary, ...group.filter((row) => row.id !== primary.id)];
     keptGuardians.push(primary);
     console.log(
       `   Keeping row ID: ${primary.id} (role: ${primary.role}, created: ${primary.createdAt.toISOString()})`
     );
+    if (
+      canonicalProjectOwnerId &&
+      primary.discordUserId !== canonicalProjectOwnerId &&
+      primary.role === 'GUARDIAN'
+    ) {
+      console.log(
+        `   Preserving explicit GUARDIAN; OWNER rows for this subject are noncanonical Project-owner mirrors.`
+      );
+    }
 
     for (let i = 1; i < sorted.length; i++) {
       duplicatesToDelete.push(sorted[i].id);
@@ -112,7 +172,7 @@ async function runReconciliation() {
 
   if (duplicatesToDelete.length === 0) {
     console.log('✅ No duplicate Guardian assignments require reconciliation.');
-    return;
+    return { duplicatesDeleted: 0, ownerRowsRetainedForReview: ownerRowsToReview };
   }
 
   if (isDryRun) {
@@ -120,15 +180,44 @@ async function runReconciliation() {
     console.log('   To apply these changes, run the script with: --execute');
   } else {
     console.log('\n💾 Executing database writes...');
-    const result = await prisma.guardian.deleteMany({
-      where: {
-        id: { in: duplicatesToDelete },
-      },
-    });
-    console.log(`✅ Successfully deleted ${result.count} guardian rows from database.`);
+    const placeholders = duplicatesToDelete.map(() => '?').join(', ');
+    const deletedCount = await prisma.$executeRawUnsafe(
+      `DELETE FROM "Guardian" WHERE "id" IN (${placeholders})`,
+      ...duplicatesToDelete
+    );
+    if (deletedCount !== duplicatesToDelete.length) {
+      throw new Error(
+        `Guardian reconciliation deleted ${deletedCount} rows; expected ${duplicatesToDelete.length}.`
+      );
+    }
+    console.log(`✅ Successfully deleted ${deletedCount} guardian rows from database.`);
+    return {
+      duplicatesDeleted: deletedCount,
+      ownerRowsRetainedForReview: ownerRowsToReview,
+    };
+  }
+
+  return { duplicatesDeleted: 0, ownerRowsRetainedForReview: ownerRowsToReview };
+}
+
+async function main(): Promise<void> {
+  const prisma = new PrismaClient();
+  try {
+    await runGuardianReconciliation(prisma, process.argv.slice(2).includes('--execute'));
+  } catch (error) {
+    console.error(error);
+    process.exitCode = 1;
+  } finally {
+    try {
+      await prisma.$disconnect();
+    } catch (error) {
+      console.error(error);
+      process.exitCode = 1;
+    }
   }
 }
 
-runReconciliation()
-  .catch(console.error)
-  .finally(() => prisma.$disconnect());
+const invokedPath = process.argv[1] ? pathToFileURL(path.resolve(process.argv[1])).href : null;
+if (invokedPath === import.meta.url) {
+  void main();
+}

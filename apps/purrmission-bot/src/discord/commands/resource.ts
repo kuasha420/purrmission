@@ -15,17 +15,20 @@ import type { CommandContext } from './context.js';
 import { logger } from '../../logging/logger.js';
 import { env } from '../../config/env.js';
 import { generateTOTPCode } from '../../domain/totp.js';
-import type { AccessRequestContext, AccessRequestContextWithExtras } from '../../domain/models.js';
+import type {
+  AccessRequestContext,
+  AccessRequestContextWithExtras,
+  Capability,
+} from '../../domain/models.js';
+import { createDiscordPrincipal } from '../../domain/principal.js';
 import {
   createApprovalButtons,
   createAccessRequestEmbed,
 } from '../interactions/approvalButtons.js';
 import { rateLimiter } from '../../infra/rateLimit.js';
 import {
-  checkAccessPolicy,
-  requiresApproval,
   getEffectiveGuardians,
-  isEffectiveGuardian,
+  hasCapability,
   getGuardedResourcesForUser,
   isEffectiveOwner,
 } from '../../domain/policy.js';
@@ -151,6 +154,12 @@ export const resourceCommand = new SlashCommandBuilder()
               .setDescription('2FA account name to link')
               .setRequired(true)
               .setAutocomplete(true)
+          )
+          .addStringOption((option) =>
+            option
+              .setName('consent-id')
+              .setDescription('One-time link consent issued by the 2FA account owner')
+              .setRequired(true)
           )
       )
       .addSubcommand((subcommand) =>
@@ -307,29 +316,18 @@ export async function handleResourceAutocomplete(
   }
 
   if (subcommandGroup === '2fa' && subcommand === 'link' && focusedOption.name === 'account') {
-    // Autocomplete TOTP account names for /resource 2fa link (personal + shared)
+    // Link consent can only be issued by the personal account owner, so expose metadata for the
+    // acting user's accounts only. Global/shared TOTP authority was removed by the custody model.
     const userId = interaction.user.id;
     const { totp } = context.repositories;
-
-    const personalAccounts = await totp.findByOwnerDiscordUserId(userId);
-    const sharedAccounts = await totp.findSharedVisibleTo(userId);
-
-    // Merge and deduplicate accounts
-    const accountMap = new Map<string, (typeof personalAccounts)[0]>();
-    personalAccounts.forEach((acc) => accountMap.set(acc.id, acc));
-    sharedAccounts.forEach((acc) => {
-      if (!accountMap.has(acc.id)) {
-        accountMap.set(acc.id, acc);
-      }
-    });
-    const allAccounts = Array.from(accountMap.values());
+    const accounts = await totp.findMetadataByOwnerDiscordUserId(userId);
 
     const query = focusedOption.value.toLowerCase();
-    const filtered = allAccounts.filter((a) => a.accountName.toLowerCase().includes(query));
+    const filtered = accounts.filter((a) => a.accountName.toLowerCase().includes(query));
 
     await interaction.respond(
       filtered.slice(0, 25).map((a) => ({
-        name: a.shared ? `${a.accountName} (shared)` : a.accountName,
+        name: a.accountName,
         value: a.id,
       }))
     );
@@ -340,14 +338,25 @@ export async function handleResourceAutocomplete(
 }
 
 /**
- * Check if user is owner/guardian of a resource.
+ * Evaluate an exact Resource capability for a Discord interaction.
  */
-async function isOwnerOrGuardian(
+async function hasResourceCapability(
   context: CommandContext,
   resourceId: string,
-  discordUserId: string
+  discordUserId: string,
+  capability: Capability,
+  fieldName?: string
 ): Promise<boolean> {
-  return isEffectiveGuardian(context.repositories, resourceId, discordUserId);
+  const decision = await hasCapability(
+    context.repositories,
+    createDiscordPrincipal(discordUserId),
+    capability,
+    {
+      resourceId,
+      ...(fieldName ? { fieldName } : {}),
+    }
+  );
+  return decision.allowed;
 }
 
 /**
@@ -453,10 +462,9 @@ async function handleFieldsAdd(
     return;
   }
 
-  // Check user is owner/guardian
-  if (!(await isOwnerOrGuardian(context, resourceId, userId))) {
+  if (!(await hasResourceCapability(context, resourceId, userId, 'secret.write', name))) {
     await interaction.reply({
-      content: '❌ You must be an owner or guardian of this resource to add fields.',
+      content: '❌ You do not have permission to add fields to this resource.',
       ephemeral: true,
     });
     return;
@@ -569,10 +577,9 @@ async function handleFieldsList(
     return;
   }
 
-  // Check user is owner/guardian
-  if (!(await isOwnerOrGuardian(context, resourceId, userId))) {
+  if (!(await hasResourceCapability(context, resourceId, userId, 'secret.metadata.read'))) {
     await interaction.reply({
-      content: '❌ You must be an owner or guardian of this resource to list fields.',
+      content: '❌ You do not have permission to list fields on this resource.',
       ephemeral: true,
     });
     return;
@@ -627,30 +634,16 @@ async function handleFieldsGet(
     return;
   }
 
-  // Check access policy
-  const guardians = await getEffectiveGuardians(context.repositories, resourceId);
-  const accessResult = await checkAccessPolicy(resource, guardians, userId, context.repositories);
-
-  if (requiresApproval(accessResult)) {
+  const canReveal = await hasResourceCapability(
+    context,
+    resourceId,
+    userId,
+    'secret.value.read',
+    name
+  );
+  if (!canReveal) {
     // Create approval request for field access
     await createFieldAccessRequest(interaction, context, resource.name, resourceId, name, userId);
-    return;
-  }
-
-  // Access denied (if not requiring approval, and not allowed)
-  if (!accessResult.allowed) {
-    await context.services.audit.log({
-      action: 'FIELD_ACCESSED',
-      resourceId,
-      actorId: userId,
-      status: 'DENIED',
-      context: JSON.stringify({ fieldName: name, reason: accessResult.reason }),
-    });
-
-    await interaction.reply({
-      content: `❌ Access denied: ${accessResult.reason ?? 'You do not have permission.'}`,
-      ephemeral: true,
-    });
     return;
   }
 
@@ -679,11 +672,13 @@ async function handleFieldsGet(
     );
 
     await context.services.audit.log({
-      action: 'FIELD_ACCESSED',
+      eventType: 'SECRET_VALUE_REVEAL',
+      outcomeCode: 'SUCCESS',
+      actorType: 'DISCORD_USER',
       resourceId,
       actorId: userId,
-      status: 'SUCCESS',
-      context: JSON.stringify({ fieldName: name }),
+      authKind: 'DISCORD',
+      payload: { fieldName: name },
     });
 
     logger.info('Field value sent via DM', {
@@ -728,10 +723,9 @@ async function handleFieldsRemove(
     return;
   }
 
-  // Check user is owner/guardian
-  if (!(await isOwnerOrGuardian(context, resourceId, userId))) {
+  if (!(await hasResourceCapability(context, resourceId, userId, 'secret.delete', name))) {
     await interaction.reply({
-      content: '❌ You must be an owner or guardian of this resource to remove fields.',
+      content: '❌ You do not have permission to remove fields from this resource.',
       ephemeral: true,
     });
     return;
@@ -783,6 +777,7 @@ async function handleLink2FA(
 ): Promise<void> {
   const resourceId = interaction.options.getString('resource-id', true);
   const accountId = interaction.options.getString('account', true);
+  const consentId = interaction.options.getString('consent-id', true);
   const userId = interaction.user.id;
 
   const { resources, totp } = context.repositories;
@@ -797,17 +792,8 @@ async function handleLink2FA(
     return;
   }
 
-  // Check user is owner/guardian
-  if (!(await isOwnerOrGuardian(context, resourceId, userId))) {
-    await interaction.reply({
-      content: '❌ You must be an owner or guardian of this resource to link 2FA.',
-      ephemeral: true,
-    });
-    return;
-  }
-
   // Find the TOTP account by ID (from autocomplete)
-  const account = await totp.findById(accountId);
+  const account = await totp.findMetadataById(accountId);
 
   if (!account) {
     await interaction.reply({
@@ -818,7 +804,7 @@ async function handleLink2FA(
   }
 
   // Verify the user has permission to use this account
-  if (account.ownerDiscordUserId !== userId && !account.shared) {
+  if (account.ownerDiscordUserId !== userId) {
     await interaction.reply({
       content: `❌ You do not have permission to use the 2FA account \`${account.accountName}\`.`,
       ephemeral: true,
@@ -826,14 +812,8 @@ async function handleLink2FA(
     return;
   }
 
-  // Check if resource already has a linked 2FA
-  // Note: We'd need to extend ResourceRepository to support linking
-  // For now, we'll use a service-level approach via Prisma directly
-  // TODO: Add proper repository method for this
-
   try {
-    // Use the services to link
-    await context.services.resource.linkTOTPAccount(resourceId, account.id, userId);
+    await context.services.resource.linkTOTPAccount(resourceId, account.id, userId, consentId);
 
     logger.info('Linked 2FA account to resource', {
       resourceId,
@@ -879,15 +859,6 @@ async function handleUnlink2FA(
   if (!resource) {
     await interaction.reply({
       content: '❌ Resource not found.',
-      ephemeral: true,
-    });
-    return;
-  }
-
-  // Check user is owner/guardian
-  if (!(await isOwnerOrGuardian(context, resourceId, userId))) {
-    await interaction.reply({
-      content: '❌ You must be an owner or guardian of this resource to unlink 2FA.',
       ephemeral: true,
     });
     return;
@@ -942,30 +913,10 @@ async function handleGet2FA(
     return;
   }
 
-  // Check access policy
-  const guardians = await getEffectiveGuardians(context.repositories, resourceId);
-  const accessResult = await checkAccessPolicy(resource, guardians, userId, context.repositories);
-
-  if (requiresApproval(accessResult)) {
+  const canReveal = await hasResourceCapability(context, resourceId, userId, 'totp.code.read');
+  if (!canReveal) {
     // Create approval request for 2FA access
     await create2FAAccessRequest(interaction, context, resource.name, resourceId, userId);
-    return;
-  }
-
-  // Access denied
-  if (!accessResult.allowed) {
-    await context.services.audit.log({
-      action: 'TOTP_RETRIEVED',
-      resourceId,
-      actorId: userId,
-      status: 'DENIED',
-      context: JSON.stringify({ reason: accessResult.reason }),
-    });
-
-    await interaction.reply({
-      content: `❌ Access denied: ${accessResult.reason ?? 'You do not have permission.'}`,
-      ephemeral: true,
-    });
     return;
   }
 
@@ -1013,11 +964,13 @@ async function handleGet2FA(
     });
 
     await context.services.audit.log({
-      action: 'TOTP_RETRIEVED',
+      eventType: 'TOTP_CODE_REVEAL',
+      outcomeCode: 'SUCCESS',
+      actorType: 'DISCORD_USER',
       resourceId,
       actorId: userId,
-      status: 'SUCCESS',
-      context: JSON.stringify({ totpAccountId: linkedAccount.id }),
+      authKind: 'DISCORD',
+      payload: { totpAccountId: linkedAccount.id },
     });
 
     await interaction.reply({

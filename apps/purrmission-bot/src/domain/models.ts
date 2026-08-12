@@ -165,7 +165,10 @@ export interface DecisionResult {
 /**
  * Input for creating a new resource.
  */
-export type CreateResourceInput = Omit<Resource, 'createdAt' | 'version'> & { version?: string };
+export type CreateResourceInput = Omit<Resource, 'id' | 'createdAt' | 'version'> & {
+  id?: string;
+  version?: string;
+};
 
 /**
  * Input for adding a new guardian.
@@ -572,6 +575,8 @@ export interface CapabilityContext {
   environmentId?: string;
   resourceId?: string;
   totpAccountId?: string;
+  /** Distinguishes Resource-owner link authority from custody-owner unlink authority. */
+  totpLinkOperation?: 'LINK' | 'UNLINK';
   requestId?: string;
   fieldName?: string; // specific secret/field
   subjectId?: string;

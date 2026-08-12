@@ -33,6 +33,7 @@ const OWNER_ID = 'owner-user';
 const WRITER_ID = 'writer-user';
 const READER_ID = 'reader-user';
 const GUARDIAN_ID = 'guardian-user';
+const CUSTODY_OWNER_ID = 'custody-owner-user';
 const MIXED_ID = 'mixed-user';
 const REQUESTER_ID = 'requester-user';
 
@@ -117,6 +118,12 @@ const totpAccount: TOTPAccount = {
   updatedAt: new Date('2026-01-01T00:00:00Z'),
 };
 
+const custodyOwnedTotpAccount: TOTPAccount = {
+  ...totpAccount,
+  id: 'totp-custody-owned',
+  ownerDiscordUserId: CUSTODY_OWNER_ID,
+};
+
 function approvalRequest(
   requesterId: string,
   overrides: Partial<ApprovalRequest> = {}
@@ -173,6 +180,13 @@ function capabilityRepositories(options?: {
   approvalLookup?: () => void;
 }): CapabilityRepositories {
   return {
+    resources: {
+      async findById(resourceId) {
+        return resourceId === RESOURCE_ID
+          ? { ...resource, totpAccountId: custodyOwnedTotpAccount.id }
+          : null;
+      },
+    },
     guardians: {
       async findByResourceAndUser(resourceId, userId) {
         if (resourceId !== RESOURCE_ID) return null;
@@ -210,7 +224,14 @@ function capabilityRepositories(options?: {
     },
     totp: {
       async findById(totpAccountId) {
-        return totpAccountId === totpAccount.id ? totpAccount : null;
+        if (totpAccountId === totpAccount.id) return totpAccount;
+        if (totpAccountId === custodyOwnedTotpAccount.id) return custodyOwnedTotpAccount;
+        return null;
+      },
+      async findMetadataById(totpAccountId) {
+        if (totpAccountId === totpAccount.id) return totpAccount;
+        if (totpAccountId === custodyOwnedTotpAccount.id) return custodyOwnedTotpAccount;
+        return null;
       },
     },
   };
@@ -530,6 +551,50 @@ describe('Principal and exact-object capability policy', () => {
     }
   });
 
+  it('allows a TOTP custody owner to unlink only, without granting link or Guardian authority', async () => {
+    const repositories = capabilityRepositories();
+    repositories.totp.findById = async () => {
+      throw new Error('value-bearing TOTP lookup must not run during link authorization');
+    };
+    const unlinkContext: CapabilityContext = {
+      resourceId: RESOURCE_ID,
+      totpAccountId: custodyOwnedTotpAccount.id,
+      totpLinkOperation: 'UNLINK',
+    };
+
+    const custodyUnlink = await hasCapability(
+      repositories,
+      createDiscordPrincipal(CUSTODY_OWNER_ID),
+      'totp.link.manage',
+      unlinkContext
+    );
+    const custodyLink = await hasCapability(
+      repositories,
+      createDiscordPrincipal(CUSTODY_OWNER_ID),
+      'totp.link.manage',
+      { ...unlinkContext, totpLinkOperation: 'LINK' }
+    );
+    const guardianUnlink = await hasCapability(
+      repositories,
+      createDiscordPrincipal(GUARDIAN_ID),
+      'totp.link.manage',
+      unlinkContext
+    );
+    const mismatchedResourceUnlink = await hasCapability(
+      repositories,
+      createDiscordPrincipal(CUSTODY_OWNER_ID),
+      'totp.link.manage',
+      { ...unlinkContext, resourceId: 'different-resource' }
+    );
+
+    assert.equal(custodyUnlink.allowed, true);
+    assert.deepEqual(custodyUnlink.authoritySources, ['TOTP_OWNER']);
+    assert.equal(custodyLink.allowed, false);
+    assert.equal(guardianUnlink.allowed, false);
+    assert.equal(mismatchedResourceUnlink.allowed, false);
+    assert.equal(mismatchedResourceUnlink.reasonCode, 'TARGET_SCOPE_MISMATCH');
+  });
+
   it('fails closed when an Environment does not belong to the supplied Project', async () => {
     const result = await hasCapability(
       capabilityRepositories(),
@@ -679,7 +744,7 @@ describe('Principal and exact-object capability policy', () => {
     assert.equal(otherTokens.reasonCode, 'AUTH_SUBJECT_MISMATCH');
   });
 
-  it('double-gates service audit export with a same-credential read scope', async () => {
+  it('fails closed for unbound service object scopes while retaining exact own-subject audit', async () => {
     const service: Principal = {
       type: 'SERVICE',
       id: 'service-credential',
@@ -692,16 +757,16 @@ describe('Principal and exact-object capability policy', () => {
       projectId: PROJECT_ID,
       requiredAudience: 'internal',
     });
-    assert.equal(denied.reasonCode, 'INSUFFICIENT_SCOPES');
+    assert.equal(denied.reasonCode, 'TARGET_SCOPE_MISMATCH');
 
-    const allowed = await hasCapability(
+    const unboundProject = await hasCapability(
       capabilityRepositories(),
       { ...service, scopes: ['audit.export', 'audit.full.read'] },
       'audit.export',
       { projectId: PROJECT_ID, requiredAudience: 'internal' }
     );
-    assert.equal(allowed.allowed, true);
-    assert.deepEqual(allowed.authoritySources, ['SCOPED_CREDENTIAL']);
+    assert.equal(unboundProject.allowed, false);
+    assert.equal(unboundProject.reasonCode, 'TARGET_SCOPE_MISMATCH');
 
     const wrongTargetReadScope = await hasCapability(
       capabilityRepositories(),
@@ -710,7 +775,7 @@ describe('Principal and exact-object capability policy', () => {
       { projectId: PROJECT_ID, requiredAudience: 'internal' }
     );
     assert.equal(wrongTargetReadScope.allowed, false);
-    assert.equal(wrongTargetReadScope.reasonCode, 'INSUFFICIENT_SCOPES');
+    assert.equal(wrongTargetReadScope.reasonCode, 'TARGET_SCOPE_MISMATCH');
 
     const ownTarget = await hasCapability(
       capabilityRepositories(),
@@ -740,6 +805,44 @@ describe('Principal and exact-object capability policy', () => {
 
     assert.equal(result.allowed, false);
     assert.equal(result.reasonCode, 'TARGET_SCOPE_MISMATCH');
+  });
+
+  it('rejects contradictory Project/Resource and approval-request/Resource contexts', async () => {
+    const projectResourceMismatch = await hasCapability(
+      capabilityRepositories(),
+      createDiscordPrincipal(OWNER_ID),
+      'resource.view',
+      { projectId: PROJECT_ID, resourceId: STANDALONE_RESOURCE_ID }
+    );
+    assert.equal(projectResourceMismatch.allowed, false);
+    assert.equal(projectResourceMismatch.reasonCode, 'TARGET_SCOPE_MISMATCH');
+
+    const requestResourceMismatch = await hasCapability(
+      capabilityRepositories({
+        request: approvalRequest(REQUESTER_ID, { resourceId: STANDALONE_RESOURCE_ID }),
+      }),
+      createDiscordPrincipal(OWNER_ID),
+      'request.decide',
+      { projectId: PROJECT_ID, resourceId: RESOURCE_ID, requestId: 'request-1' }
+    );
+    assert.equal(requestResourceMismatch.allowed, false);
+    assert.equal(requestResourceMismatch.reasonCode, 'TARGET_SCOPE_MISMATCH');
+
+    const repositories = capabilityRepositories({
+      request: approvalRequest(REQUESTER_ID),
+    });
+    repositories.projects.getEnvironmentById = async (projectId, environmentId) =>
+      projectId === PROJECT_ID && environmentId === ENVIRONMENT_ID
+        ? { ...environment, resourceId: undefined }
+        : null;
+    const environmentRequestMismatch = await hasCapability(
+      repositories,
+      createDiscordPrincipal(OWNER_ID),
+      'request.decide',
+      { projectId: PROJECT_ID, environmentId: ENVIRONMENT_ID, requestId: 'request-1' }
+    );
+    assert.equal(environmentRequestMismatch.allowed, false);
+    assert.equal(environmentRequestMismatch.reasonCode, 'TARGET_SCOPE_MISMATCH');
   });
 });
 

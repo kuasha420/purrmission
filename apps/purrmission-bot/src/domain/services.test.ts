@@ -162,12 +162,11 @@ describe('ResourceService', () => {
   });
 
   describe('listGuardians', () => {
-    it('should list guardians if actor is authorized', async () => {
-      // Mock Actor is Guardian
+    it('should list guardians if actor is the Resource Owner', async () => {
       (mockGuardianRepo.findByResourceAndUser as unknown as MockedFn).mock.mockImplementation(
         async (_rid: unknown, uid: unknown) => {
-          if (uid === guardianId)
-            return { id: 'g2', role: 'GUARDIAN', discordUserId: guardianId } as Guardian;
+          if (uid === ownerId)
+            return { id: 'g1', role: 'OWNER', discordUserId: ownerId } as Guardian;
           return null;
         }
       );
@@ -180,19 +179,21 @@ describe('ResourceService', () => {
         ]
       );
 
-      const result = await resourceService.listGuardians(resourceId, guardianId);
+      const result = await resourceService.listGuardians(resourceId, ownerId);
 
       assert.strictEqual(result.success, true);
       assert.strictEqual(result.guardians?.length, 2);
     });
 
-    it('should fail if actor is unauthorized', async () => {
-      // Mock Actor not found
+    it('should fail if actor is an explicit Guardian rather than the Owner', async () => {
       (mockGuardianRepo.findByResourceAndUser as unknown as MockedFn).mock.mockImplementation(
-        async () => null
+        async (_rid: unknown, uid: unknown) =>
+          uid === guardianId
+            ? ({ id: 'g2', role: 'GUARDIAN', discordUserId: guardianId } as Guardian)
+            : null
       );
 
-      const result = await resourceService.listGuardians(resourceId, otherId);
+      const result = await resourceService.listGuardians(resourceId, guardianId);
 
       assert.strictEqual(result.success, false);
       assert.match(result.error ?? '', /Access denied/);
@@ -200,64 +201,11 @@ describe('ResourceService', () => {
   });
 
   describe('linkTOTPAccount', () => {
-    it('should fail and roll back if audit logging throws an error', async () => {
-      const mockResource = { id: resourceId, totpAccountId: null };
-      const mockTotpAccount = { id: 'totp-1', version: 1 };
-      const mockConsent = {
-        id: 'consent-1',
-        accountId: 'totp-1',
-        resourceId,
-        ownerDiscordUserId: ownerId,
-        delegationPolicy: {},
-        expiresAt: new Date(Date.now() + 60000),
-        usedAt: null,
-      };
-
-      const mockTotpRepo = {
-        findById: mock.fn(async () => mockTotpAccount),
-        findLinkConsentById: mock.fn(async () => mockConsent),
-        useLinkConsent: mock.fn(async () => {}),
-      };
-
-      mockResourceRepo.findById = mock.fn(
-        async () => mockResource
-      ) as unknown as ResourceRepository['findById'];
-      mockResourceRepo.update = mock.fn(
-        async () => mockResource
-      ) as unknown as ResourceRepository['update'];
-
-      mockGuardianRepo.findByResourceAndUser = mock.fn(async (_rid: string, uid: string) => {
-        if (uid === ownerId) {
-          return {
-            id: 'g1',
-            resourceId,
-            role: 'OWNER',
-            discordUserId: ownerId,
-            createdAt: new Date(),
-          } satisfies Guardian;
-        }
-        return null;
-      }) as unknown as GuardianRepository['findByResourceAndUser'];
-
-      const failingAuditService = {
-        log: mock.fn(async () => {
-          throw new Error('Audit service unavailable');
-        }),
-      };
-
-      const deps: ServiceDependencies = {
-        repositories: {
-          ...mockRepositories,
-          totp: mockTotpRepo as unknown as Repositories['totp'],
-        },
-        audit: failingAuditService as unknown as ServiceDependencies['audit'],
-      };
-      const svc = new ResourceService(deps);
-
-      // Should throw due to audit service failure
-      await assert.rejects(async () => {
-        await svc.linkTOTPAccount(resourceId, 'totp-1', ownerId, 'consent-1');
-      }, /Audit service unavailable/);
+    it('fails closed before reading or mutating repositories', async () => {
+      await assert.rejects(
+        resourceService.linkTOTPAccount(resourceId, 'totp-1', ownerId, 'consent-1'),
+        /deferred.*#120/i
+      );
     });
   });
 });
@@ -316,7 +264,7 @@ describe('ApprovalService', () => {
       );
       assert.deepStrictEqual(
         (mockApprovalRepo.findActiveByRequester as unknown as MockedFn).mock.calls[0].arguments,
-        [resourceId, requesterId]
+        [resourceId, requesterId, 'resource.view', null]
       );
     });
   });

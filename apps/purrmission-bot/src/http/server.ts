@@ -16,7 +16,7 @@ import {
   SlowDownError,
 } from '../domain/auth.js';
 import { ResourceNotFoundError } from '../domain/errors.js';
-import type { Principal } from '../domain/models.js';
+import type { Capability, Principal } from '../domain/models.js';
 import { createDiscordPrincipal } from '../domain/principal.js';
 import type { Services } from '../domain/services.js';
 import { logger } from '../logging/logger.js';
@@ -395,12 +395,21 @@ export function createHttpServer(deps: HttpServerDeps): FastifyInstance {
     req.principal = principal;
   }
 
-  // Authorization Hook: Verify Guardian/Owner Access
-  const verifyIsGuardian = async (req: FastifyRequest<{ Params: { id: string } }>) => {
-    const { id } = req.params;
-    if (!(await services.resource.isGuardian(id, req.user.id))) {
-      throw new AccessDeniedError('Access denied');
+  const requireResourceCapability = async (
+    req: FastifyRequest,
+    capability: Capability,
+    resourceId: string,
+    fieldName?: string
+  ): Promise<Principal> => {
+    const principal = extractPrincipal(req, req.user.id);
+    const decision = await services.resource.evaluateCapability(principal, capability, {
+      resourceId,
+      ...(fieldName ? { fieldName } : {}),
+    });
+    if (!decision.allowed) {
+      throw new ForbiddenError(decision.safeExplanation);
     }
+    return principal;
   };
 
   // Configure Zod Validator
@@ -559,101 +568,15 @@ export function createHttpServer(deps: HttpServerDeps): FastifyInstance {
     {
       preHandler: [authenticate],
     },
-    async (req, rep) => {
-      const { projectId, envId } = req.params as { projectId: string; envId: string };
-      const { grantId, keys } = (req.query || {}) as { grantId?: string; keys?: string };
-      const userId = req.user.id;
-
-      const project = await services.project.getProject(projectId);
-      if (!project) throw new ResourceNotFoundError('Project not found');
-
-      const environment = await services.project.getEnvironmentById(projectId, envId);
-      if (!environment) throw new ResourceNotFoundError('Environment not found');
-      if (!environment.resourceId)
-        throw new ResourceNotFoundError('Environment has no linked resource');
-
-      const resourceId = environment.resourceId;
-
-      const principal = extractPrincipal(req, userId);
-
-      try {
-        // Resolve active grant first if not explicitly passed
-        let resolvedGrantId = grantId;
-        if (!resolvedGrantId) {
-          const activeGrant = await services.approval.findActiveUnconsumedGrant(
-            resourceId,
-            userId,
-            'secrets.read',
-            keys || null
-          );
-          if (activeGrant) {
-            resolvedGrantId = activeGrant.id;
-          }
-        }
-
-        let secrets = await services.ports.getSecrets(principal, projectId, envId, resolvedGrantId);
-
-        if (keys) {
-          const filterKeys = new Set(
-            keys
-              .split(',')
-              .map((k) => k.trim())
-              .filter(Boolean)
-          );
-          secrets = Object.fromEntries(Object.entries(secrets).filter(([k]) => filterKeys.has(k)));
-        }
-
-        return { secrets };
-      } catch (err) {
-        if (err instanceof ForbiddenError) {
-          // Check for active approval or create one
-          const approval = await services.approval.findActiveApproval(
-            resourceId,
-            userId,
-            'secrets.read',
-            keys || null
-          );
-
-          if (approval) {
-            if (approval.status === 'PENDING') {
-              rep.status(202);
-              return {
-                status: 'pending',
-                message: 'Secret access is pending approval in Discord',
-                requestId: approval.id,
-              };
-            }
-            if (approval.status === 'APPROVED') {
-              throw new AccessDeniedError(
-                'Access denied: Active approval is approved but grant is missing or consumed.'
-              );
-            }
-            throw new AccessDeniedError('Access denied: Secrets access was denied');
-          }
-
-          // Create a new approval request
-          const result = await services.ports.createApprovalRequest(
-            principal,
-            resourceId,
-            'secrets.read',
-            keys || null
-          );
-          if (!result.success || !result.request) {
-            throw new Error(
-              `Failed to create approval request: ${result.error || 'Unknown error'}`
-            );
-          }
-          const newApproval = result.request;
-
-          rep.status(202);
-          return {
-            status: 'pending',
-            message: 'Secret access is pending approval in Discord',
-            requestId: newApproval.id,
-          };
-        }
-        throw err;
-      }
+    async (_req, rep) => {
+      // Secret redemption is a state-changing, one-time grant consumption and therefore must not
+      // happen on GET. This legacy route intentionally performs no policy lookup, approval
+      // creation, grant consumption, or value-bearing repository read.
+      return rep.status(405).header('allow', 'PUT').send({
+        error: 'method_not_allowed',
+        message:
+          'Secret value retrieval is unavailable. PUT replaces secrets and does not redeem access.',
+      });
     }
   );
 
@@ -703,13 +626,14 @@ export function createHttpServer(deps: HttpServerDeps): FastifyInstance {
   server.get<{ Params: z.infer<typeof ResourceParamsSchema> }>(
     '/api/resources/:id/fields',
     {
-      preHandler: [authenticate, verifyIsGuardian],
+      preHandler: [authenticate],
       schema: {
         params: ResourceParamsSchema,
       },
     },
     async (req) => {
       const { id } = req.params;
+      await requireResourceCapability(req, 'secret.metadata.read', id);
       const fields = await services.resource.listFieldsMetadata(id);
       return fields.map((f) => f.name);
     }
@@ -721,7 +645,7 @@ export function createHttpServer(deps: HttpServerDeps): FastifyInstance {
   }>(
     '/api/resources/:id/fields',
     {
-      preHandler: [authenticate, verifyIsGuardian],
+      preHandler: [authenticate],
       schema: {
         params: ResourceParamsSchema,
         body: CreateResourceFieldSchema,
@@ -730,6 +654,7 @@ export function createHttpServer(deps: HttpServerDeps): FastifyInstance {
     async (req, rep) => {
       const { id } = req.params;
       const { name, value } = req.body;
+      await requireResourceCapability(req, 'secret.write', id, name);
 
       const field = await services.resource.createField(id, name, value);
       return rep.status(201).send(field);
@@ -739,13 +664,14 @@ export function createHttpServer(deps: HttpServerDeps): FastifyInstance {
   server.get<{ Params: z.infer<typeof FieldParamsSchema> }>(
     '/api/resources/:id/fields/:name',
     {
-      preHandler: [authenticate, verifyIsGuardian],
+      preHandler: [authenticate],
       schema: {
         params: FieldParamsSchema,
       },
     },
     async (req) => {
       const { id, name } = req.params;
+      await requireResourceCapability(req, 'secret.value.read', id, name);
 
       const field = await services.resource.getField(id, name);
       if (!field) {
@@ -759,13 +685,14 @@ export function createHttpServer(deps: HttpServerDeps): FastifyInstance {
   server.delete<{ Params: z.infer<typeof FieldParamsSchema> }>(
     '/api/resources/:id/fields/:name',
     {
-      preHandler: [authenticate, verifyIsGuardian],
+      preHandler: [authenticate],
       schema: {
         params: FieldParamsSchema,
       },
     },
     async (req, rep) => {
       const { id, name } = req.params;
+      await requireResourceCapability(req, 'secret.delete', id, name);
 
       await services.resource.deleteField(id, name);
       return rep.status(204).send();
@@ -779,7 +706,7 @@ export function createHttpServer(deps: HttpServerDeps): FastifyInstance {
   server.post<{ Params: z.infer<typeof ResourceParamsSchema> }>(
     '/api/resources/:id/2fa/code',
     {
-      preHandler: [authenticate, verifyIsGuardian],
+      preHandler: [authenticate],
       schema: {
         params: ResourceParamsSchema,
       },
@@ -787,8 +714,9 @@ export function createHttpServer(deps: HttpServerDeps): FastifyInstance {
     async (req, rep) => {
       const { id } = req.params;
       const userId = req.user.id;
+      const principal = extractPrincipal(req, userId);
 
-      const code = await services.resource.revealTOTPCode(id, userId);
+      const code = await services.resource.revealTOTPCode(id, principal);
       rep.header('Cache-Control', 'no-store');
       return { code };
     }
@@ -800,7 +728,7 @@ export function createHttpServer(deps: HttpServerDeps): FastifyInstance {
   }>(
     '/api/resources/:id/2fa/link',
     {
-      preHandler: [authenticate, verifyIsGuardian],
+      preHandler: [authenticate],
       schema: {
         params: ResourceParamsSchema,
         body: LinkTotpSchema,
@@ -809,9 +737,9 @@ export function createHttpServer(deps: HttpServerDeps): FastifyInstance {
     async (req, rep) => {
       const { id } = req.params;
       const { totpAccountId, consentId } = req.body;
-      const userId = req.user.id; // Actor ID
+      const principal = extractPrincipal(req, req.user.id);
 
-      await services.resource.linkTOTPAccount(id, totpAccountId, userId, consentId);
+      await services.resource.linkTOTPAccount(id, totpAccountId, principal, consentId);
       return rep.status(200).send({ success: true });
     }
   );
@@ -819,16 +747,16 @@ export function createHttpServer(deps: HttpServerDeps): FastifyInstance {
   server.delete<{ Params: z.infer<typeof ResourceParamsSchema> }>(
     '/api/resources/:id/2fa/link',
     {
-      preHandler: [authenticate, verifyIsGuardian],
+      preHandler: [authenticate],
       schema: {
         params: ResourceParamsSchema,
       },
     },
     async (req, rep) => {
       const { id } = req.params;
-      const userId = req.user.id;
+      const principal = extractPrincipal(req, req.user.id);
 
-      await services.resource.unlinkTOTPAccount(id, userId);
+      await services.resource.unlinkTOTPAccount(id, principal);
       return rep.status(204).send();
     }
   );

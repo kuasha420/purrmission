@@ -7,7 +7,6 @@ describe('Bypassing spaces in TOTP secrets', () => {
     ownerDiscordUserId: 'user-123',
     accountName: 'Test Account',
     issuer: undefined,
-    shared: false,
   };
 
   test('should accept a valid Base32 secret without spaces', () => {
@@ -16,8 +15,7 @@ describe('Bypassing spaces in TOTP secrets', () => {
       accountBase.ownerDiscordUserId,
       accountBase.accountName,
       validSecret,
-      accountBase.issuer,
-      accountBase.shared
+      accountBase.issuer
     );
     assert.strictEqual(account.secret, validSecret);
   });
@@ -29,8 +27,7 @@ describe('Bypassing spaces in TOTP secrets', () => {
       accountBase.ownerDiscordUserId,
       accountBase.accountName,
       secretWithSpaces,
-      accountBase.issuer,
-      accountBase.shared
+      accountBase.issuer
     );
     assert.strictEqual(account.secret, expectedSecret);
   });
@@ -42,8 +39,7 @@ describe('Bypassing spaces in TOTP secrets', () => {
       accountBase.ownerDiscordUserId,
       accountBase.accountName,
       secretWithSpaces,
-      accountBase.issuer,
-      accountBase.shared
+      accountBase.issuer
     );
     assert.strictEqual(account.secret, expectedSecret);
   });
@@ -55,8 +51,7 @@ describe('Bypassing spaces in TOTP secrets', () => {
         accountBase.ownerDiscordUserId,
         accountBase.accountName,
         invalidSecret,
-        accountBase.issuer,
-        accountBase.shared
+        accountBase.issuer
       );
     }, /Invalid TOTP secret format \(Base32 expected\)/);
   });
@@ -68,8 +63,7 @@ describe('Bypassing spaces in TOTP secrets', () => {
       accountBase.ownerDiscordUserId,
       accountBase.accountName,
       secretWithMixedWhitespace,
-      accountBase.issuer,
-      accountBase.shared
+      accountBase.issuer
     );
     assert.strictEqual(account.secret, expectedSecret);
   });

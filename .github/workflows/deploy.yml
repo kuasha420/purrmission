@@ -18,6 +18,10 @@ on:
       - '.github/workflows/deploy.yml'
       # Database schema
       - 'prisma/**'
+      # Supported migration and environment-validation entrypoints packaged in the deploy artifact
+      - 'scripts/deploy-migrations.ts'
+      - 'scripts/reconcile-guardians-owners.ts'
+      - 'scripts/validate-env.cjs'
   workflow_dispatch:
 
 jobs:
@@ -53,6 +57,7 @@ jobs:
           find apps/purrmission-bot/dist -type f -exec sha256sum {} \; | sort > dist-checksums.txt
           find dist-scripts -type f -exec sha256sum {} \; | sort >> dist-checksums.txt
           sha256sum package.json pnpm-lock.yaml ecosystem.config.cjs >> dist-checksums.txt
+          sha256sum scripts/deploy-migrations.ts scripts/reconcile-guardians-owners.ts scripts/validate-env.cjs >> dist-checksums.txt
           cat dist-checksums.txt
 
       - name: Deploy Commands
@@ -79,6 +84,8 @@ jobs:
             prisma
             dist-scripts
             dist-checksums.txt
+            scripts/deploy-migrations.ts
+            scripts/reconcile-guardians-owners.ts
             scripts/validate-env.cjs
 
   deploy:
@@ -209,7 +216,7 @@ jobs:
           key: ${{ secrets.SSH_KEY }}
           port: ${{ secrets.SSH_PORT || 22 }}
           target: ${{ secrets.SSH_TARGET }}
-          source: 'apps,package.json,pnpm-lock.yaml,pnpm-workspace.yaml,ecosystem.config.cjs,dist-checksums.txt,prisma,dist-scripts,scripts/validate-env.cjs'
+          source: 'apps,package.json,pnpm-lock.yaml,pnpm-workspace.yaml,ecosystem.config.cjs,dist-checksums.txt,prisma,dist-scripts,scripts/deploy-migrations.ts,scripts/reconcile-guardians-owners.ts,scripts/validate-env.cjs'
 
       - name: Verify deployment integrity
         uses: appleboy/ssh-action@v1

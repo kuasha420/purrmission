@@ -1,9 +1,11 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { describe, it, beforeEach } from 'node:test';
 import assert from 'node:assert';
-import { handleResourceAutocomplete, resourceCommand } from './resource.js';
+import { handleResourceAutocomplete, handleResourceCommand, resourceCommand } from './resource.js';
 import type { CommandContext } from './context.js';
-import type { AutocompleteInteraction } from 'discord.js';
+import type { AutocompleteInteraction, ChatInputCommandInteraction } from 'discord.js';
+import { createInMemoryRepositories } from '../../domain/repositories.mock.js';
+import { createServices } from '../../domain/services.js';
 
 describe('handleResourceAutocomplete', () => {
   let mockInteraction: AutocompleteInteraction;
@@ -171,5 +173,97 @@ describe('handleResourceAutocomplete', () => {
     const nameOption = registerOption?.options?.find((option: any) => option.name === 'name');
 
     assert.strictEqual(nameOption?.max_length, 100);
+  });
+
+  it('requires an explicit one-time consent ID for /resource 2fa link', () => {
+    const twoFaGroup = (resourceCommand.toJSON() as any).options?.find(
+      (option: any) => option.name === '2fa'
+    );
+    const linkSubcommand = twoFaGroup?.options?.find((option: any) => option.name === 'link');
+    const consentOption = linkSubcommand?.options?.find(
+      (option: any) => option.name === 'consent-id'
+    );
+
+    assert.strictEqual(consentOption?.required, true);
+  });
+
+  it('does not let an explicit Guardian create, reveal, or delete secret fields directly', async () => {
+    const repositories = createInMemoryRepositories();
+    const services = createServices({ repositories });
+    const resourceId = 'resource-guardian-negative';
+    const guardianId = 'explicit-guardian';
+
+    await repositories.resources.create({
+      id: resourceId,
+      name: 'Protected Resource',
+      mode: 'ONE_OF_N',
+      apiKey: 'test-key',
+    });
+    await repositories.guardians.add({
+      id: 'guardian-row',
+      resourceId,
+      discordUserId: guardianId,
+      role: 'GUARDIAN',
+    });
+    await repositories.guardians.add({
+      id: 'owner-row',
+      resourceId,
+      discordUserId: 'resource-owner',
+      role: 'OWNER',
+    });
+    await repositories.resourceFields.create({
+      resourceId,
+      name: 'EXISTING',
+      value: 'owner-created',
+    });
+
+    const commandContext = { repositories, services } as CommandContext;
+    const replies: any[] = [];
+    let directRevealDmCreated = false;
+
+    const interactionFor = (subcommand: 'add' | 'get' | 'remove'): ChatInputCommandInteraction =>
+      ({
+        user: {
+          id: guardianId,
+          createDM: async () => {
+            directRevealDmCreated = true;
+            return { send: async () => undefined };
+          },
+        },
+        options: {
+          getSubcommandGroup: () => 'fields',
+          getSubcommand: () => subcommand,
+          getString: (name: string) => {
+            if (name === 'resource-id') return resourceId;
+            if (name === 'name') return subcommand === 'add' ? 'NEW_FIELD' : 'EXISTING';
+            if (name === 'value') return 'must-not-write';
+            return null;
+          },
+        },
+        client: {
+          users: {
+            fetch: async () => ({
+              createDM: async () => ({ send: async () => undefined }),
+            }),
+          },
+        },
+        reply: async (payload: any) => {
+          replies.push(payload);
+        },
+      }) as unknown as ChatInputCommandInteraction;
+
+    await handleResourceCommand(interactionFor('add'), commandContext);
+    await handleResourceCommand(interactionFor('get'), commandContext);
+    await handleResourceCommand(interactionFor('remove'), commandContext);
+
+    assert.match(replies[0].content, /do not have permission to add fields/i);
+    assert.match(replies[1].content, /access request sent/i);
+    assert.match(replies[2].content, /do not have permission to remove fields/i);
+    assert.strictEqual(directRevealDmCreated, false, 'Guardian must not receive the secret value');
+    assert.strictEqual(
+      await repositories.resourceFields.findByResourceAndName(resourceId, 'NEW_FIELD'),
+      null
+    );
+    assert.ok(await repositories.resourceFields.findByResourceAndName(resourceId, 'EXISTING'));
   });
 });

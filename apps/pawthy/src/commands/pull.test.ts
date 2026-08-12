@@ -67,12 +67,13 @@ describe('Pull Command', () => {
 
     // Mock axios.get to return 202 status
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    mock.method(axios, 'get', async (): Promise<any> => {
+    const getMock = mock.method(axios, 'get', async (): Promise<any> => {
       return {
         status: 202,
         data: {
           status: 'pending',
           message: 'Secret access is pending approval in Discord',
+          requestId: 'request-1',
         },
       };
     });
@@ -88,6 +89,7 @@ describe('Pull Command', () => {
     }
 
     assert.strictEqual(exitCode, 1);
+    assert.strictEqual(getMock.mock.callCount(), 1, 'pending pulls must not enter a GET poll loop');
   });
 
   it('should prioritize CLI flags over env vars and .pawthyrc', async () => {

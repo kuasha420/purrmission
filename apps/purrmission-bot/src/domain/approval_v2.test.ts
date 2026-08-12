@@ -1,296 +1,150 @@
-import { test, describe, beforeEach } from 'node:test';
-import assert from 'node:assert';
-import { createInMemoryRepositories } from './repositories.mock.js';
-import { createServices } from './services.js';
+import assert from 'node:assert/strict';
+import { beforeEach, describe, it } from 'node:test';
 import { AccessDeniedError } from './auth.js';
 import { createDiscordPrincipal } from './principal.js';
+import { createInMemoryRepositories } from './repositories.mock.js';
+import { createServices } from './services.js';
 
-describe('Approval Request V2, Immutable Grants, and Atomic Consumption', () => {
+describe('Approval decisions and provisional authority fail closed', () => {
   let repos: ReturnType<typeof createInMemoryRepositories>;
   let services: ReturnType<typeof createServices>;
 
   beforeEach(async () => {
     repos = createInMemoryRepositories();
     services = createServices({ repositories: repos });
-
-    // Seed a mock project and resource
-    const project = await repos.projects.createProject({
-      name: 'Test Project',
-      ownerId: 'owner-1',
-    });
-
-    // Seed a mock TOTP account
-    const account = await repos.totp.create({
-      ownerDiscordUserId: 'owner-1',
-      accountName: 'Test Account',
-      secret: 'MOCKSECRET',
-      issuer: 'Test',
-    });
-
     await repos.resources.create({
       id: 'res-1',
-      projectId: project.id,
-      name: 'Test Resource',
-      type: '2FA_SEED',
-      totpAccountId: account.id,
-      version: 'v1',
+      name: 'Protected Resource',
+      mode: 'ONE_OF_N',
+      apiKey: null,
     });
-
-    // Add a guardian to res-1
     await repos.guardians.add({
+      id: 'guardian-row-1',
       resourceId: 'res-1',
       discordUserId: 'guardian-1',
       role: 'GUARDIAN',
     });
   });
 
-  describe('Request Deduplication', () => {
-    test('should return existing request when duplicate pending request is created', async () => {
-      const res1 = await services.approval.createApprovalRequest({
-        resourceId: 'res-1',
-        requesterId: 'user-1',
-        requesterType: 'DISCORD_USER',
-        authKind: 'DISCORD',
-        action: 'secrets.read',
-        targetVersion: 'v1',
-        policyVersion: 'v1',
-      });
-
-      assert.ok(res1.success);
-      assert.ok(res1.request);
-
-      const res2 = await services.approval.createApprovalRequest({
-        resourceId: 'res-1',
-        requesterId: 'user-1',
-        requesterType: 'DISCORD_USER',
-        authKind: 'DISCORD',
-        action: 'secrets.read',
-        targetVersion: 'v1',
-        policyVersion: 'v1',
-      });
-
-      assert.ok(res2.success);
-      assert.strictEqual(res2.request?.id, res1.request?.id);
-    });
+  it('deduplicates exact pending requests', async () => {
+    const input = {
+      resourceId: 'res-1',
+      requesterId: 'user-1',
+      requesterType: 'DISCORD_USER',
+      authKind: 'DISCORD',
+      action: 'secrets.read',
+    };
+    const first = await services.approval.createApprovalRequest(input);
+    const second = await services.approval.createApprovalRequest(input);
+    assert.ok(first.request);
+    assert.equal(second.request?.id, first.request.id);
   });
 
-  describe('Self-Approval Prevention', () => {
-    test('should reject approval from the requester themselves', async () => {
-      const res = await services.approval.createApprovalRequest({
-        resourceId: 'res-1',
-        requesterId: 'guardian-1',
-        requesterType: 'DISCORD_USER',
-        authKind: 'DISCORD',
-        action: 'secrets.read',
-        targetVersion: 'v1',
-        policyVersion: 'v1',
-      });
-
-      assert.ok(res.success);
-      assert.ok(res.request);
-
-      const decision = await services.approval.recordDecision(
-        res.request.id,
-        'APPROVE',
-        createDiscordPrincipal('guardian-1')
-      );
-
-      assert.strictEqual(decision.success, false);
-      assert.strictEqual(decision.error, 'Requesters cannot approve their own requests.');
+  it('prevents self approval', async () => {
+    const result = await services.approval.createApprovalRequest({
+      resourceId: 'res-1',
+      requesterId: 'guardian-1',
+      requesterType: 'DISCORD_USER',
+      authKind: 'DISCORD',
+      action: 'secrets.read',
     });
+    assert.ok(result.request);
+    const decision = await services.approval.recordDecision(
+      result.request.id,
+      'APPROVE',
+      createDiscordPrincipal('guardian-1')
+    );
+    assert.equal(decision.success, false);
+    assert.match(decision.error ?? '', /cannot approve their own/i);
   });
 
-  describe('Immutable Grants & One-Time Atomic Consumption', () => {
-    test('should issue an immutable grant upon approval, consume it once, and block subsequent attempts', async () => {
-      const res = await services.approval.createApprovalRequest({
-        resourceId: 'res-1',
-        requesterId: 'user-1',
-        requesterType: 'DISCORD_USER',
-        authKind: 'DISCORD',
-        action: 'secrets.read',
-        targetVersion: 'v1',
-        policyVersion: 'v1',
-      });
-
-      assert.ok(res.success);
-      assert.ok(res.request);
-
-      // Resolve the request
-      const decision = await services.approval.recordDecision(
-        res.request.id,
-        'APPROVE',
-        createDiscordPrincipal('guardian-1')
-      );
-      assert.ok(decision.success);
-
-      // Verify a grant exists
-      const grant = await repos.approvalGrants.findByRequestId(res.request.id);
-      assert.ok(grant);
-      assert.strictEqual(grant.consumedAt, null);
-
-      const principal = createDiscordPrincipal('user-1');
-
-      // Consume the grant
-      await services.approval.consumeGrant(grant.id, principal, 'secrets.read', 'v1', 'v1');
-
-      // Verify grant is marked consumed in DB
-      const consumedGrant = await repos.approvalGrants.findById(grant.id);
-      assert.ok(consumedGrant?.consumedAt);
-
-      // Attempt to consume again should fail
-      await assert.rejects(
-        services.approval.consumeGrant(grant.id, principal, 'secrets.read', 'v1', 'v1'),
-        (err: unknown) =>
-          err instanceof AccessDeniedError && err.message.includes('already been consumed')
-      );
+  it('records APPROVED as non-authority and mints no grant', async () => {
+    const result = await services.approval.createApprovalRequest({
+      resourceId: 'res-1',
+      requesterId: 'user-1',
+      requesterType: 'DISCORD_USER',
+      authKind: 'DISCORD',
+      action: 'totp.code.read',
     });
-
-    test('should reject consumption if targetVersion or policyVersion has changed', async () => {
-      const res = await services.approval.createApprovalRequest({
-        resourceId: 'res-1',
-        requesterId: 'user-1',
-        requesterType: 'DISCORD_USER',
-        authKind: 'DISCORD',
-        action: 'secrets.read',
-        targetVersion: 'v1',
-        policyVersion: 'v1',
-      });
-
-      assert.ok(res.success);
-      assert.ok(res.request);
-      const decision = await services.approval.recordDecision(
-        res.request.id,
-        'APPROVE',
-        createDiscordPrincipal('guardian-1')
-      );
-      assert.ok(decision.success);
-
-      const grant = await repos.approvalGrants.findByRequestId(res.request.id);
-      assert.ok(grant);
-
-      const principal = createDiscordPrincipal('user-1');
-
-      // Reject consumption with mismatched targetVersion
-      await assert.rejects(
-        services.approval.consumeGrant(grant.id, principal, 'secrets.read', 'v2', 'v1'),
-        (err: unknown) =>
-          err instanceof AccessDeniedError && err.message.includes('Target state version mismatch')
-      );
-
-      // Reject consumption with mismatched policyVersion
-      await assert.rejects(
-        services.approval.consumeGrant(grant.id, principal, 'secrets.read', 'v1', 'v2'),
-        (err: unknown) =>
-          err instanceof AccessDeniedError && err.message.includes('Policy version mismatch')
-      );
-    });
+    assert.ok(result.request);
+    const decision = await services.approval.recordDecision(
+      result.request.id,
+      'APPROVE',
+      createDiscordPrincipal('guardian-1')
+    );
+    assert.equal(decision.success, true);
+    assert.equal(decision.request?.status, 'APPROVED');
+    assert.equal(await repos.approvalGrants.findByRequestId(result.request.id), null);
   });
 
-  describe('Delegated TOTP Reveal (Double-Gating)', () => {
-    test('should require both a valid active ApprovalGrant and TOTPDelegationConsent for delegated access', async () => {
-      const requesterId = 'user-1';
+  it('retains one-time validation for manually persisted future-model grants', async () => {
+    const grant = await repos.approvalGrants.create({
+      requestId: 'future-request',
+      resourceId: 'res-1',
+      requesterId: 'user-1',
+      requesterType: 'DISCORD_USER',
+      authKind: 'DISCORD',
+      action: 'secrets.read',
+      targetKey: null,
+      targetVersion: 'v1',
+      policyVersion: 'v1',
+      constraints: null,
+      expiresAt: new Date(Date.now() + 60_000),
+    });
+    const principal = createDiscordPrincipal('user-1');
+    await services.approval.consumeGrant(grant.id, principal, 'secrets.read', 'v1', 'v1');
+    await assert.rejects(
+      services.approval.consumeGrant(grant.id, principal, 'secrets.read', 'v1', 'v1'),
+      (error: unknown) =>
+        error instanceof AccessDeniedError && error.message.includes('already been consumed')
+    );
+  });
 
-      // Create and approve request
-      const res = await services.approval.createApprovalRequest({
-        resourceId: 'res-1',
-        requesterId,
-        requesterType: 'DISCORD_USER',
-        authKind: 'DISCORD',
-        action: 'totp.code.read',
-      });
-      assert.ok(res.request);
-
-      const decision = await services.approval.recordDecision(
-        res.request.id,
-        'APPROVE',
-        createDiscordPrincipal('guardian-1')
-      );
-      assert.ok(decision.success);
-
-      // Get latest rotated resource details and create delegation consent
-      const resource = await repos.resources.findById('res-1');
-      assert.ok(resource);
-      assert.ok(resource.totpAccountId);
-      const totpAccountId = resource.totpAccountId;
-      const account = await repos.totp.findById(totpAccountId);
-      assert.ok(account);
-
-      // Create delegation consent directly in repo with rotated linkVersion
-      const consent = await repos.totp.createDelegationConsent({
-        resourceId: 'res-1',
-        totpAccountId,
-        operation: 'totp.code.read',
-        requesterId,
-        authFamily: 'DISCORD',
-        accountVersion: account.version,
-        linkVersion: resource.version,
-        expiresAt: new Date(Date.now() + 10 * 60 * 1000),
-      });
-
-      const principal = createDiscordPrincipal(requesterId);
-
-      // Reveal should succeed
-      const code = await services.resource.revealTOTPCode('res-1', principal);
-      assert.ok(code);
-
-      // Consent and Grant must be consumed now
-      const consumedConsent = await repos.totp.findDelegationConsentById(consent.id);
-      assert.ok(consumedConsent?.usedAt);
-
-      const activeGrant = await repos.approvalGrants.findActiveUnconsumed(
-        'res-1',
-        requesterId,
-        'totp.code.read',
-        null
-      );
-      assert.strictEqual(activeGrant, null);
+  it('denies grant A plus consent B without consuming either provisional record', async () => {
+    const account = await repos.totp.create({
+      ownerDiscordUserId: 'seed-owner',
+      accountName: 'Account B',
+      secret: 'JBSWY3DPEHPK3PXP',
+    });
+    const resource = await repos.resources.update('res-1', {
+      totpAccountId: account.id,
+      version: 'link-v1',
+    });
+    const grantA = await repos.approvalGrants.create({
+      requestId: 'request-a',
+      resourceId: resource.id,
+      requesterId: 'user-1',
+      requesterType: 'DISCORD_USER',
+      authKind: 'DISCORD',
+      action: 'totp.code.read',
+      targetKey: null,
+      targetVersion: resource.version,
+      policyVersion: resource.version,
+      constraints: null,
+      expiresAt: new Date(Date.now() + 60_000),
+    });
+    const consentB = await repos.totp.createDelegationConsent({
+      resourceId: resource.id,
+      totpAccountId: account.id,
+      operation: 'totp.code.read',
+      requesterId: 'user-1',
+      authFamily: 'DISCORD',
+      accountVersion: account.version,
+      linkVersion: resource.version,
+      expiresAt: new Date(Date.now() + 60_000),
     });
 
-    test('should fail reveal if delegation consent has changed seed version', async () => {
-      const requesterId = 'user-1';
-
-      // Create and approve request
-      const res = await services.approval.createApprovalRequest({
-        resourceId: 'res-1',
-        requesterId,
-        requesterType: 'DISCORD_USER',
-        authKind: 'DISCORD',
-        action: 'totp.code.read',
-      });
-      assert.ok(res.request);
-
-      const decision = await services.approval.recordDecision(
-        res.request.id,
-        'APPROVE',
-        createDiscordPrincipal('guardian-1')
-      );
-      assert.ok(decision.success);
-
-      const resource = await repos.resources.findById('res-1');
-      assert.ok(resource);
-      assert.ok(resource.totpAccountId);
-      const totpAccountId = resource.totpAccountId;
-
-      // Create delegation consent directly in repo with stale seed version
-      await repos.totp.createDelegationConsent({
-        resourceId: 'res-1',
-        totpAccountId,
-        operation: 'totp.code.read',
-        requesterId,
-        authFamily: 'DISCORD',
-        accountVersion: 'seed-stale',
-        linkVersion: resource.version,
-        expiresAt: new Date(Date.now() + 10 * 60 * 1000),
-      });
-
-      const principal = createDiscordPrincipal(requesterId);
-
-      // Reveal should fail closed
-      await assert.rejects(
-        services.resource.revealTOTPCode('res-1', principal),
-        (err: unknown) =>
-          err instanceof AccessDeniedError && err.message.includes('seed version has changed')
-      );
-    });
+    await assert.rejects(
+      services.resource.revealTOTPCode(
+        resource.id,
+        createDiscordPrincipal('user-1'),
+        grantA.id,
+        consentB.id
+      ),
+      (error: unknown) =>
+        error instanceof AccessDeniedError && error.message.includes('request-bound')
+    );
+    assert.equal((await repos.approvalGrants.findById(grantA.id))?.consumedAt, null);
+    assert.equal((await repos.totp.findDelegationConsentById(consentB.id))?.usedAt, null);
   });
 });

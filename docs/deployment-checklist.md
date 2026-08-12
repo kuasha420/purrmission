@@ -13,8 +13,8 @@
 
 - [ ] **Database & Migrations**:
   - [ ] **Artifact Check**: Ensure `prisma/` directory (containing `schema.prisma`) is included in the deployment artifact.
-    - _Current Status_: **MISSING** in `deploy.yml`. Application execution might work, but migrations will fail.
-  - [ ] **Migration Check**: Run `npx prisma migrate deploy` on the server after deployment.
+    - _Current Status_: `deploy.yml` includes Prisma plus the supported migration wrapper and its Guardian reconciliation dependency.
+  - [ ] **Migration Check**: Run `pnpm prisma:deploy` on the server after deployment. This supported wrapper performs the required RBAC reconciliation before invoking Prisma.
   - [ ] **Persistence Check**: Verify SQLite database file is not overwritten/deleted during deployment cleanup.
 
 - [ ] **Dependencies**:
@@ -28,7 +28,7 @@
 3.  **Post-Deployment Server Checks**:
     - SSH into server.
     - Navigate to deployment directory.
-    - Run Migrations: `npx prisma migrate deploy` (Requires fixing artifact export first).
+    - Run Migrations: `pnpm prisma:deploy`.
     - Check PM2 status: `pm2 status`.
     - View Logs: `pm2 logs Purrmission`.
 
@@ -36,4 +36,7 @@
 
 - **"Schema not found"**: The `prisma` directory was not uploaded. Copy it manually or update `deploy.yml`.
 - **"Database is locked"**: Common with SQLite if multiple processes access it. Restart PM2.
-- **Missing Dependencies**: If `npx` or `prisma` not found, ensure they are in `dependencies` or `pnpm install` installs dev deps (default for Yarn Berry).
+- **Missing Dependencies**: If `pnpm` or Prisma is not found, ensure project dependencies were installed with `pnpm install`.
+
+> [!WARNING]
+> Direct Prisma migration CLI invocation is unsupported because it bypasses the required Guardian/owner reconciliation preflight. Operators must use `pnpm prisma:deploy`.

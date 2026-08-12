@@ -5,6 +5,8 @@
 import type {
   Resource,
   Guardian,
+  ApprovalRequest,
+  Environment,
   Principal,
   Capability,
   CapabilityContext,
@@ -37,6 +39,7 @@ import type {
 } from './repositories.js';
 
 export interface CapabilityRepositories {
+  resources: Pick<ResourceRepository, 'findById'>;
   guardians: Pick<GuardianRepository, 'findByResourceAndUser'>;
   projects: Pick<
     ProjectRepository,
@@ -44,7 +47,7 @@ export interface CapabilityRepositories {
   >;
   approvalRequests: Pick<ApprovalRequestRepository, 'findById'>;
   approvalGrants: Pick<ApprovalGrantRepository, 'findById'>;
-  totp: Pick<TOTPRepository, 'findById'>;
+  totp: Pick<TOTPRepository, 'findById' | 'findMetadataById'>;
 }
 
 export interface EffectiveGuardianRepositories {
@@ -373,6 +376,19 @@ export async function hasCapability(
     return deny('INSUFFICIENT_SCOPES', 'Credential has no capability scopes.');
   }
 
+  // Service credentials currently carry capability names but no immutable target binding. A scope
+  // alone must not authorize an arbitrary caller-supplied object. #121 owns target-bound service
+  // credentials; until then only the service's exact own-subject audit target can proceed.
+  if (
+    principal.type === 'SERVICE' &&
+    (target.type !== 'SUBJECT' || target.id !== authorizationSubjectId(principal))
+  ) {
+    return deny(
+      'TARGET_SCOPE_MISMATCH',
+      'Service credential is not bound to this exact authorization target.'
+    );
+  }
+
   // Resolve roles
   let pOwnerId: string | null = null;
   let pMemberRole: 'WRITER' | 'READER' | null = null;
@@ -380,6 +396,8 @@ export async function hasCapability(
 
   let projectId = context.projectId;
   let resourceId = context.resourceId;
+  let resolvedRequest: ApprovalRequest | null = null;
+  let resolvedEnvironment: Environment | null = null;
 
   if (context.environmentId && !projectId) {
     return deny(
@@ -393,9 +411,41 @@ export async function hasCapability(
     if (!env) {
       return deny('TARGET_SCOPE_MISMATCH', 'Environment does not belong to the requested Project.');
     }
+    resolvedEnvironment = env;
+    if (resourceId && env.resourceId !== resourceId) {
+      return deny('TARGET_SCOPE_MISMATCH', 'Environment does not contain the requested Resource.');
+    }
     projectId = env.projectId;
     if (env.resourceId) {
       resourceId = env.resourceId;
+    }
+  }
+
+  if (context.requestId) {
+    resolvedRequest = await repositories.approvalRequests.findById(context.requestId);
+    if (!resolvedRequest) {
+      return deny('TARGET_SCOPE_MISMATCH', 'Approval request target does not exist.');
+    }
+    if (resourceId && resolvedRequest.resourceId !== resourceId) {
+      return deny(
+        'TARGET_SCOPE_MISMATCH',
+        'Approval request does not belong to the requested Resource.'
+      );
+    }
+    resourceId = resolvedRequest.resourceId;
+  }
+
+  if (resolvedEnvironment && resourceId && resolvedEnvironment.resourceId !== resourceId) {
+    return deny(
+      'TARGET_SCOPE_MISMATCH',
+      'Resolved Resource does not belong to the requested Environment.'
+    );
+  }
+
+  if (resourceId && projectId && repositories.projects) {
+    const resourceEnvironment = await repositories.projects.findEnvironmentByResourceId(resourceId);
+    if (!resourceEnvironment || resourceEnvironment.projectId !== projectId) {
+      return deny('TARGET_SCOPE_MISMATCH', 'Resource does not belong to the requested Project.');
     }
   }
 
@@ -435,13 +485,6 @@ export async function hasCapability(
   isProjectOwner = pOwnerId !== null;
   const isProjectLinked = !!projectId;
   const isResourceOwner = isProjectOwner || (!isProjectLinked && explicitGuardianRole === 'OWNER');
-
-  // Non-audit service operations are authorized by their explicit credential scope after exact
-  // target relationships above have been validated. Audit scopes require additional target-shape
-  // checks in their capability cases, and export must re-evaluate a read capability on this target.
-  if (principal.type === 'SERVICE' && !capability.startsWith('audit.')) {
-    return allow('SERVICE', 'Scoped service credential permits this operation.');
-  }
 
   switch (capability) {
     // --- PROJECT CAPABILITIES ---
@@ -544,7 +587,7 @@ export async function hasCapability(
 
     case 'totp.recovery.read':
       if (context.totpAccountId && repositories.totp && userId) {
-        const totpAcc = await repositories.totp.findById(context.totpAccountId);
+        const totpAcc = await repositories.totp.findMetadataById(context.totpAccountId);
         if (totpAcc && totpAcc.ownerDiscordUserId === userId) {
           return allow('OWNER', 'Personal TOTP Owner can view recovery key', ['TOTP_OWNER']);
         }
@@ -556,11 +599,31 @@ export async function hasCapability(
 
     case 'totp.link.manage':
       if (isResourceOwner) return allow('OWNER', 'Resource Owner can manage TOTP link');
+      if (
+        context.totpLinkOperation === 'UNLINK' &&
+        context.resourceId &&
+        context.totpAccountId &&
+        repositories.resources &&
+        repositories.totp &&
+        userId
+      ) {
+        const linkedResource = await repositories.resources.findById(context.resourceId);
+        if (linkedResource?.totpAccountId !== context.totpAccountId) {
+          return deny(
+            'TARGET_SCOPE_MISMATCH',
+            'TOTP account is not linked to the requested Resource.'
+          );
+        }
+        const totpAcc = await repositories.totp.findMetadataById(context.totpAccountId);
+        if (totpAcc?.ownerDiscordUserId === userId) {
+          return allow('OWNER', 'TOTP custody owner can unlink their account', ['TOTP_OWNER']);
+        }
+      }
       return deny('NO_ROLE', 'Only Resource Owner can manage TOTP link');
 
     case 'totp.account.manage':
       if (context.totpAccountId && repositories.totp && userId) {
-        const totpAcc = await repositories.totp.findById(context.totpAccountId);
+        const totpAcc = await repositories.totp.findMetadataById(context.totpAccountId);
         if (totpAcc && totpAcc.ownerDiscordUserId === userId) {
           return allow('OWNER', 'Personal TOTP Owner can manage account', ['TOTP_OWNER']);
         }
@@ -604,9 +667,8 @@ export async function hasCapability(
 
     case 'request.view-own':
     case 'request.cancel-own':
-      if (context.requestId && repositories.approvalRequests && userId) {
-        const req = await repositories.approvalRequests.findById(context.requestId);
-        if (req?.requesterId === userId) {
+      if (resolvedRequest && userId) {
+        if (resolvedRequest.requesterId === userId) {
           return allow('READER', 'Requester may view or cancel their own request.', [
             'AUTHENTICATED_SUBJECT',
           ]);
@@ -621,9 +683,11 @@ export async function hasCapability(
       return deny('NO_ROLE', 'No role to view approval queue');
 
     case 'request.decide':
-      if (context.requestId && repositories.approvalRequests && userId) {
-        const req = await repositories.approvalRequests.findById(context.requestId);
-        if (req?.requesterId === userId) {
+      if (!resolvedRequest) {
+        return deny('MISSING_CONTEXT', 'Request decisions require an exact approval request.');
+      }
+      if (userId) {
+        if (resolvedRequest.requesterId === userId) {
           return deny('SELF_APPROVAL_FORBIDDEN', 'A requester cannot decide their own request.');
         }
       }

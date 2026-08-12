@@ -4,6 +4,7 @@ import { createHttpServer } from '../http/server.js';
 import { createServices } from '../domain/services.js';
 import { createInMemoryRepositories } from '../domain/repositories.mock.js';
 import { createHash } from 'node:crypto';
+import { computeKeyedDigest } from '../domain/crypto.js';
 import type { FastifyInstance } from 'fastify';
 import type { Services } from '../domain/services.js';
 import type { Repositories } from '../domain/repositories.js';
@@ -40,6 +41,24 @@ describe('Resource API', () => {
       userId: userId,
       name: 'Test Token',
       expiresAt: new Date(Date.now() + 3600000),
+    });
+    await repositories.credentials.create({
+      type: 'PAWTHY_TOKEN',
+      subjectId: userId,
+      name: 'Resource API test token',
+      digest: computeKeyedDigest(validToken, 'PAWTHY_TOKEN'),
+      prefix: validToken.slice(0, 8),
+      scopes: [
+        'secret.metadata.read',
+        'secret.value.read',
+        'secret.write',
+        'secret.delete',
+        'totp.code.read',
+        'totp.link.manage',
+      ].join(','),
+      audience: 'cli',
+      expiresAt: new Date(Date.now() + 3600000),
+      revokedAt: null,
     });
 
     // Setup Resource
@@ -125,7 +144,7 @@ describe('Resource API', () => {
     assert.strictEqual(check, null);
   });
 
-  it('should link 2FA and get code', async () => {
+  it('should fail closed for provisional 2FA linking', async () => {
     // Create TOTP Account
     const account = await repositories.totp.create({
       ownerDiscordUserId: userId,
@@ -133,12 +152,13 @@ describe('Resource API', () => {
       secret: 'JBSWY3DPEHPK3PXP', // Valid base32
     });
 
-    const consent = await services.resource.createTOTPLinkConsent(
-      account.id,
+    const consent = await repositories.totp.createLinkConsent({
+      accountId: account.id,
       resourceId,
-      userId,
-      {}
-    );
+      ownerDiscordUserId: userId,
+      delegationPolicy: {},
+      expiresAt: new Date(Date.now() + 60_000),
+    });
 
     // Link
     const linkRes = await server.inject({
@@ -147,18 +167,9 @@ describe('Resource API', () => {
       headers: { Authorization: `Bearer ${validToken}` },
       payload: { totpAccountId: account.id, consentId: consent.id },
     });
-    assert.strictEqual(linkRes.statusCode, 200);
-
-    // Get Code
-    const codeRes = await server.inject({
-      method: 'POST',
-      url: `/api/resources/${resourceId}/2fa/code`,
-      headers: { Authorization: `Bearer ${validToken}` },
-    });
-    assert.strictEqual(codeRes.statusCode, 200);
-    const body = JSON.parse(codeRes.payload);
-    assert.ok(body.code);
-    assert.strictEqual(body.code.length, 6);
+    assert.strictEqual(linkRes.statusCode, 403);
+    assert.equal((await repositories.totp.findLinkConsentById(consent.id))?.usedAt, null);
+    assert.equal((await repositories.resources.findById(resourceId))?.totpAccountId, undefined);
   });
 
   it('should unlink 2FA', async () => {
@@ -168,13 +179,10 @@ describe('Resource API', () => {
       accountName: 'Google',
       secret: 'JBSWY3DPEHPK3PXP',
     });
-    const consent = await services.resource.createTOTPLinkConsent(
-      account.id,
-      resourceId,
-      userId,
-      {}
-    );
-    await services.resource.linkTOTPAccount(resourceId, account.id, userId, consent.id);
+    await repositories.resources.update(resourceId, {
+      totpAccountId: account.id,
+      version: 'existing-link-v1',
+    });
 
     // Unlink
     const unlinkRes = await server.inject({
@@ -188,7 +196,7 @@ describe('Resource API', () => {
     assert.strictEqual(check, null);
   });
 
-  it('should deny access if not guardian', async () => {
+  it('should deny access if the authenticated user has no Resource role', async () => {
     // Create another resource where the user is NOT a guardian
     const otherResourceId = '222e4567-e89b-12d3-a456-426614174000';
     await repositories.resources.create({
@@ -204,6 +212,94 @@ describe('Resource API', () => {
       headers: { Authorization: `Bearer ${validToken}` },
     });
 
-    assert.strictEqual(listRes.statusCode, 401);
+    assert.strictEqual(listRes.statusCode, 403);
+  });
+
+  it('should deny an explicit Guardian every direct secret field operation', async () => {
+    const guardianId = 'guardian-456';
+    const guardianToken = 'guardian-token-with-secret-scopes';
+
+    await repositories.guardians.add({
+      id: `g-${guardianId}`,
+      resourceId,
+      discordUserId: guardianId,
+      role: 'GUARDIAN',
+    });
+    await repositories.credentials.create({
+      type: 'PAWTHY_TOKEN',
+      subjectId: guardianId,
+      name: 'Guardian negative-path token',
+      digest: computeKeyedDigest(guardianToken, 'PAWTHY_TOKEN'),
+      prefix: guardianToken.slice(0, 8),
+      scopes: [
+        'secret.metadata.read',
+        'secret.value.read',
+        'secret.write',
+        'secret.delete',
+        'totp.link.manage',
+      ].join(','),
+      audience: 'cli',
+      expiresAt: new Date(Date.now() + 3600000),
+      revokedAt: null,
+    });
+    await services.resource.createField(resourceId, 'EXISTING', 'owner-created');
+    const custodyOwnedTotp = await repositories.totp.create({
+      ownerDiscordUserId: 'separate-custody-owner',
+      accountName: 'Custody-owned account',
+      secret: 'JBSWY3DPEHPK3PXP',
+    });
+    await repositories.resources.update(resourceId, { totpAccountId: custodyOwnedTotp.id });
+
+    const requests = [
+      server.inject({
+        method: 'GET',
+        url: `/api/resources/${resourceId}/fields`,
+        headers: { Authorization: `Bearer ${guardianToken}` },
+      }),
+      server.inject({
+        method: 'POST',
+        url: `/api/resources/${resourceId}/fields`,
+        headers: { Authorization: `Bearer ${guardianToken}` },
+        payload: { name: 'CREATED_BY_GUARDIAN', value: 'must-not-write' },
+      }),
+      server.inject({
+        method: 'GET',
+        url: `/api/resources/${resourceId}/fields/EXISTING`,
+        headers: { Authorization: `Bearer ${guardianToken}` },
+      }),
+      server.inject({
+        method: 'DELETE',
+        url: `/api/resources/${resourceId}/fields/EXISTING`,
+        headers: { Authorization: `Bearer ${guardianToken}` },
+      }),
+      server.inject({
+        method: 'POST',
+        url: `/api/resources/${resourceId}/2fa/link`,
+        headers: { Authorization: `Bearer ${guardianToken}` },
+        payload: {
+          totpAccountId: custodyOwnedTotp.id,
+          consentId: '123e4567-e89b-12d3-a456-426614174099',
+        },
+      }),
+      server.inject({
+        method: 'DELETE',
+        url: `/api/resources/${resourceId}/2fa/link`,
+        headers: { Authorization: `Bearer ${guardianToken}` },
+      }),
+    ];
+
+    const responses = await Promise.all(requests);
+    assert.deepStrictEqual(
+      responses.map((response) => response.statusCode),
+      [403, 403, 403, 403, 403, 403]
+    );
+    assert.strictEqual(
+      await repositories.resourceFields.findByResourceAndName(resourceId, 'CREATED_BY_GUARDIAN'),
+      null
+    );
+    assert.ok(
+      await repositories.resourceFields.findByResourceAndName(resourceId, 'EXISTING'),
+      'Guardian delete attempt must not remove the field'
+    );
   });
 });

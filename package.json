@@ -19,7 +19,7 @@
     "discord:deploy-commands": "turbo run discord:deploy-commands",
     "prod:purrmission": "node apps/purrmission-bot/dist/index.js",
     "prisma:generate": "prisma generate",
-    "prisma:deploy": "prisma migrate deploy",
+    "prisma:deploy": "tsx scripts/deploy-migrations.ts",
     "prisma:migrate:dev": "prisma migrate dev",
     "prisma:studio": "prisma studio",
     "prisma:format": "prisma format",

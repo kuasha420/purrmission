@@ -139,7 +139,7 @@ describe('Credential Lifecycle Hardening', () => {
   });
 
   describe('Scoped Service Principals and Double-Gated Scopes', () => {
-    test('should authorize service principal purely by capability scopes', async () => {
+    test('should fail closed for unbound service principal object scopes', async () => {
       const repos = createInMemoryRepositories();
       const authService = new AuthService(repos.auth, repos.credentials);
 
@@ -171,14 +171,14 @@ describe('Credential Lifecycle Hardening', () => {
         slug: 'staging',
       });
 
-      // Double-gate authorization checks
-      // Allowed scope
+      // Capability names are not object bindings. #121 must bind the credential to exact targets
+      // before a service principal may authorize either object.
       const evalView = await hasCapability(repos, principal, 'environment.view', {
         projectId: project.id,
         environmentId: env.id,
       });
-      assert.strictEqual(evalView.allowed, true);
-      assert.strictEqual(evalView.reasonCode, 'SERVICE');
+      assert.strictEqual(evalView.allowed, false);
+      assert.strictEqual(evalView.reasonCode, 'TARGET_SCOPE_MISMATCH');
 
       // Denied scope
       const evalDelete = await hasCapability(repos, principal, 'environment.delete', {

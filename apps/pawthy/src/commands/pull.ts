@@ -100,89 +100,16 @@ export const pullCommand = new Command('pull')
       if (res.status === 202) {
         const { requestId } = res.data;
         console.log(`\n⏳ ${chalk.yellow('Access Pending Approval')}`);
-        console.log(chalk.white(`Request ID: ${requestId}`));
-        console.log('Polling for approval...');
-
-        const pollInterval = 5000;
-        const timeout = 5 * 60 * 1000; // 5 minutes
-        const start = Date.now();
-        let approved = false;
-        let finalGrantId = '';
-
-        while (Date.now() - start < timeout) {
-          await new Promise((resolve) => setTimeout(resolve, pollInterval));
-
-          try {
-            const statusRes = await axios.get<{
-              status: string;
-              grantId?: string;
-            }>(`${apiUrl}/api/requests/${requestId}`, {
-              headers: { Authorization: `Bearer ${token}` },
-            });
-
-            const { status, grantId } = statusRes.data;
-
-            if (status === 'APPROVED') {
-              console.log(chalk.green('\n✅ Approval granted! Fetching secrets...'));
-              approved = true;
-              finalGrantId = grantId || '';
-              break;
-            } else if (status === 'DENIED') {
-              console.error(chalk.red('\n❌ Access request was denied by a guardian.'));
-              process.exit(1);
-            } else if (status === 'EXPIRED') {
-              console.error(chalk.red('\n❌ Access request has expired.'));
-              process.exit(1);
-            } else if (status === 'REVOKED') {
-              console.error(chalk.red('\n❌ Access request has been revoked.'));
-              process.exit(1);
-            } else if (status === 'PENDING') {
-              process.stdout.write('.');
-            } else {
-              console.log(chalk.white(`\nState: ${status}`));
-            }
-          } catch (pollErr) {
-            if (axios.isAxiosError(pollErr) && pollErr.response) {
-              const s = pollErr.response.status;
-              if (s === 401) {
-                console.error(chalk.red('\nSession expired or unauthorized.'));
-                process.exit(1);
-              } else if (s === 403) {
-                console.error(
-                  chalk.red('\nAccess forbidden: Insufficient permissions or wrong audience.')
-                );
-                process.exit(1);
-              } else if (s === 404) {
-                console.error(chalk.red('\nRequest not found.'));
-                process.exit(1);
-              }
-            }
-            process.stdout.write('?');
-          }
-        }
-
-        if (!approved) {
-          console.error(chalk.red('\nAuthentication/Approval timed out. Please try again.'));
-          process.exit(1);
-        }
-
-        // Fetch secrets using the grant ID
-        const secretsUrl = new URL(
-          `${apiUrl}/api/projects/${projectId}/environments/${envId}/secrets`
+        if (requestId) console.log(chalk.white(`Request ID: ${requestId}`));
+        console.error(
+          chalk.yellow(
+            'Automatic approval polling is temporarily disabled. Re-run `pawthy pull` after approval.'
+          )
         );
-        if (finalGrantId) {
-          secretsUrl.searchParams.set('grantId', finalGrantId);
-        }
-        if (keysParam) {
-          secretsUrl.searchParams.set('keys', keysParam);
-        }
-
-        const secretsRes = await axios.get<{
-          secrets?: Record<string, string>;
-        }>(secretsUrl.toString(), {
-          headers: { Authorization: `Bearer ${token}` },
-        });
-        secrets = secretsRes.data.secrets || {};
+        // #130 owns the final POST/status/grant exchange. Until then, do not turn a pending
+        // response into an authority-bearing GET or keep a CLI process polling indefinitely.
+        process.exit(1);
+        return;
       } else {
         secrets = res.data.secrets || {};
       }

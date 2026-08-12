@@ -30,7 +30,13 @@ import type {
   CreateApprovalGrantInput,
   CallbackDestination,
   CreateCallbackDestinationInput,
+  TOTPLinkConsent,
+  TOTPDelegationConsent,
+  TOTPLinkEnvelope,
+  OutboxEvent,
+  CreateOutboxEventInput,
 } from './models.js';
+import type { Prisma } from '@prisma/client';
 import {
   ResourceRepository,
   GuardianRepository,
@@ -44,6 +50,7 @@ import {
   CredentialRepository,
   ApprovalGrantRepository,
   CallbackDestinationRepository,
+  OutboxRepository,
 } from './repositories.js';
 import crypto from 'node:crypto';
 
@@ -57,6 +64,7 @@ export class InMemoryResourceRepository implements ResourceRepository {
   async create(input: CreateResourceInput): Promise<Resource> {
     const resource: Resource = {
       ...input,
+      id: input.id ?? crypto.randomUUID(),
       version: input.version || crypto.randomUUID(),
       createdAt: new Date(),
     };
@@ -203,6 +211,18 @@ export class InMemoryApprovalRequestRepository implements ApprovalRequestReposit
         request.resolvedBy = resolvedBy;
         request.resolvedAt = new Date();
       }
+    }
+  }
+
+  async updateDeliveryReference(
+    id: string,
+    discordMessageId: string,
+    discordChannelId: string
+  ): Promise<void> {
+    const request = this.requests.get(id);
+    if (request) {
+      request.discordMessageId = discordMessageId;
+      request.discordChannelId = discordChannelId;
     }
   }
 
@@ -366,6 +386,20 @@ export class InMemoryTOTPRepository implements TOTPRepository {
     return null;
   }
 
+  async findMetadataById(id: string): Promise<TOTPAccountMetadata | null> {
+    const account = this.accounts.get(id);
+    if (!account) return null;
+    return {
+      id: account.id,
+      ownerDiscordUserId: account.ownerDiscordUserId,
+      accountName: account.accountName,
+      issuer: account.issuer,
+      version: account.version,
+      createdAt: account.createdAt,
+      updatedAt: account.updatedAt,
+    };
+  }
+
   async findMetadataByOwnerDiscordUserId(
     ownerDiscordUserId: string
   ): Promise<TOTPAccountMetadata[]> {
@@ -399,11 +433,13 @@ export class InMemoryTOTPRepository implements TOTPRepository {
     return this.linkConsents.get(id) ?? null;
   }
 
-  async useLinkConsent(id: string): Promise<void> {
+  async useLinkConsent(id: string): Promise<boolean> {
     const found = this.linkConsents.get(id);
-    if (found) {
+    if (found && found.usedAt === null && found.expiresAt > new Date()) {
       found.usedAt = new Date();
+      return true;
     }
+    return false;
   }
 
   async createDelegationConsent(
@@ -443,11 +479,13 @@ export class InMemoryTOTPRepository implements TOTPRepository {
     return null;
   }
 
-  async useDelegationConsent(id: string): Promise<void> {
+  async useDelegationConsent(id: string): Promise<boolean> {
     const found = this.delegationConsents.get(id);
-    if (found) {
+    if (found && found.usedAt === null && found.expiresAt > new Date()) {
       found.usedAt = new Date();
+      return true;
     }
+    return false;
   }
 }
 

@@ -51,6 +51,7 @@ describe('ProjectService', () => {
       ...input,
       id: 'p-1',
       description: null,
+      policyVersion: 'policy-v1',
       createdAt: new Date(),
       updatedAt: new Date(),
     };
@@ -71,6 +72,7 @@ describe('ProjectService', () => {
         name: 'P1',
         ownerId: userId,
         description: null,
+        policyVersion: 'policy-v1',
         createdAt: new Date(),
         updatedAt: new Date(),
       },
@@ -91,6 +93,7 @@ describe('ProjectService', () => {
       name: 'P1',
       ownerId: 'user-1',
       description: null,
+      policyVersion: 'policy-v1',
       createdAt: new Date(),
       updatedAt: new Date(),
     };
@@ -109,6 +112,7 @@ describe('ProjectService', () => {
       name: 'My Project',
       ownerId: 'user-1',
       description: null,
+      policyVersion: 'policy-v1',
       createdAt: new Date(),
       updatedAt: new Date(),
     };

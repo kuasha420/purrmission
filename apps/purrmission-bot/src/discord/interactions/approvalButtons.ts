@@ -16,7 +16,6 @@ import type { Services } from '../../domain/services.js';
 import type { ApprovalDecision, AccessRequestContext } from '../../domain/models.js';
 import { createDiscordPrincipal } from '../../domain/principal.js';
 import type { Repositories } from '../../domain/repositories.js';
-import { generateTOTPCode } from '../../domain/totp.js';
 import { logger } from '../../logging/logger.js';
 
 /**
@@ -80,7 +79,7 @@ function parseCustomId(customId: string): { action: ApprovalDecision; requestId:
 export async function handleApprovalButton(
   interaction: ButtonInteraction,
   services: Services,
-  repositories: Repositories,
+  _repositories: Repositories,
   discordClient: Client
 ): Promise<void> {
   const parsed = parseCustomId(interaction.customId);
@@ -163,19 +162,9 @@ export async function handleApprovalButton(
       components: [disabledRow],
     });
 
-    // If approved, reveal the data to the requester
-    if (action === 'APPROVE') {
-      const context = request.context;
-      if (isAccessRequestContext(context)) {
-        await revealAccessToRequester(
-          context,
-          request.resourceId,
-          repositories,
-          services,
-          discordClient
-        );
-      }
-    }
+    // Approval records a decision and may mint an immutable grant. It is never reveal authority.
+    // Requester redemption must occur through a separate authenticated, grant-consuming POST use
+    // case (#122/#128); until that exists, the Discord decision path deliberately fails closed.
 
     // If denied, notify the requester via DM
     if (action === 'DENY') {
@@ -201,109 +190,6 @@ export async function handleApprovalButton(
     await interaction.followUp({
       content: '❌ Failed to process your decision. Please try again.',
       ephemeral: true,
-    });
-  }
-}
-
-/**
- * Reveal the requested data to the requester after approval.
- */
-async function revealAccessToRequester(
-  context: AccessRequestContext,
-  resourceId: string,
-  repositories: Repositories,
-  services: Services,
-  discordClient: Client
-): Promise<void> {
-  try {
-    const user = await discordClient.users.fetch(context.requesterId);
-    const dm = await user.createDM();
-    const resource = await repositories.resources.findById(resourceId);
-    const resourceName = resource?.name ?? 'Unknown Resource';
-
-    if (context.type === 'FIELD_ACCESS' && context.fieldName) {
-      // Reveal field value
-      const field = await repositories.resourceFields.findByResourceAndName(
-        resourceId,
-        context.fieldName
-      );
-      if (field) {
-        await dm.send(
-          [
-            '✅ **Access Approved!**',
-            '',
-            `Your request for field **${context.fieldName}** on **${resourceName}** was approved.`,
-            '',
-            `**${field.name}:** \`${field.value}\``,
-            '',
-            '_Keep this value secure._',
-          ].join('\n')
-        );
-        logger.info('Revealed field value to requester', {
-          requesterId: context.requesterId,
-          resourceId,
-          fieldName: context.fieldName,
-        });
-      } else {
-        await dm.send(
-          `✅ Your access request for field **${context.fieldName}** on **${resourceName}** was approved, but the field could not be found. It may have been deleted.`
-        );
-        logger.warn('Approved field access request for a non-existent field', {
-          requesterId: context.requesterId,
-          resourceId,
-          fieldName: context.fieldName,
-        });
-      }
-    } else if (context.type === 'TOTP_ACCESS') {
-      // Reveal TOTP code
-      const linkedAccount = await services.resource.getLinkedTOTPAccount(resourceId);
-      if (linkedAccount) {
-        const code = generateTOTPCode(linkedAccount);
-        await dm.send(
-          [
-            '✅ **Access Approved!**',
-            '',
-            `Your request for 2FA code on **${resourceName}** was approved.`,
-            '',
-            `**${code}**`,
-            '',
-            `_Account: ${linkedAccount.accountName}_`,
-            '_Code is time-based and will expire soon._',
-          ].join('\n')
-        );
-        logger.info('Revealed TOTP code to requester', {
-          requesterId: context.requesterId,
-          resourceId,
-          totpAccountId: linkedAccount.id,
-        });
-      } else {
-        await dm.send(
-          `✅ Your access request for 2FA on **${resourceName}** was approved, but no 2FA account is linked to it. It may have been unlinked.`
-        );
-        logger.warn('Approved 2FA access request for a resource with no linked account', {
-          requesterId: context.requesterId,
-          resourceId,
-        });
-      }
-    } else if (context.type === 'SECRET_ACCESS') {
-      await dm.send(
-        [
-          '✅ **Access Approved!**',
-          '',
-          `Your request for secrets on **${resourceName}** was approved.`,
-          'You can now run your CLI command again to fetch them.',
-        ].join('\n')
-      );
-      logger.info('Notified requester of SECRET_ACCESS approval', {
-        requesterId: context.requesterId,
-        resourceId,
-      });
-    }
-  } catch (error) {
-    logger.error('Failed to reveal access to requester', {
-      context,
-      resourceId,
-      error,
     });
   }
 }
