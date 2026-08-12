@@ -704,7 +704,7 @@ describe('adapter-neutral metadata query contracts', () => {
         id: 'request-inconsistent',
         resourceId: 'resource-a',
         status: 'PENDING',
-        action: 'secret.reveal',
+        action: 'secret.value.read',
         target: {
           kind: 'SECRET',
           resourceId: 'resource-b',
@@ -739,7 +739,7 @@ describe('adapter-neutral metadata query contracts', () => {
   it('rejects malformed discriminated request targets and incoherent actions', async () => {
     const malformedTargets: Array<Pick<RequestMetadataRecord, 'action' | 'target'>> = [
       {
-        action: 'secret.reveal',
+        action: 'secret.value.read',
         target: {
           kind: 'SECRET',
           resourceId: 'resource-a',
@@ -756,7 +756,7 @@ describe('adapter-neutral metadata query contracts', () => {
         } as unknown as RequestMetadataRecord['target'],
       },
       {
-        action: 'totp.reveal',
+        action: 'totp.code.read',
         target: {
           kind: 'TOTP_ACCOUNT',
           resourceId: 'resource-a',
@@ -765,7 +765,33 @@ describe('adapter-neutral metadata query contracts', () => {
         } as unknown as RequestMetadataRecord['target'],
       },
       {
-        action: 'totp.reveal',
+        action: 'totp.code.read',
+        target: {
+          kind: 'SECRET',
+          resourceId: 'resource-a',
+          targetKey: 'SECRET_KEY',
+          targetVersion: 'target-v1',
+        },
+      },
+      {
+        action: 'secret.value.read',
+        target: {
+          kind: 'SECRET',
+          resourceId: 'resource-a',
+          targetKey: 'SECRET_KEY',
+          targetVersion: 42,
+        } as unknown as RequestMetadataRecord['target'],
+      },
+      {
+        action: 'resource.view',
+        target: {
+          kind: 'RESOURCE',
+          resourceId: 'resource-a',
+          targetVersion: { version: 'target-v1' },
+        } as unknown as RequestMetadataRecord['target'],
+      },
+      {
+        action: 'secret.reveal' as RequestMetadataRecord['action'],
         target: {
           kind: 'SECRET',
           resourceId: 'resource-a',
@@ -817,7 +843,7 @@ describe('adapter-neutral metadata query contracts', () => {
       {
         ...common,
         id: 'request-secret',
-        action: 'secret.reveal',
+        action: 'secret.value.read',
         target: {
           kind: 'SECRET',
           resourceId: 'resource-a',
@@ -841,7 +867,7 @@ describe('adapter-neutral metadata query contracts', () => {
       {
         ...common,
         id: 'request-totp',
-        action: 'totp.reveal',
+        action: 'totp.code.read',
         target: {
           kind: 'TOTP_ACCOUNT',
           resourceId: 'resource-a',
@@ -935,6 +961,7 @@ describe('adapter-neutral metadata query contracts', () => {
         accountName: 'Deployment',
         issuer: 'Example',
         accountVersion: 'totp-v1',
+        resourceVersion: 'resource-v1',
         linkVersion: 'link-v1',
         createdAt: now,
         updatedAt: now,
@@ -946,6 +973,7 @@ describe('adapter-neutral metadata query contracts', () => {
         accountName: 'Must not enumerate',
         issuer: null,
         accountVersion: 'totp-v1',
+        resourceVersion: 'resource-v1',
         linkVersion: 'link-v1',
         createdAt: now,
         updatedAt: now,
@@ -956,7 +984,7 @@ describe('adapter-neutral metadata query contracts', () => {
         id: 'request-own',
         resourceId: 'resource-other',
         status: 'PENDING',
-        action: 'secret.reveal',
+        action: 'secret.value.read',
         target: {
           kind: 'SECRET',
           resourceId: 'resource-other',
@@ -972,7 +1000,7 @@ describe('adapter-neutral metadata query contracts', () => {
         id: 'request-guarded',
         resourceId: 'resource-guarded',
         status: 'PENDING',
-        action: 'totp.reveal',
+        action: 'totp.code.read',
         target: {
           kind: 'TOTP_ACCOUNT',
           resourceId: 'resource-guarded',
@@ -995,7 +1023,7 @@ describe('adapter-neutral metadata query contracts', () => {
         projectId: 'project-visible',
         resourceId: 'resource-member',
         status: 'PENDING',
-        action: 'secret.reveal',
+        action: 'secret.value.read',
         target: {
           kind: 'SECRET',
           resourceId: 'resource-member',
@@ -1105,6 +1133,7 @@ describe('adapter-neutral metadata query contracts', () => {
         accountName: 'Linked label',
         issuer: 'Linked issuer',
         accountVersion: 'account-v1',
+        resourceVersion: 'resource-v1',
         linkVersion: 'link-v1',
         createdAt: now,
         updatedAt: now,
@@ -1138,10 +1167,13 @@ describe('adapter-neutral metadata query contracts', () => {
         source,
         evaluator((capability, context) => ({
           allowed:
-            capability === 'totp.metadata.read' && context.totpAccountId === 'linked-account',
+            (capability === 'totp.metadata.read' && context.totpAccountId === 'linked-account') ||
+            (capability === 'resource.view' &&
+              context.resourceId === 'resource-1' &&
+              context.totpAccountId === undefined),
           reasonCode: role,
           authority:
-            capability === 'totp.metadata.read'
+            capability === 'totp.metadata.read' || capability === 'resource.view'
               ? [role === 'WRITER' ? 'PROJECT_WRITER' : 'PROJECT_READER']
               : [],
         }))
@@ -1151,11 +1183,12 @@ describe('adapter-neutral metadata query contracts', () => {
       assert.equal(memberPage.items[0].kind, 'TOTP_LINK_STATUS');
       assert.equal(memberPage.items[0].resourceId, 'resource-1');
       assert.deepEqual(memberPage.items[0].capabilities.target, {
-        type: 'TOTP_ACCOUNT',
-        id: 'linked-account',
+        type: 'RESOURCE',
+        id: 'resource-1',
       });
-      assertCapabilityContract(memberPage, 'TOTP_ACCOUNT');
+      assertCapabilityContract(memberPage, 'RESOURCE');
       assert.equal(JSON.stringify(memberPage).includes('Linked label'), false);
+      assert.equal(JSON.stringify(memberPage).includes('linked-account'), false);
       assert.equal(JSON.stringify(memberPage).includes('account-v1'), false);
       assert.equal(JSON.stringify(memberPage).includes('link-v1'), false);
     }
@@ -1164,21 +1197,31 @@ describe('adapter-neutral metadata query contracts', () => {
       source,
       evaluator((capability, context) => ({
         allowed:
-          context.totpAccountId === 'linked-account' &&
-          (capability === 'totp.metadata.read' || capability === 'totp.code.read'),
+          (context.totpAccountId === 'linked-account' &&
+            (capability === 'totp.metadata.read' || capability === 'totp.code.read')) ||
+          (capability === 'resource.view' &&
+            context.resourceId === 'resource-1' &&
+            context.totpAccountId === undefined),
         authority:
           capability === 'totp.metadata.read'
             ? ['PROJECT_READER']
             : capability === 'totp.code.read'
               ? ['PROJECT_OWNER']
-              : [],
+              : capability === 'resource.view'
+                ? ['PROJECT_READER']
+                : [],
       }))
     );
     const minimized = await unrelatedOwnerAuthority.listTOTPAccounts(principal);
     assert.equal(minimized.items.length, 1);
     assert.equal(minimized.items[0].kind, 'TOTP_LINK_STATUS');
     assert.equal(minimized.items[0].resourceId, 'resource-1');
-    assertCapabilityContract(minimized, 'TOTP_ACCOUNT');
+    assert.deepEqual(minimized.items[0].capabilities.target, {
+      type: 'RESOURCE',
+      id: 'resource-1',
+    });
+    assertCapabilityContract(minimized, 'RESOURCE');
+    assert.equal(JSON.stringify(minimized).includes('linked-account'), false);
 
     for (const authority of ['EXPLICIT_GUARDIAN', 'APPROVAL_GRANT'] as const) {
       const scopedService = metadataService(
@@ -1204,6 +1247,7 @@ describe('adapter-neutral metadata query contracts', () => {
         accountName: 'Metadata only',
         issuer: 'Example',
         accountVersion: 'totp-v1',
+        resourceVersion: 'resource-v1',
         linkVersion: 'link-v1',
         createdAt: now,
         updatedAt: now,

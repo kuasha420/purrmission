@@ -132,6 +132,7 @@ export interface LinkedTOTPMetadataRecord extends TOTPMetadataRecordBase {
   projectId?: string;
   environmentId?: string;
   resourceId: string;
+  resourceVersion: string;
   linkVersion: string;
 }
 
@@ -165,7 +166,10 @@ export type RequestTargetMetadataRecord =
   | ResourceRequestTargetMetadataRecord
   | TOTPRequestTargetMetadataRecord;
 
-export type RequestMetadataAction = 'secret.reveal' | 'resource.view' | 'totp.reveal';
+export type RequestMetadataAction = Extract<
+  Capability,
+  'secret.value.read' | 'resource.view' | 'totp.code.read'
+>;
 
 export interface GrantMetadataRecord {
   id: string;
@@ -678,14 +682,14 @@ function candidateTuple<T>(
   return { id: getId(record), sortKey: normalizeSortKey(getSearchText(record)) };
 }
 
-async function collectAuthorized<T>(
+async function collectAuthorized<TSource, TAuthorized = TSource>(
   query: NormalizedMetadataQuery,
-  fetch: (criteria: SubjectBoundMetadataCriteria) => Promise<T[]>,
-  getId: (record: T) => string,
-  getSearchText: (record: T) => string,
-  authorize: (record: T) => Promise<AuthorizedRecord<T> | null>
-): Promise<AuthorizedRecord<T>[]> {
-  const authorized: AuthorizedRecord<T>[] = [];
+  fetch: (criteria: SubjectBoundMetadataCriteria) => Promise<TSource[]>,
+  getId: (record: TSource) => string,
+  getSearchText: (record: TSource) => string,
+  authorize: (record: TSource) => Promise<AuthorizedRecord<TAuthorized> | null>
+): Promise<AuthorizedRecord<TAuthorized>[]> {
+  const authorized: AuthorizedRecord<TAuthorized>[] = [];
   const batchLimit = query.limit + 1;
   let after = query.cursor ? { sortKey: query.cursor.sortKey, id: query.cursor.id } : null;
 
@@ -834,15 +838,17 @@ function validateRequestMetadata(record: RequestMetadataRecord): void {
   const target = record.target as RequestTargetMetadataRecord & Record<string, unknown>;
   const sharedInvalid =
     record.resourceId !== target.resourceId ||
-    !target.resourceId ||
-    !target.targetVersion ||
+    typeof target.resourceId !== 'string' ||
+    target.resourceId.trim().length === 0 ||
+    typeof target.targetVersion !== 'string' ||
+    target.targetVersion.trim().length === 0 ||
     (record.grant !== null && record.grant.requestId !== record.id);
   let targetInvalid = false;
 
   switch (target.kind) {
     case 'SECRET':
       targetInvalid =
-        record.action !== 'secret.reveal' ||
+        record.action !== 'secret.value.read' ||
         typeof target.targetKey !== 'string' ||
         target.targetKey.length === 0 ||
         'totpAccountId' in target;
@@ -853,7 +859,7 @@ function validateRequestMetadata(record: RequestMetadataRecord): void {
       break;
     case 'TOTP_ACCOUNT':
       targetInvalid =
-        record.action !== 'totp.reveal' ||
+        record.action !== 'totp.code.read' ||
         typeof target.totpAccountId !== 'string' ||
         target.totpAccountId.length === 0 ||
         'targetKey' in target;
@@ -1075,13 +1081,17 @@ export class MetadataQueryService {
   ): Promise<MetadataPage<TOTPMetadataDTO>> {
     const normalized = normalizeQuery('TOTP_ACCOUNT', query);
     const subjectId = metadataAuthorizationSubject(principal);
-    const candidates = await collectAuthorized(
+    interface TieredTOTPRecord {
+      metadata: TOTPMetadataRecord;
+      detailed: boolean;
+    }
+    const authorized = await collectAuthorized<TOTPMetadataRecord, TieredTOTPRecord>(
       normalized,
       (criteria) => this.source.listTOTPCandidates(subjectId, criteria),
       (record: TOTPMetadataRecord) => (record.scope === 'LINKED' ? record.resourceId : record.id),
       (record) => (record.scope === 'LINKED' ? record.resourceId : record.id),
-      (record) =>
-        authorizeRecord(
+      async (record) => {
+        const accountAuthorization = await authorizeRecord(
           principal,
           'TOTP_ACCOUNT',
           record,
@@ -1095,30 +1105,53 @@ export class MetadataQueryService {
             linkVersion: record.scope === 'LINKED' ? record.linkVersion : undefined,
           },
           this.evaluate
-        )
-    );
-    interface TieredTOTPRecord {
-      metadata: TOTPMetadataRecord;
-      detailed: boolean;
-    }
-    const authorized: AuthorizedRecord<TieredTOTPRecord>[] = [];
-    for (const item of candidates) {
-      const record = item.record;
-      const metadataRead = item.capabilities.decisions.find(
-        (decision) => decision.capability === 'totp.metadata.read'
-      );
-      const detailed =
-        metadataRead?.allowed === true &&
-        metadataRead.decisionCode === 'ALLOW' &&
-        metadataRead.authoritySources.some((source) =>
-          ['TOTP_OWNER', 'PROJECT_OWNER', 'RESOURCE_OWNER'].includes(source)
         );
-      if (record.scope === 'PERSONAL' && !detailed) continue;
-      authorized.push({
-        record: { metadata: record, detailed },
-        capabilities: item.capabilities,
-      });
-    }
+        if (!accountAuthorization) return null;
+
+        const metadataRead = accountAuthorization.capabilities.decisions.find(
+          (decision) => decision.capability === 'totp.metadata.read'
+        );
+        const detailed =
+          metadataRead?.allowed === true &&
+          metadataRead.decisionCode === 'ALLOW' &&
+          metadataRead.authoritySources.some((source) =>
+            ['TOTP_OWNER', 'PROJECT_OWNER', 'RESOURCE_OWNER'].includes(source)
+          );
+        if (record.scope === 'PERSONAL') {
+          return detailed
+            ? {
+                record: { metadata: record, detailed },
+                capabilities: accountAuthorization.capabilities,
+              }
+            : null;
+        }
+        if (detailed) {
+          return {
+            record: { metadata: record, detailed },
+            capabilities: accountAuthorization.capabilities,
+          };
+        }
+
+        const resourceAuthorization = await authorizeRecord(
+          principal,
+          'RESOURCE',
+          record,
+          {
+            projectId: record.projectId,
+            environmentId: record.environmentId,
+            resourceId: record.resourceId,
+            targetVersion: record.resourceVersion,
+          },
+          this.evaluate
+        );
+        return resourceAuthorization
+          ? {
+              record: { metadata: record, detailed },
+              capabilities: resourceAuthorization.capabilities,
+            }
+          : null;
+      }
+    );
     return paginate(
       'TOTP_ACCOUNT',
       authorized,
