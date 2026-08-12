@@ -320,6 +320,10 @@ describe('System API E2E Tests', () => {
       assert.strictEqual(response.statusCode, 405);
       const data = JSON.parse(response.payload);
       assert.strictEqual(data.error, 'method_not_allowed');
+      assert.strictEqual(
+        data.message,
+        'Secret value retrieval is unavailable. PUT replaces secrets and does not redeem access.'
+      );
       assert.strictEqual(response.headers.allow, 'PUT');
       assert.strictEqual(boundaryCalls, 0);
     });

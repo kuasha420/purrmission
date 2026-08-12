@@ -120,6 +120,17 @@ describe('Operations Scripts', () => {
       assert.match(deployWorkflow, /pnpm prisma:deploy/);
       assert.match(deployWorkflow, /scripts\/deploy-migrations\.ts/);
       assert.match(deployWorkflow, /scripts\/reconcile-guardians-owners\.ts/);
+      for (const script of [
+        'scripts/deploy-migrations.ts',
+        'scripts/reconcile-guardians-owners.ts',
+        'scripts/validate-env.cjs',
+      ]) {
+        assert.match(
+          deployWorkflow,
+          new RegExp(`- ['"]${script.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}['"]`),
+          `${script} must trigger the deploy workflow when it changes`
+        );
+      }
     });
   });
 

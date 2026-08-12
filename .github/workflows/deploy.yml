@@ -18,6 +18,10 @@ on:
       - '.github/workflows/deploy.yml'
       # Database schema
       - 'prisma/**'
+      # Supported migration and environment-validation entrypoints packaged in the deploy artifact
+      - 'scripts/deploy-migrations.ts'
+      - 'scripts/reconcile-guardians-owners.ts'
+      - 'scripts/validate-env.cjs'
   workflow_dispatch:
 
 jobs:

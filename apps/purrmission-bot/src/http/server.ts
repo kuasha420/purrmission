@@ -574,7 +574,8 @@ export function createHttpServer(deps: HttpServerDeps): FastifyInstance {
       // creation, grant consumption, or value-bearing repository read.
       return rep.status(405).header('allow', 'PUT').send({
         error: 'method_not_allowed',
-        message: 'Secret values require the grant-consuming redemption endpoint',
+        message:
+          'Secret value retrieval is unavailable. PUT replaces secrets and does not redeem access.',
       });
     }
   );
