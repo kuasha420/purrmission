@@ -2,14 +2,16 @@ import 'dotenv/config';
 
 import { PrismaClient, type Prisma } from '@prisma/client';
 import { spawnSync } from 'node:child_process';
+import { DatabaseSync } from 'node:sqlite';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 
 import { runGuardianReconciliation } from './reconcile-guardians-owners.js';
+import { restoreLegacyAuditLogs, stageLegacyAuditLogs } from './legacy-audit-upgrade.js';
 
 const RECONCILIATION_TABLES = ['Environment', 'Guardian', 'Project', 'Resource'] as const;
 const HARDENING_MIGRATION = '20260724110200_rbac_dashboard_hardening_remediations';
-const LEGACY_STAGE_TABLES = ['AuditLog', 'Project', 'Resource', 'TOTPAccount'] as const;
+const LEGACY_STAGE_TABLES = ['Project', 'Resource', 'TOTPAccount'] as const;
 const LEGACY_STAGE_TABLE_NAMES = LEGACY_STAGE_TABLES.map((table) => `_purrmission_stage_${table}`);
 
 export type MigrationDatabaseState = 'FRESH' | 'INITIALIZED';
@@ -31,6 +33,15 @@ export function classifyMigrationDatabaseTables(
     );
   }
   return 'INITIALIZED';
+}
+
+export function resolveSqliteDatabasePath(databaseUrl: string, cwd = process.cwd()): string {
+  if (!databaseUrl.startsWith('file:')) {
+    throw new Error('The supported migration wrapper currently requires a SQLite file: URL.');
+  }
+  const value = decodeURIComponent(databaseUrl.slice('file:'.length).split('?')[0]);
+  if (!value) throw new Error('DATABASE_URL must identify a SQLite database file.');
+  return path.isAbsolute(value) ? value : path.resolve(cwd, 'prisma', value);
 }
 
 export async function runMigrationPreflight(prisma: PrismaClient): Promise<MigrationDatabaseState> {
@@ -107,16 +118,6 @@ export async function stageLegacyHardeningRows(prisma: PrismaClient): Promise<bo
   const stageAlreadyExists = presentStageTables.length > 0;
   if (await hardeningMigrationApplied(prisma)) return stageAlreadyExists;
 
-  const unmappableAuditRows = await prisma.$queryRawUnsafe<Array<{ count: bigint }>>(
-    `SELECT COUNT(*) AS "count" FROM "AuditLog"
-     WHERE "resolverId" IS NOT NULL OR "context" IS NOT NULL`
-  );
-  if (Number(unmappableAuditRows[0]?.count ?? 0) > 0) {
-    throw new Error(
-      'Legacy AuditLog rows contain resolver/context data that cannot be safely mapped by the compatibility preflight. Refusing a lossy upgrade; complete the #118 audit migration path first.'
-    );
-  }
-
   await prisma.$executeRawUnsafe('PRAGMA foreign_keys=OFF');
   try {
     await prisma.$transaction(async (tx) => {
@@ -187,16 +188,6 @@ export async function restoreLegacyHardeningRows(prisma: PrismaClient): Promise<
               "createdAt", "updatedAt"
        FROM "_purrmission_stage_Project"`
     );
-    await tx.$executeRawUnsafe(
-      `INSERT INTO "AuditLog"
-         ("id", "schemaVersion", "eventType", "outcomeCode", "actorType", "actorId",
-          "resourceId", "payload", "createdAt")
-       SELECT "id", 1, "action", "status",
-              CASE WHEN "actorId" IS NULL THEN 'SYSTEM' ELSE 'DISCORD_USER' END,
-              "actorId", "resourceId", NULL, "createdAt"
-       FROM "_purrmission_stage_AuditLog"`
-    );
-
     for (const table of LEGACY_STAGE_TABLES) {
       const actual = await rowCount(tx, table);
       if (actual !== expected.get(table)) {
@@ -221,9 +212,38 @@ export async function restoreLegacyHardeningRows(prisma: PrismaClient): Promise<
   });
 }
 
+function runPrismaDeploy(): void {
+  const result = spawnSync('pnpm', ['exec', 'prisma', 'migrate', 'deploy'], {
+    cwd: process.cwd(),
+    env: process.env,
+    stdio: 'inherit',
+  });
+  if (result.error) throw result.error;
+  if (result.status !== 0) {
+    throw new Error(`prisma migrate deploy exited with status ${result.status ?? 'unknown'}.`);
+  }
+}
+
 export async function deployMigrations(): Promise<void> {
-  if (!process.env.DATABASE_URL) {
+  const databaseUrl = process.env.DATABASE_URL;
+  if (!databaseUrl) {
     throw new Error('DATABASE_URL is required for migration deployment.');
+  }
+
+  const preflight = new PrismaClient();
+  let databaseState: MigrationDatabaseState;
+  try {
+    databaseState = await runMigrationPreflight(preflight);
+  } finally {
+    await preflight.$disconnect();
+  }
+
+  const databasePath = resolveSqliteDatabasePath(databaseUrl);
+  const auditStage = new DatabaseSync(databasePath);
+  try {
+    stageLegacyAuditLogs(auditStage);
+  } finally {
+    auditStage.close();
   }
 
   const prisma = new PrismaClient();
@@ -235,7 +255,6 @@ export async function deployMigrations(): Promise<void> {
       console.log('🔒 Recoverable hardening stage detected; resuming migration deployment.');
       stagedHardeningRows = await stageLegacyHardeningRows(prisma);
     } else {
-      const databaseState = await runMigrationPreflight(prisma);
       stagedHardeningRows =
         databaseState === 'INITIALIZED' ? await stageLegacyHardeningRows(prisma) : false;
     }
@@ -243,17 +262,7 @@ export async function deployMigrations(): Promise<void> {
     await prisma.$disconnect();
   }
 
-  const result = spawnSync('pnpm', ['exec', 'prisma', 'migrate', 'deploy'], {
-    cwd: process.cwd(),
-    env: process.env,
-    stdio: 'inherit',
-  });
-  if (result.error) {
-    throw result.error;
-  }
-  if (result.status !== 0) {
-    throw new Error(`prisma migrate deploy exited with status ${result.status ?? 'unknown'}.`);
-  }
+  runPrismaDeploy();
 
   if (stagedHardeningRows) {
     const restoreClient = new PrismaClient();
@@ -262,6 +271,13 @@ export async function deployMigrations(): Promise<void> {
     } finally {
       await restoreClient.$disconnect();
     }
+  }
+
+  const auditRestore = new DatabaseSync(databasePath);
+  try {
+    restoreLegacyAuditLogs(auditRestore);
+  } finally {
+    auditRestore.close();
   }
 }
 

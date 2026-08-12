@@ -57,7 +57,7 @@ describe('Pull Command', () => {
     }
   });
 
-  it('should poll and resume a pull when status is 202 (Pending Approval)', async () => {
+  it('fails closed immediately when status is 202 (Pending Approval)', async () => {
     // Mock config.get for token
     mock.method(config, 'get', (key: string) => {
       if (key === 'token') return 'test-token';

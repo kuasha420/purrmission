@@ -54,7 +54,6 @@ import {
 } from './repositories.js';
 import type { AuditScope } from './audit.js';
 import crypto from 'node:crypto';
-import type { Prisma } from '@prisma/client';
 
 /**
  * In-memory implementation of ResourceRepository.

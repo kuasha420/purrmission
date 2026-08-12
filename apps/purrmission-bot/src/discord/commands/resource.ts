@@ -20,7 +20,6 @@ import type {
   AccessRequestContextWithExtras,
   Capability,
 } from '../../domain/models.js';
-import { createDiscordPrincipal } from '../../domain/principal.js';
 import {
   createApprovalButtons,
   createAccessRequestEmbed,

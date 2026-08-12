@@ -355,7 +355,7 @@ describe('Operations Scripts', () => {
         ],
         { encoding: 'utf8' }
       ).trim();
-      assert.equal(auditRow, 'FIELD_ACCESSED:SUCCESS:SYSTEM');
+      assert.equal(auditRow, 'FIELD_ACCESSED:SUCCESS:SERVICE');
       assert.equal(
         execFileSync(
           'sqlite3',
@@ -371,7 +371,7 @@ describe('Operations Scripts', () => {
       );
     });
 
-    it('fails closed instead of silently dropping unmappable legacy audit context', () => {
+    it('safely maps legacy audit context through the signed v2 restoration path', () => {
       const databasePath = createTemporaryDatabase('audit-context-blocker');
       applyMigrationsBeforeGuardianInvariant(databasePath, true);
       applySql(
@@ -381,16 +381,18 @@ describe('Operations Scripts', () => {
       );
 
       const result = runSupportedDeploy(databasePath);
-      assert.equal(result.status, 1);
-      assert.match(
-        `${result.stdout}\n${result.stderr}`,
-        /cannot be safely mapped by the compatibility preflight/
-      );
+      assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
       assert.equal(
-        execFileSync('sqlite3', ['-noheader', databasePath, `SELECT COUNT(*) FROM "AuditLog";`], {
-          encoding: 'utf8',
-        }).trim(),
-        '1'
+        execFileSync(
+          'sqlite3',
+          [
+            '-noheader',
+            databasePath,
+            `SELECT "schemaVersion" || ':' || "eventType" FROM "AuditLog" WHERE "id" = 'legacy-audit-context';`,
+          ],
+          { encoding: 'utf8' }
+        ).trim(),
+        '2:FIELD_ACCESSED'
       );
     });
 
@@ -530,7 +532,10 @@ describe('Operations Scripts', () => {
           { encoding: 'utf8' }
         ).trim()
       );
-      assert.equal(appliedCount, 16);
+      const migrationCount = fs
+        .readdirSync(path.join(process.cwd(), 'prisma', 'migrations'), { withFileTypes: true })
+        .filter((entry) => entry.isDirectory()).length;
+      assert.equal(appliedCount, migrationCount);
     });
   });
 });

@@ -39,7 +39,7 @@ import {
   isEffectiveOwner,
   hasCapability,
 } from './policy.js';
-import { createDiscordPrincipal, validatePrincipal } from './principal.js';
+import { createDiscordPrincipal } from './principal.js';
 import { generateTOTPCode } from './totp.js';
 import { computeKeyedDigest, deterministicUUID } from './crypto.js';
 import { DomainPorts } from './ports.js';
@@ -1347,8 +1347,8 @@ export class ResourceService {
             outcomeCode: 'SUCCESS',
             capability: 'totp.link.manage',
             decisionCode: 'ALLOW',
-            reasonCode: isResourceOwner ? 'OWNER' : 'AUTHENTICATED_SUBJECT',
-            authoritySources: [isResourceOwner ? 'RESOURCE_OWNER' : 'AUTHENTICATED_SUBJECT'],
+            reasonCode: unlinkDecision.reasonCode,
+            authoritySources: unlinkDecision.authoritySources,
             targetType: 'TOTP_ACCOUNT',
             targetId: resource.totpAccountId,
             actorType: actorPrincipal.type,

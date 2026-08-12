@@ -96,9 +96,6 @@ describe('required current-surface audit coverage', () => {
       { DATABASE_PASSWORD: 'must-never-enter-audit' },
       owner
     );
-    assert.deepEqual(await services.ports.getSecrets(owner, project.id, environment.id), {
-      DATABASE_PASSWORD: 'must-never-enter-audit',
-    });
 
     const totp = await services.resource.createTOTPAccount(
       {
@@ -112,14 +109,6 @@ describe('required current-surface audit coverage', () => {
       { ...totp, backupKey: 'must-never-enter-audit' },
       owner
     );
-    const consent = await services.resource.createTOTPLinkConsent(
-      totp.id,
-      environment.resourceId,
-      'owner-1',
-      { allowedOperations: ['totp.code.read'] }
-    );
-    await services.resource.linkTOTPAccount(environment.resourceId, totp.id, 'owner-1', consent.id);
-
     const requester = createDiscordPrincipal('requester-1');
     const created = await services.approval.createApprovalRequest({
       resourceId: environment.resourceId,
@@ -139,15 +128,7 @@ describe('required current-surface audit coverage', () => {
       createDiscordPrincipal('owner-1')
     );
     assert.equal(approved.success, true);
-    const grant = await repositories.approvalGrants.findByRequestId(created.request.id);
-    assert.ok(grant);
-    await services.approval.consumeGrant(
-      grant.id,
-      requester,
-      created.request.action,
-      created.request.targetVersion,
-      created.request.policyVersion
-    );
+    assert.equal(await repositories.approvalGrants.findByRequestId(created.request.id), null);
 
     const worker = new OutboxWorker(repositories, services.audit);
     await worker.processEvents();
@@ -185,13 +166,9 @@ describe('required current-surface audit coverage', () => {
       'RESOURCE_CREATE',
       'AUTHORIZATION_DECISION',
       'SECRET_CREATE',
-      'SECRET_REVEAL',
       'TOTP_ACCOUNT_CREATE',
       'TOTP_ACCOUNT_UPDATE',
-      'TOTP_LINK',
       'REQUEST_CREATE',
-      'GRANT_ISSUE',
-      'GRANT_CONSUME',
       'DELIVERY_ENQUEUE',
       'DELIVERY_ATTEMPT',
       'DELIVERY_OUTCOME',

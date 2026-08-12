@@ -312,23 +312,6 @@ class MemApprovalRepo implements ApprovalRequestRepository {
   async findByResourceId(resourceId: string): Promise<ApprovalRequest[]> {
     return this.requests.filter((r) => r.resourceId === resourceId);
   }
-  async findPending(
-    resourceId: string,
-    requesterId: string,
-    action: string,
-    targetKey: string | null
-  ): Promise<ApprovalRequest | null> {
-    return (
-      this.requests.find(
-        (r) =>
-          r.resourceId === resourceId &&
-          r.requesterId === requesterId &&
-          r.action === action &&
-          r.targetKey === targetKey &&
-          r.status === 'PENDING'
-      ) ?? null
-    );
-  }
   async findPendingByResourceId(resourceId: string): Promise<ApprovalRequest[]> {
     return this.requests.filter((r) => r.resourceId === resourceId && r.status === 'PENDING');
   }

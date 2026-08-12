@@ -99,6 +99,14 @@ describe('twoFa command module', () => {
       } as unknown as CommandContext['repositories'],
       services: {
         audit: mockAuditService as unknown as AuditService,
+        resource: {
+          createTOTPAccount: mock.fn(async (input: Parameters<TOTPRepository['create']>[0]) =>
+            mockTotpRepository.create(input)
+          ),
+          updateTOTPAccount: mock.fn(async (account: TOTPAccount) =>
+            mockTotpRepository.update(account)
+          ),
+        },
       } as unknown as CommandContext['services'],
     };
 

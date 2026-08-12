@@ -234,7 +234,12 @@ describe('Resource API', () => {
       expiresAt: new Date(Date.now() + 3600000),
       revokedAt: null,
     });
-    await services.resource.createField(resourceId, 'EXISTING', 'owner-created');
+    await services.resource.createField(
+      resourceId,
+      'EXISTING',
+      'owner-created',
+      createDiscordPrincipal(userId)
+    );
     const custodyOwnedTotp = await repositories.totp.create({
       ownerDiscordUserId: 'separate-custody-owner',
       accountName: 'Custody-owned account',
