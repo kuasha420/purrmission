@@ -366,14 +366,14 @@ class RepositoryMetadataSource implements SubjectBoundMetadataSource {
   }
 
   async listRequestCandidates(subjectId: string, criteria: SubjectBoundMetadataCriteria) {
-    const records = await Promise.all(
-      (await this.requestsForSubject(subjectId)).map((request) => this.requestRecord(request))
-    );
-    return page(
-      records.filter((record) => record !== null),
+    const candidates = page(
+      await this.requestsForSubject(subjectId),
       criteria,
       ({ id }) => id,
       ({ createdAt, id }) => `${createdAt.toISOString()}\0${id}`
+    );
+    return (await Promise.all(candidates.map((request) => this.requestRecord(request)))).filter(
+      (record) => record !== null
     );
   }
 }
