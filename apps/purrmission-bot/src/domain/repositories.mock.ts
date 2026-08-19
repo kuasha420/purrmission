@@ -52,7 +52,7 @@ import {
   CallbackDestinationRepository,
   OutboxRepository,
 } from './repositories.js';
-import type { AuditScope } from './audit.js';
+import { containsAuditSubject, type AuditScope } from './audit.js';
 import crypto from 'node:crypto';
 
 /**
@@ -595,6 +595,8 @@ export class InMemoryAuditRepository implements AuditRepository {
   private logs: AuditLog[] = [];
   private checkpoints: import('./models.js').AuditCheckpoint[] = [];
 
+  constructor(private readonly projects?: ProjectRepository) {}
+
   async create(input: CreateAuditLogInput, _tx?: Prisma.TransactionClient): Promise<AuditLog> {
     const log: AuditLog = {
       ...input,
@@ -611,11 +613,40 @@ export class InMemoryAuditRepository implements AuditRepository {
   }
 
   async findByScope(scope: AuditScope): Promise<AuditLog[]> {
+    const projectEnvironments =
+      scope.type === 'PROJECT' && this.projects
+        ? await this.projects.listEnvironments(scope.id)
+        : [];
+    const environmentIds = new Set(projectEnvironments.map(({ id }) => id));
+    const resourceIds = new Set(
+      projectEnvironments.flatMap(({ resourceId }) =>
+        resourceId === undefined ? [] : [resourceId]
+      )
+    );
     return this.logs.filter((log) => {
-      if (scope.type === 'PROJECT') return log.projectId === scope.id;
+      if (scope.type === 'PROJECT') {
+        return (
+          log.projectId === scope.id ||
+          (log.environmentId !== null &&
+            log.environmentId !== undefined &&
+            environmentIds.has(log.environmentId)) ||
+          (log.resourceId !== null &&
+            log.resourceId !== undefined &&
+            resourceIds.has(log.resourceId))
+        );
+      }
       if (scope.type === 'RESOURCE') return log.resourceId === scope.id;
       if (scope.type === 'REQUEST') return log.requestId === scope.id;
-      return log.actorId === scope.id;
+      return containsAuditSubject(
+        {
+          targetId: log.targetId,
+          principalId: log.principalId,
+          actorId: log.actorId,
+          resolverId: log.resolverId,
+          payload: log.payload,
+        },
+        scope.id
+      );
     });
   }
 
@@ -1163,6 +1194,7 @@ export class InMemoryCallbackDestinationRepository implements CallbackDestinatio
  */
 export function createInMemoryRepositories(): Repositories {
   const resources = new InMemoryResourceRepository();
+  const projects = new InMemoryProjectRepository();
   return {
     transaction: (callback) => callback({} as Prisma.TransactionClient),
     resources,
@@ -1170,9 +1202,9 @@ export function createInMemoryRepositories(): Repositories {
     approvalRequests: new InMemoryApprovalRequestRepository(),
     totp: new InMemoryTOTPRepository(resources),
     resourceFields: new InMemoryResourceFieldRepository(resources),
-    audit: new InMemoryAuditRepository(),
+    audit: new InMemoryAuditRepository(projects),
     auth: new InMemoryAuthRepository(),
-    projects: new InMemoryProjectRepository(),
+    projects,
     outbox: new InMemoryOutboxRepository(),
     credentials: new InMemoryCredentialRepository(),
     approvalGrants: new InMemoryApprovalGrantRepository(),

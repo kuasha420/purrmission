@@ -281,6 +281,41 @@ export interface AuditScope {
   id: string;
 }
 
+function isSubjectIdentifier(value: string, subjectId: string): boolean {
+  return value === subjectId || value.endsWith(`:${subjectId}`);
+}
+
+/** Match a privacy subject in identifier-bearing envelope fields or nested payload values. */
+export function containsAuditSubject(value: unknown, subjectId: string): boolean {
+  if (typeof value === 'string') return isSubjectIdentifier(value, subjectId);
+  if (Array.isArray(value)) return value.some((entry) => containsAuditSubject(entry, subjectId));
+  if (value && typeof value === 'object') {
+    return Object.values(value).some((entry) => containsAuditSubject(entry, subjectId));
+  }
+  return false;
+}
+
+/** Replace exact and namespaced subject identifiers without changing unrelated strings. */
+function pseudonymizeAuditSubject(value: unknown, subjectId: string, pseudonym: string): unknown {
+  if (typeof value === 'string') {
+    if (value === subjectId) return pseudonym;
+    const suffix = `:${subjectId}`;
+    return value.endsWith(suffix) ? `${value.slice(0, -subjectId.length)}${pseudonym}` : value;
+  }
+  if (Array.isArray(value)) {
+    return value.map((entry) => pseudonymizeAuditSubject(entry, subjectId, pseudonym));
+  }
+  if (value && typeof value === 'object') {
+    return Object.fromEntries(
+      Object.entries(value).map(([key, entry]) => [
+        key,
+        pseudonymizeAuditSubject(entry, subjectId, pseudonym),
+      ])
+    );
+  }
+  return value;
+}
+
 export interface AuditReadRequest {
   scope: AuditScope;
   projection: 'FULL' | 'OPERATIONAL' | 'QUEUE' | 'OWN';
@@ -523,19 +558,23 @@ export class AuditService {
     await this.deps.repositories.transaction(async (tx) => {
       for (const event of events) {
         const payload = event.payload
-          ? Object.fromEntries(
-              Object.entries(event.payload).map(([key, value]) => [
-                key,
-                value === subjectId ? pseudonym : value,
-              ])
-            )
+          ? (pseudonymizeAuditSubject(event.payload, subjectId, pseudonym) as AuditMetadata)
           : null;
         const unsigned = {
           ...event,
-          targetId: event.targetId === subjectId ? pseudonym : event.targetId,
-          principalId: event.principalId === subjectId ? pseudonym : event.principalId,
-          actorId: event.actorId === subjectId ? pseudonym : event.actorId,
-          resolverId: event.resolverId === subjectId ? pseudonym : event.resolverId,
+          targetId: pseudonymizeAuditSubject(event.targetId, subjectId, pseudonym) as
+            | string
+            | null
+            | undefined,
+          principalId: pseudonymizeAuditSubject(event.principalId, subjectId, pseudonym) as string,
+          actorId: pseudonymizeAuditSubject(event.actorId, subjectId, pseudonym) as
+            | string
+            | null
+            | undefined,
+          resolverId: pseudonymizeAuditSubject(event.resolverId, subjectId, pseudonym) as
+            | string
+            | null
+            | undefined,
           integrityKeyId: this.config.auditIntegrityKeyId,
           payload,
         };

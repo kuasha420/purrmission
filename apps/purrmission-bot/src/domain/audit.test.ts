@@ -354,12 +354,17 @@ describe('AuditService', () => {
     const service = new AuditService({ repositories }, config);
     await service.log(
       event({
-        actorId: 'privacy-user',
-        resolverId: 'privacy-user',
+        principalId: 'discord:privacy-user',
+        actorId: 'discord:privacy-user',
+        resolverId: 'service:privacy-user',
         targetType: 'SUBJECT',
-        targetId: 'privacy-user',
+        targetId: 'SUBJECT:privacy-user',
         payload: { reason: 'privacy-user' },
       })
+    );
+    assert.equal(
+      (await repositories.audit.findByScope({ type: 'SUBJECT', id: 'privacy-user' })).length,
+      1
     );
     assert.equal(await service.pseudonymizeSubject('privacy-user'), 1);
     assert.equal(
@@ -372,5 +377,35 @@ describe('AuditService', () => {
     assert.equal(JSON.stringify(transformed).includes('privacy-user'), false);
     assert.ok(transformed.every((entry) => service.verifyIntegrity(entry)));
     assert.ok(transformed.some(({ eventType }) => eventType === 'PRIVACY_PSEUDONYMIZE'));
+  });
+
+  it('includes descendant environment and resource events in project scope', async () => {
+    const repositories = createInMemoryRepositories();
+    const service = new AuditService({ repositories }, config);
+    const project = await repositories.projects.createProject({ name: 'Scoped', ownerId: 'owner' });
+    const environment = await repositories.projects.createEnvironment({
+      projectId: project.id,
+      name: 'Production',
+      slug: 'prod',
+      resourceId: 'resource-child',
+    });
+
+    const environmentEvent = await service.log(
+      event({
+        targetType: 'ENVIRONMENT',
+        targetId: environment.id,
+        resourceId: null,
+        environmentId: environment.id,
+      })
+    );
+    const resourceEvent = await service.log(
+      event({ targetId: 'resource-child', resourceId: 'resource-child', projectId: null })
+    );
+
+    const scoped = await repositories.audit.findByScope({ type: 'PROJECT', id: project.id });
+    assert.deepEqual(
+      new Set(scoped.map(({ id }) => id)),
+      new Set([environmentEvent.id, resourceEvent.id])
+    );
   });
 });

@@ -13,7 +13,7 @@ import { randomUUID } from 'crypto';
 import { decryptValue, encryptValue } from '../infra/crypto.js';
 import { logger } from '../logging/logger.js';
 import { DuplicateError } from './errors.js';
-import type { AuditScope } from './audit.js';
+import { containsAuditSubject, type AuditScope } from './audit.js';
 import type {
   AddGuardianInput,
   ApiToken,
@@ -1106,14 +1106,50 @@ export class PrismaAuditRepository implements AuditRepository {
   }
 
   async findByScope(scope: AuditScope): Promise<AuditLog[]> {
+    if (scope.type === 'SUBJECT') {
+      const rows = await this.prisma.auditLog.findMany({ orderBy: { createdAt: 'desc' } });
+      return rows
+        .map((row) => this.mapPrismaToDomain(row))
+        .filter((event) =>
+          containsAuditSubject(
+            {
+              targetId: event.targetId,
+              principalId: event.principalId,
+              actorId: event.actorId,
+              resolverId: event.resolverId,
+              payload: event.payload,
+            },
+            scope.id
+          )
+        );
+    }
+    if (scope.type === 'PROJECT') {
+      const environments = await this.prisma.environment.findMany({
+        where: { projectId: scope.id },
+        select: { id: true, resourceId: true },
+      });
+      const environmentIds = environments.map(({ id }) => id);
+      const resourceIds = environments.flatMap(({ resourceId }) =>
+        resourceId === null ? [] : [resourceId]
+      );
+      const rows = await this.prisma.auditLog.findMany({
+        where: {
+          OR: [
+            { projectId: scope.id },
+            ...(environmentIds.length > 0 ? [{ environmentId: { in: environmentIds } }] : []),
+            ...(resourceIds.length > 0 ? [{ resourceId: { in: resourceIds } }] : []),
+          ],
+        },
+        orderBy: { createdAt: 'desc' },
+      });
+      return rows.map((row) => this.mapPrismaToDomain(row));
+    }
     const where: Prisma.AuditLogWhereInput =
-      scope.type === 'PROJECT'
-        ? { projectId: scope.id }
-        : scope.type === 'RESOURCE'
-          ? { resourceId: scope.id }
-          : scope.type === 'REQUEST'
-            ? { requestId: scope.id }
-            : { actorId: scope.id };
+      scope.type === 'RESOURCE'
+        ? { resourceId: scope.id }
+        : scope.type === 'REQUEST'
+          ? { requestId: scope.id }
+          : {};
     const rows = await this.prisma.auditLog.findMany({
       where,
       orderBy: { createdAt: 'desc' },

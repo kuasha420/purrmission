@@ -231,13 +231,20 @@ tables fails closed.
 | `ENCRYPTION_KEY`               | **Required** - 32-byte hex for at-rest encryption          |
 | `AUDIT_INTEGRITY_KEY`          | **Required** - purpose-specific 32-byte hex audit HMAC key |
 | `AUDIT_INTEGRITY_KEY_ID`       | Rotatable audit HMAC key identifier (default `audit-v1`)   |
+| `AUDIT_INTEGRITY_KEYS_JSON`    | Historical audit keys as `{\"key-id\":\"64-char-hex\"}`    |
 | `OUTBOX_INTEGRITY_KEY`         | **Required** - distinct 32-byte hex outbox HMAC key        |
 | `OUTBOX_INTEGRITY_KEY_ID`      | Rotatable outbox HMAC key identifier (default `outbox-v1`) |
+| `OUTBOX_INTEGRITY_KEYS_JSON`   | Historical outbox keys as `{\"key-id\":\"64-char-hex\"}`   |
 | `AUDIT_RETENTION_DAYS`         | Audit retention cutoff in days (default `365`)             |
 | `AUDIT_CHECKPOINT_INTERVAL`    | Integrity checkpoint cadence in events (default `1000`)    |
 | `EXTERNAL_API_URL`             | Public API URL (e.g., `https://purrmission.example.com`)   |
 | `CONTEXT7_API_KEY`             | Optional - API key for Context7 MCP                        |
 | `GITHUB_PERSONAL_ACCESS_TOKEN` | Optional - token for GitHub MCP tooling                    |
+
+When rotating either integrity key, change the active key and ID together and retain every prior
+ID/key pair in the corresponding `*_KEYS_JSON` object. Audit keys must remain available while rows
+signed by them are retained; outbox keys must remain available until all envelopes signed by them
+reach a terminal state.
 
 Generate an encryption key:
 

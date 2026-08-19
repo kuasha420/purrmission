@@ -87,6 +87,7 @@ export function createHttpServer(deps: HttpServerDeps): FastifyInstance {
       correlationId = resolveCorrelationId(request.headers['x-correlation-id']);
     } catch {
       void reply.status(400).send({ error: 'Invalid x-correlation-id header' });
+      done();
       return;
     }
     request.headers['x-correlation-id'] = correlationId;
@@ -96,6 +97,7 @@ export function createHttpServer(deps: HttpServerDeps): FastifyInstance {
     const causationId = request.headers['x-causation-id'];
     if (causationId !== undefined && !isValidCorrelationId(causationId)) {
       void reply.status(400).send({ error: 'Invalid x-causation-id header' });
+      done();
       return;
     }
 

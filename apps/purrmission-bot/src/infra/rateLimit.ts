@@ -15,6 +15,20 @@ interface TokenBucket {
  * e.g., "userId:resourceId:action"
  */
 type RateLimitKey = string;
+const LIMITER_CATEGORIES = new Set([
+  'device-flow-initiate',
+  'approve-session',
+  'token-poll',
+  'credential-validation-failure-check',
+  'get-2fa',
+]);
+
+/** Return only the operation category; limiter keys can contain credentials or subject IDs. */
+function limiterCategory(key: RateLimitKey): string {
+  const parts = key.split(':');
+  const candidate = parts.length === 2 ? parts[0] : parts.at(-1);
+  return candidate && LIMITER_CATEGORIES.has(candidate) ? candidate : 'unknown';
+}
 
 export class RateLimiter {
   private buckets: Map<RateLimitKey, TokenBucket> = new Map();
@@ -56,7 +70,7 @@ export class RateLimiter {
       return true;
     }
 
-    logger.warn('Rate limit exceeded', { limiterKey: key });
+    logger.warn('Rate limit exceeded', { limiterCategory: limiterCategory(key) });
     return false;
   }
 
