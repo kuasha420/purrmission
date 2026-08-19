@@ -4,6 +4,9 @@ import { ApiToken, Credential, Principal } from './models.js';
 import { logger } from '../logging/logger.js';
 import { computeKeyedDigest, computeAllKeyedDigests } from './crypto.js';
 import { rateLimiter } from '../infra/rateLimit.js';
+import { AuditService } from './audit.js';
+import { correlationStorage } from '../logging/correlationContext.js';
+import type { Prisma } from '@prisma/client';
 
 export class InvalidGrantError extends Error {
   constructor(message = 'invalid_grant') {
@@ -45,11 +48,56 @@ const DEFAULT_TOKEN_EXPIRY_DAYS = 90;
 export class AuthService {
   constructor(
     private readonly authRepo: AuthRepository,
-    private readonly credentialRepo?: CredentialRepository
-  ) {}
+    private readonly credentialRepo: CredentialRepository | undefined,
+    private readonly audit: AuditService,
+    private readonly transaction: <T>(
+      callback: (tx: Prisma.TransactionClient) => Promise<T>
+    ) => Promise<T>
+  ) {
+    if (!audit) throw new TypeError('AuthService requires an audit dependency.');
+  }
+
+  private get surface() {
+    return correlationStorage.getStore()?.surface ?? ('DOMAIN' as const);
+  }
+
+  private async runTransaction<T>(
+    callback: (tx: Prisma.TransactionClient) => Promise<T>
+  ): Promise<T> {
+    return this.transaction(callback);
+  }
 
   private hashToken(token: string): string {
     return createHash('sha256').update(token).digest('hex');
+  }
+
+  private async expireSession(
+    session: { id: string; userId?: string },
+    operation: string
+  ): Promise<void> {
+    await this.runTransaction(async (tx) => {
+      await this.authRepo.updateSessionStatus(session.id, 'EXPIRED', undefined, tx);
+      await this.audit.log(
+        {
+          eventFamily: 'AUTHENTICATION',
+          eventType: 'AUTH_SESSION_EXPIRE',
+          surface: this.surface,
+          operation,
+          outcomeCode: 'SUCCESS',
+          decisionCode: 'ALLOW',
+          reasonCode: 'SERVICE',
+          authoritySources: [],
+          targetType: 'SESSION',
+          targetId: session.id,
+          actorType: 'SERVICE',
+          principalId: 'service:auth-session-expiry',
+          actorId: session.userId ?? null,
+          authKind: 'SERVICE',
+          payload: {},
+        },
+        tx
+      );
+    });
   }
 
   /**
@@ -81,10 +129,27 @@ export class AuthService {
 
     const expiresAt = new Date(Date.now() + expiresIn * 1000);
 
-    await this.authRepo.createSession({
-      deviceCode,
-      userCode,
-      expiresAt,
+    await this.runTransaction(async (tx) => {
+      const session = await this.authRepo.createSession({ deviceCode, userCode, expiresAt }, tx);
+      await this.audit.log(
+        {
+          eventFamily: 'AUTHENTICATION',
+          eventType: 'AUTH_SESSION_INITIATE',
+          surface: this.surface,
+          operation: 'auth.device.initiate',
+          outcomeCode: 'SUCCESS',
+          decisionCode: 'ALLOW',
+          reasonCode: 'AUTHENTICATED_SUBJECT',
+          authoritySources: [],
+          targetType: 'SESSION',
+          targetId: session.id,
+          actorType: 'SERVICE',
+          principalId: 'system:auth-device-flow',
+          authKind: 'SERVICE',
+          payload: {},
+        },
+        tx
+      );
     });
 
     // For this Discord bot, we direct them to the slash command.
@@ -112,11 +177,33 @@ export class AuthService {
     if (!session) return false;
     if (session.status !== 'PENDING') return false;
     if (session.expiresAt < new Date()) {
-      await this.authRepo.updateSessionStatus(session.id, 'EXPIRED');
+      await this.expireSession(session, 'auth.device.approve.expire');
       return false;
     }
 
-    await this.authRepo.updateSessionStatus(session.id, 'APPROVED', userId);
+    await this.runTransaction(async (tx) => {
+      await this.authRepo.updateSessionStatus(session.id, 'APPROVED', userId, tx);
+      await this.audit.log(
+        {
+          eventFamily: 'AUTHENTICATION',
+          eventType: 'AUTH_SESSION_APPROVE',
+          surface: this.surface,
+          operation: 'auth.device.approve',
+          outcomeCode: 'SUCCESS',
+          decisionCode: 'ALLOW',
+          reasonCode: 'AUTHENTICATED_SUBJECT',
+          authoritySources: ['AUTHENTICATED_SUBJECT'],
+          targetType: 'SESSION',
+          targetId: session.id,
+          actorType: 'DISCORD_USER',
+          principalId: `discord:${userId}`,
+          actorId: userId,
+          authKind: 'DISCORD',
+          payload: {},
+        },
+        tx
+      );
+    });
     return true;
   }
 
@@ -140,7 +227,7 @@ export class AuthService {
 
     if (session.status === 'PENDING') {
       if (session.expiresAt < new Date()) {
-        await this.authRepo.updateSessionStatus(session.id, 'EXPIRED');
+        await this.expireSession(session, 'auth.device.poll.expire');
         throw new ExpiredTokenError();
       }
       return null; // Still pending
@@ -149,70 +236,95 @@ export class AuthService {
     if (session.status === 'APPROVED' && session.userId) {
       // Check expiry again to ensure session hasn't expired since approval
       if (session.expiresAt < new Date()) {
-        await this.authRepo.updateSessionStatus(session.id, 'EXPIRED');
+        await this.expireSession(session, 'auth.device.exchange.expire');
         throw new ExpiredTokenError();
-      }
-
-      // Atomically transition status from APPROVED to CONSUMED.
-      let transitioned = false;
-      if (typeof this.authRepo.transitionSessionStatus === 'function') {
-        transitioned = await this.authRepo.transitionSessionStatus(
-          session.id,
-          'APPROVED',
-          'CONSUMED'
-        );
-      } else {
-        await this.authRepo.updateSessionStatus(session.id, 'CONSUMED');
-        transitioned = true;
-      }
-      if (!transitioned) {
-        throw new InvalidGrantError('Session has already been consumed or is invalid.');
       }
 
       const tokenString = 'paw_' + randomBytes(32).toString('hex'); // 'paw_' prefix
       const tokenExpiresAt = new Date(Date.now() + DEFAULT_TOKEN_EXPIRY_DAYS * 24 * 60 * 60 * 1000);
+      return this.runTransaction(async (tx) => {
+        let transitioned = false;
+        if (typeof this.authRepo.transitionSessionStatus === 'function') {
+          transitioned = await this.authRepo.transitionSessionStatus(
+            session.id,
+            'APPROVED',
+            'CONSUMED',
+            undefined,
+            tx
+          );
+        } else {
+          await this.authRepo.updateSessionStatus(session.id, 'CONSUMED', undefined, tx);
+          transitioned = true;
+        }
+        if (!transitioned) {
+          throw new InvalidGrantError('Session has already been consumed or is invalid.');
+        }
 
-      let token: Credential | ApiToken;
+        let token: Credential | ApiToken;
+        if (this.credentialRepo) {
+          const digest = computeKeyedDigest(tokenString, 'PAWTHY_TOKEN');
+          const prefix = tokenString.substring(0, 12);
+          token = await this.credentialRepo.create(
+            {
+              type: 'PAWTHY_TOKEN',
+              subjectId: session.userId!,
+              name: `CLI Device Flow ${session.userCode}`,
+              digest,
+              prefix,
+              scopes: 'project.view,environment.view,resource.view,request.create',
+              audience: 'cli',
+              expiresAt: tokenExpiresAt,
+              revokedAt: null,
+            },
+            tx
+          );
 
-      if (this.credentialRepo) {
-        const digest = computeKeyedDigest(tokenString, 'PAWTHY_TOKEN');
-        const prefix = tokenString.substring(0, 12);
-        token = await this.credentialRepo.create({
-          type: 'PAWTHY_TOKEN',
-          subjectId: session.userId,
-          name: `CLI Device Flow ${session.userCode}`,
-          digest,
-          prefix,
-          scopes: 'project.view,environment.view,resource.view,request.create', // Default scopes
-          audience: 'cli',
-          expiresAt: tokenExpiresAt,
-          revokedAt: null,
-        });
+          const tokenHash = this.hashToken(tokenString);
+          await this.authRepo.createApiToken(
+            {
+              token: tokenHash,
+              userId: session.userId!,
+              name: `CLI Device Flow ${session.userCode}`,
+              expiresAt: tokenExpiresAt,
+            },
+            tx
+          );
+        } else {
+          const tokenHash = this.hashToken(tokenString);
+          token = await this.authRepo.createApiToken(
+            {
+              token: tokenHash,
+              userId: session.userId!,
+              name: `CLI Device Flow ${session.userCode}`,
+              expiresAt: tokenExpiresAt,
+            },
+            tx
+          );
+        }
 
-        // Also write legacy token for dual-read compatibility
-        const tokenHash = this.hashToken(tokenString);
-        await this.authRepo.createApiToken({
-          token: tokenHash,
-          userId: session.userId,
-          name: `CLI Device Flow ${session.userCode}`,
-          expiresAt: tokenExpiresAt,
-        });
-      } else {
-        // Fallback for mock environments lacking credentialRepo
-        const tokenHash = this.hashToken(tokenString);
-        token = await this.authRepo.createApiToken({
-          token: tokenHash,
-          userId: session.userId,
-          name: `CLI Device Flow ${session.userCode}`,
-          expiresAt: tokenExpiresAt,
-        });
-      }
+        await this.audit.log(
+          {
+            eventFamily: 'AUTHENTICATION',
+            eventType: 'AUTH_SESSION_EXCHANGE',
+            surface: this.surface,
+            operation: 'auth.device.exchange',
+            outcomeCode: 'SUCCESS',
+            decisionCode: 'ALLOW',
+            reasonCode: 'AUTHENTICATED_SUBJECT',
+            authoritySources: ['AUTHENTICATED_SUBJECT'],
+            targetType: 'SESSION',
+            targetId: session.id,
+            actorType: 'PAWTHY_TOKEN',
+            principalId: token.id,
+            actorId: session.userId,
+            authKind: 'PAWTHY',
+            payload: { credentialId: token.id },
+          },
+          tx
+        );
 
-      // Return the plaintext token to the user
-      return {
-        token: tokenString,
-        apiToken: token,
-      };
+        return { token: tokenString, apiToken: token };
+      });
     }
 
     throw new AccessDeniedError();
@@ -224,6 +336,21 @@ export class AuthService {
   async validateToken(token: string, clientIp?: string): Promise<Principal | null> {
     if (clientIp && rateLimiter.isLimited(`credential-validation-failure-check:${clientIp}`)) {
       logger.warn('Token validation throttled due to rate-limiting failures', { clientIp });
+      await this.audit.log({
+        eventFamily: 'AUTHENTICATION',
+        eventType: 'CREDENTIAL_USE',
+        surface: this.surface,
+        operation: 'credential.validate',
+        outcomeCode: 'DENIED',
+        decisionCode: 'DENY',
+        reasonCode: 'INVALID_AUTH',
+        authoritySources: [],
+        targetType: 'CREDENTIAL',
+        actorType: 'SERVICE',
+        principalId: 'anonymous:credential',
+        authKind: 'SERVICE',
+        payload: { throttled: true },
+      });
       return null;
     }
 
@@ -250,9 +377,8 @@ export class AuthService {
         !credential.revokedAt &&
         (!credential.expiresAt || credential.expiresAt > new Date())
       ) {
-        await this.credentialRepo.updateLastUsed(credential.id);
         const isSvc = credential.type === 'SERVICE_CREDENTIAL';
-        return {
+        const principal: Principal = {
           type: isSvc ? 'SERVICE' : 'PAWTHY_TOKEN',
           id: credential.id,
           subjectId: credential.subjectId,
@@ -264,6 +390,30 @@ export class AuthService {
           createdAt: credential.createdAt,
           lastUsedAt: new Date(),
         };
+        await this.runTransaction(async (tx) => {
+          await this.credentialRepo!.updateLastUsed(credential!.id, tx);
+          await this.audit.log(
+            {
+              eventFamily: 'AUTHENTICATION',
+              eventType: 'CREDENTIAL_USE',
+              surface: this.surface,
+              operation: 'credential.validate',
+              outcomeCode: 'SUCCESS',
+              decisionCode: 'ALLOW',
+              reasonCode: isSvc ? 'SERVICE' : 'AUTHENTICATED_SUBJECT',
+              authoritySources: ['SCOPED_CREDENTIAL'],
+              targetType: 'CREDENTIAL',
+              targetId: credential!.id,
+              actorType: principal.type,
+              principalId: principal.id,
+              actorId: principal.subjectId,
+              authKind: principal.authKind,
+              payload: {},
+            },
+            tx
+          );
+        });
+        return principal;
       }
     }
 
@@ -272,8 +422,7 @@ export class AuthService {
     const apiToken = await this.authRepo.findApiToken(tokenHash);
 
     if (apiToken && (!apiToken.expiresAt || apiToken.expiresAt > new Date())) {
-      await this.authRepo.updateApiTokenLastUsed(apiToken.id);
-      return {
+      const principal: Principal = {
         type: 'PAWTHY_TOKEN',
         id: apiToken.id,
         subjectId: apiToken.userId,
@@ -285,12 +434,52 @@ export class AuthService {
         createdAt: apiToken.createdAt,
         lastUsedAt: new Date(),
       };
+      await this.runTransaction(async (tx) => {
+        await this.authRepo.updateApiTokenLastUsed(apiToken.id, tx);
+        await this.audit.log(
+          {
+            eventFamily: 'AUTHENTICATION',
+            eventType: 'CREDENTIAL_USE',
+            surface: this.surface,
+            operation: 'credential.validate',
+            outcomeCode: 'SUCCESS',
+            decisionCode: 'ALLOW',
+            reasonCode: 'AUTHENTICATED_SUBJECT',
+            authoritySources: ['SCOPED_CREDENTIAL'],
+            targetType: 'CREDENTIAL',
+            targetId: apiToken.id,
+            actorType: principal.type,
+            principalId: principal.id,
+            actorId: principal.subjectId,
+            authKind: principal.authKind,
+            payload: { legacy: true },
+          },
+          tx
+        );
+      });
+      return principal;
     }
 
     // Track failure for rate-limiting
     if (clientIp) {
       rateLimiter.check(`credential-validation-failure-check:${clientIp}`);
     }
+
+    await this.audit.log({
+      eventFamily: 'AUTHENTICATION',
+      eventType: 'CREDENTIAL_USE',
+      surface: this.surface,
+      operation: 'credential.validate',
+      outcomeCode: 'DENIED',
+      decisionCode: 'DENY',
+      reasonCode: 'INVALID_AUTH',
+      authoritySources: [],
+      targetType: 'CREDENTIAL',
+      actorType: 'SERVICE',
+      principalId: 'anonymous:credential',
+      authKind: 'SERVICE',
+      payload: {},
+    });
 
     return null;
   }
@@ -313,25 +502,74 @@ export class AuthService {
     const prefix = plaintext.substring(0, 16);
     const expiresAt = expiresInMs ? new Date(Date.now() + expiresInMs) : null;
 
-    const credential = await this.credentialRepo.create({
-      type: 'SERVICE_CREDENTIAL',
-      subjectId: serviceName,
-      name,
-      digest,
-      prefix,
-      scopes: scopes.join(','),
-      audience: 'service',
-      expiresAt,
-      revokedAt: null,
-    });
+    return this.runTransaction(async (tx) => {
+      const credential = await this.credentialRepo!.create(
+        {
+          type: 'SERVICE_CREDENTIAL',
+          subjectId: serviceName,
+          name,
+          digest,
+          prefix,
+          scopes: scopes.join(','),
+          audience: 'service',
+          expiresAt,
+          revokedAt: null,
+        },
+        tx
+      );
 
-    return { plaintext, credential };
+      await this.audit.log(
+        {
+          eventFamily: 'AUTHENTICATION',
+          eventType: 'SERVICE_CREDENTIAL_MINT',
+          surface: this.surface,
+          operation: 'credential.service.mint',
+          outcomeCode: 'SUCCESS',
+          decisionCode: 'ALLOW',
+          reasonCode: 'SERVICE',
+          authoritySources: ['SCOPED_CREDENTIAL'],
+          targetType: 'CREDENTIAL',
+          targetId: credential.id,
+          actorType: 'SERVICE',
+          principalId: `service:${serviceName}`,
+          actorId: serviceName,
+          authKind: 'SERVICE',
+          payload: { credentialId: credential.id },
+        },
+        tx
+      );
+
+      return { plaintext, credential };
+    });
   }
 
   /**
    * Cleans up expired and consumed sessions from the database.
    */
   async cleanupExpiredSessions(): Promise<number> {
-    return this.authRepo.deleteExpiredSessions();
+    return this.runTransaction(async (tx) => {
+      const count = await this.authRepo.deleteExpiredSessions(tx);
+      if (count > 0) {
+        await this.audit.log(
+          {
+            eventFamily: 'AUTHENTICATION',
+            eventType: 'AUTH_SESSION_CLEANUP',
+            surface: this.surface,
+            operation: 'auth.session.cleanup',
+            outcomeCode: 'SUCCESS',
+            decisionCode: 'ALLOW',
+            reasonCode: 'SERVICE',
+            authoritySources: [],
+            targetType: 'SESSION',
+            actorType: 'SERVICE',
+            principalId: 'service:auth-session-cleanup',
+            authKind: 'SERVICE',
+            payload: { deletedCount: count },
+          },
+          tx
+        );
+      }
+      return count;
+    });
   }
 }

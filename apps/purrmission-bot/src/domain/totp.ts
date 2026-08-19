@@ -80,7 +80,8 @@ export function createTOTPAccountFromSecret(
   ownerDiscordUserId: string,
   accountName: string,
   secret: string,
-  issuer: string | undefined
+  issuer: string | undefined,
+  shared = false
 ): Omit<TOTPAccount, 'id' | 'createdAt' | 'updatedAt' | 'version'> {
   if (!secret || secret.trim().length === 0) {
     throw new Error('Secret cannot be empty');
@@ -101,6 +102,7 @@ export function createTOTPAccountFromSecret(
     accountName,
     issuer,
     secret: sanitizedSecret,
+    shared,
   };
 }
 

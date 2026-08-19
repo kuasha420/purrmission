@@ -6,6 +6,7 @@ import path from 'path';
 import { getToken, getApiUrl, getProjectConfig } from '../config.js';
 import { loadCascadingEnv } from '../loader.js';
 import { resolveFileAndFormat, deserializeSecrets, SecretFormat } from '../format.js';
+import { createPawthyCorrelationContext, pawthyRequestHeaders } from '../correlation.js';
 
 export const pushCommand = new Command('push')
   .description(
@@ -24,6 +25,7 @@ export const pushCommand = new Command('push')
   .action(async (options) => {
     const token = getToken();
     const apiUrl = getApiUrl();
+    const correlation = createPawthyCorrelationContext();
     if (!token) {
       console.error(chalk.red('You must be logged in. Run `pawthy login` first.'));
       process.exit(1);
@@ -164,7 +166,7 @@ export const pushCommand = new Command('push')
           secrets,
         },
         {
-          headers: { Authorization: `Bearer ${token}` },
+          headers: pawthyRequestHeaders(correlation, { Authorization: `Bearer ${token}` }),
         }
       );
 

@@ -54,7 +54,7 @@ model ResourceField {
   id         String   @id @default(uuid())
   resourceId String
   name       String
-  value      String   // Encrypted at rest
+  value      String // Encrypted at rest
   createdAt  DateTime @default(now())
   updatedAt  DateTime @updatedAt
 
@@ -63,7 +63,6 @@ model ResourceField {
   @@unique([resourceId, name])
   @@index([resourceId])
 }
-
 
 model Guardian {
   id            String       @id @default(uuid())
@@ -83,7 +82,7 @@ model ApprovalRequest {
   id               String                @id @default(uuid())
   resourceId       String
   status           ApprovalRequestStatus @default(PENDING)
-  context          Json?                 // Nullable legacy context
+  context          Json? // Nullable legacy context
   requesterId      String                @default("legacy")
   requesterType    String                @default("DISCORD_USER")
   authKind         String                @default("DISCORD")
@@ -91,8 +90,8 @@ model ApprovalRequest {
   targetKey        String?
   targetVersion    String                @default("legacy")
   policyVersion    String                @default("legacy")
-  constraints      String?               // JSON serialized constraints
-  callbackUrl      String?               // nullable
+  constraints      String? // JSON serialized constraints
+  callbackUrl      String? // nullable
   createdAt        DateTime              @default(now())
   expiresAt        DateTime              @default(now())
   resolvedBy       String?
@@ -172,49 +171,95 @@ model TOTPDelegationConsent {
   accountVersion String
   linkVersion    String
   expiresAt      DateTime
-  usedAt             DateTime?
-  createdAt          DateTime  @default(now())
+  usedAt         DateTime?
+  createdAt      DateTime  @default(now())
 
   @@index([resourceId])
   @@index([totpAccountId])
 }
 
 model AuditLog {
-  id             String   @id @default(uuid())
-  schemaVersion  Int      @default(1)
-  eventType      String
-  outcomeCode    String
-  actorType      String
-  actorId        String?
-  authKind       String?
-  resourceId     String?
-  projectId      String?
-  environmentId  String?
-  requestId      String?
-  grantId        String?
-  correlationId  String?
-  causationId    String?
-  payload        Json?    // Redacted metadata and non-sensitive context
-  createdAt      DateTime @default(now())
+  id               String   @id @default(uuid())
+  schemaVersion    Int      @default(2)
+  eventFamily      String
+  eventType        String
+  surface          String
+  operation        String
+  outcomeCode      String
+  capability       String?
+  decisionCode     String
+  reasonCode       String
+  targetType       String
+  targetId         String?
+  authoritySources Json
+  actorType        String
+  principalId      String
+  actorId          String?
+  authKind         String?
+  resolverType     String?
+  resolverId       String?
+  resourceId       String?
+  projectId        String?
+  environmentId    String?
+  requestId        String?
+  grantId          String?
+  correlationId    String?
+  causationId      String?
+  statusCode       Int?
+  durationMs       Int?
+  retentionClass   String   @default("SECURITY")
+  integrityKeyId   String
+  integrityHash    String
+  payload          Json? // Redacted metadata and non-sensitive context
+  createdAt        DateTime @default(now())
 
   @@index([resourceId])
   @@index([projectId])
   @@index([eventType])
+  @@index([eventFamily])
+  @@index([targetType, targetId])
   @@index([correlationId])
+  @@index([requestId])
+  @@index([grantId])
   @@index([createdAt])
 }
 
+model AuditCheckpoint {
+  id             String   @id
+  previousDigest String?
+  eventDigest    String
+  checkpointHash String
+  integrityKeyId String
+  eventCount     Int
+  throughId      String
+  throughCreatedAt DateTime
+  createdAt      DateTime
+
+  @@index([createdAt])
+  @@index([throughCreatedAt])
+}
+
 model OutboxEvent {
-  id          String   @id @default(uuid())
-  eventType   String
-  payload     Json     // Webhook context / notifications
-  status      String   @default("PENDING") // PENDING, PROCESSED, FAILED
-  attempts    Int      @default(0)
-  lastError   String?
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  id             String   @id @default(uuid())
+  schemaVersion  Int      @default(1)
+  eventType      String
+  resourceId     String?
+  requestId      String?
+  correlationId  String
+  causationId    String?
+  integrityKeyId String
+  integrityHash  String
+  payload        Json // Redacted routing context / notifications; never secret material
+  status         String   @default("PENDING") // PENDING, PROCESSED, FAILED
+  attempts       Int      @default(0)
+  lastErrorCode  String?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
 
   @@index([status])
+  @@index([resourceId])
+  @@index([requestId])
+  @@index([correlationId])
   @@index([createdAt])
 }
 
@@ -227,27 +272,27 @@ enum AuthSessionStatus {
 }
 
 model AuthSession {
-  id          String            @id @default(uuid())
-  deviceCode  String            @unique
-  userCode    String            @unique
-  status      AuthSessionStatus // PENDING, APPROVED, EXPIRED, DENIED
-  userId      String? // Linked Discord User ID
-  expiresAt   DateTime
-  createdAt   DateTime          @default(now())
-  updatedAt   DateTime          @updatedAt
+  id         String            @id @default(uuid())
+  deviceCode String            @unique
+  userCode   String            @unique
+  status     AuthSessionStatus // PENDING, APPROVED, EXPIRED, DENIED
+  userId     String? // Linked Discord User ID
+  expiresAt  DateTime
+  createdAt  DateTime          @default(now())
+  updatedAt  DateTime          @updatedAt
 
   @@index([userId])
   @@index([expiresAt])
 }
 
 model ApiToken {
-  id          String   @id @default(uuid())
-  token       String   @unique // Hashed at rest
-  userId      String   // Discord User ID
-  name        String   // Device/Session name
-  lastUsedAt  DateTime?
-  expiresAt   DateTime  // Mandatory expiry
-  createdAt   DateTime @default(now())
+  id         String    @id @default(uuid())
+  token      String    @unique // Hashed at rest
+  userId     String // Discord User ID
+  name       String // Device/Session name
+  lastUsedAt DateTime?
+  expiresAt  DateTime // Mandatory expiry
+  createdAt  DateTime  @default(now())
 
   @@index([userId])
   @@index([expiresAt])
@@ -255,10 +300,10 @@ model ApiToken {
 }
 
 model Project {
-  id          String   @id @default(uuid())
-  name        String
-  description String?
-  ownerId       String   // Discord User ID
+  id            String   @id @default(uuid())
+  name          String
+  description   String?
+  ownerId       String // Discord User ID
   policyVersion String   @default(uuid())
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
@@ -277,8 +322,8 @@ model Environment {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  project   Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
-  
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
   // Link to Resource for credentials
   resourceId String?   @unique
   resource   Resource? @relation(fields: [resourceId], references: [id], onDelete: SetNull)
@@ -295,13 +340,13 @@ enum ProjectMemberRole {
 model ProjectMember {
   id        String            @id @default(uuid())
   projectId String
-  userId    String            // Discord User ID
+  userId    String // Discord User ID
   role      ProjectMemberRole @default(READER)
-  addedBy   String            // Discord User ID of who added them
+  addedBy   String // Discord User ID of who added them
   createdAt DateTime          @default(now())
   updatedAt DateTime          @updatedAt
 
-  project   Project           @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
 
   @@unique([projectId, userId])
   @@index([userId])
@@ -314,19 +359,19 @@ enum CredentialType {
 }
 
 model Credential {
-  id          String         @id @default(uuid())
-  type        CredentialType
-  subjectId   String
-  name        String
-  digest      String         @unique
-  prefix      String
-  scopes      String
-  audience    String
-  createdAt   DateTime       @default(now())
-  expiresAt   DateTime?
-  revokedAt   DateTime?
-  lastUsedAt  DateTime?
-  version     String         @default(uuid())
+  id         String         @id @default(uuid())
+  type       CredentialType
+  subjectId  String
+  name       String
+  digest     String         @unique
+  prefix     String
+  scopes     String
+  audience   String
+  createdAt  DateTime       @default(now())
+  expiresAt  DateTime?
+  revokedAt  DateTime?
+  lastUsedAt DateTime?
+  version    String         @default(uuid())
 
   @@index([subjectId])
   @@index([digest])
@@ -341,7 +386,7 @@ model CallbackDestination {
   createdAt  DateTime @default(now())
   updatedAt  DateTime @updatedAt
 
-  resource   Resource @relation(fields: [resourceId], references: [id], onDelete: Cascade)
+  resource Resource @relation(fields: [resourceId], references: [id], onDelete: Cascade)
 
   @@index([resourceId])
 }

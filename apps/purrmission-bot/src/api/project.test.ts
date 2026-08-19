@@ -69,6 +69,12 @@ describe('Project API', () => {
     assert.strictEqual(body.name, 'My Project');
     assert.strictEqual(body.ownerId, userId);
     assert.ok(body.id);
+    const events = await repositories.audit.findByScope({ type: 'PROJECT', id: body.id });
+    const created = events.find(({ eventType }) => eventType === 'PROJECT_CREATE');
+    assert.ok(created);
+    assert.strictEqual(created.actorType, 'PAWTHY_TOKEN');
+    assert.strictEqual(created.authKind, 'PAWTHY');
+    assert.strictEqual(created.actorId, userId);
   });
 
   it('should list projects', async () => {
@@ -123,5 +129,29 @@ describe('Project API', () => {
       url: '/api/projects',
     });
     assert.strictEqual(response.statusCode, 401);
+  });
+
+  it('rejects unsafe correlation and causation headers before routing', async () => {
+    const unsafeCorrelation = await server.inject({
+      method: 'GET',
+      url: '/api/projects',
+      headers: {
+        Authorization: `Bearer ${validToken}`,
+        'x-correlation-id': 'unsafe value',
+      },
+    });
+    assert.strictEqual(unsafeCorrelation.statusCode, 400);
+    assert.deepEqual(unsafeCorrelation.json(), { error: 'Invalid x-correlation-id header' });
+
+    const unsafeCausation = await server.inject({
+      method: 'GET',
+      url: '/api/projects',
+      headers: {
+        Authorization: `Bearer ${validToken}`,
+        'x-causation-id': 'unsafe value',
+      },
+    });
+    assert.strictEqual(unsafeCausation.statusCode, 400);
+    assert.deepEqual(unsafeCausation.json(), { error: 'Invalid x-causation-id header' });
   });
 });

@@ -57,7 +57,7 @@ describe('Pull Command', () => {
     }
   });
 
-  it('should exit with code 1 when pull status is 202 (Pending Approval)', async () => {
+  it('fails closed immediately when status is 202 (Pending Approval)', async () => {
     // Mock config.get for token
     mock.method(config, 'get', (key: string) => {
       if (key === 'token') return 'test-token';
@@ -65,7 +65,7 @@ describe('Pull Command', () => {
       return undefined;
     });
 
-    // Mock axios.get to return 202 status
+    // A pending response must remain terminal until #130 owns bounded polling.
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const getMock = mock.method(axios, 'get', async (): Promise<any> => {
       return {
@@ -85,7 +85,7 @@ describe('Pull Command', () => {
     try {
       await pullCommand.parseAsync(['node', 'pawthy', 'pull']);
     } catch {
-      // Expected to throw because process.exit throws
+      // Expected to throw because process.exit throws.
     }
 
     assert.strictEqual(exitCode, 1);

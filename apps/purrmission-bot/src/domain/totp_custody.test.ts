@@ -15,19 +15,24 @@ describe('TOTP custody boundaries', () => {
 
   beforeEach(() => {
     repos = createInMemoryRepositories();
-    const deps: ServiceDependencies = { repositories: repos };
+    const audit = new AuditService({ repositories: repos });
+    const deps: ServiceDependencies = { repositories: repos, audit };
     deps.approval = new ApprovalService(deps);
     resourceService = new ResourceService(deps);
-    projectService = new ProjectService(repos.projects, resourceService);
+    projectService = new ProjectService(repos.projects, resourceService, audit, repos.transaction);
   });
 
   async function createOwnedResource(ownerId: string): Promise<string> {
-    const project = await projectService.createProject({ name: 'Project', ownerId });
-    const environment = await projectService.createEnvironment({
-      projectId: project.id,
-      name: 'Production',
-      slug: 'prod',
-    });
+    const principal = createDiscordPrincipal(ownerId);
+    const project = await projectService.createProject({ name: 'Project', ownerId }, principal);
+    const environment = await projectService.createEnvironment(
+      {
+        projectId: project.id,
+        name: 'Production',
+        slug: 'prod',
+      },
+      principal
+    );
     assert.ok(environment.resourceId);
     return environment.resourceId;
   }
@@ -182,8 +187,10 @@ describe('TOTP custody boundaries', () => {
     });
     await repos.resources.update(resourceId, { totpAccountId: account.id, version: 'link-v1' });
 
-    const deps: ServiceDependencies = { repositories: repos };
-    deps.audit = new AuditService(deps);
+    const deps: ServiceDependencies = {
+      repositories: repos,
+      audit: new AuditService({ repositories: repos }),
+    };
     const auditedResourceService = new ResourceService(deps);
     const pawthyPrincipal: Principal = {
       type: 'PAWTHY_TOKEN',
@@ -195,7 +202,10 @@ describe('TOTP custody boundaries', () => {
     };
 
     await auditedResourceService.unlinkTOTPAccount(resourceId, pawthyPrincipal);
-    const [event] = await repos.audit.findByResourceId(resourceId);
+    const event = (await repos.audit.findByScope({ type: 'RESOURCE', id: resourceId })).find(
+      ({ eventType }) => eventType === 'TOTP_UNLINK'
+    );
+    assert.ok(event);
     assert.equal(event.actorType, 'PAWTHY_TOKEN');
     assert.equal(event.authKind, 'PAWTHY');
     assert.equal(event.actorId, ownerId);

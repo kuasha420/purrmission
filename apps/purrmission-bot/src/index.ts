@@ -25,6 +25,7 @@ import { startHttpServer } from './http/server.js';
 import { getPrismaClient } from './infra/prismaClient.js';
 import { validateEncryptionConfig } from './infra/crypto.js';
 import { StatusService } from './domain/status.js';
+import { loadAuditSecurityConfig } from './config/auditSecurity.js';
 
 /**
  * Main application bootstrap.
@@ -34,6 +35,7 @@ async function main(): Promise<void> {
 
   try {
     validateEncryptionConfig();
+    loadAuditSecurityConfig();
     logger.info('✅ Encryption configuration validated');
   } catch (error) {
     logger.error('❌ Critical security failure:', error);
@@ -46,6 +48,9 @@ async function main(): Promise<void> {
   const prisma = getPrismaClient();
 
   const repositories = {
+    transaction: <T>(
+      callback: (tx: import('@prisma/client').Prisma.TransactionClient) => Promise<T>
+    ) => prisma.$transaction(callback),
     resources: new PrismaResourceRepository(prisma),
     guardians: new PrismaGuardianRepository(prisma),
     approvalRequests: new PrismaApprovalRequestRepository(prisma),
@@ -85,7 +90,7 @@ async function main(): Promise<void> {
   });
 
   logger.info('Starting Outbox event worker...');
-  const outboxWorker = new OutboxWorker(repositories, discordClient);
+  const outboxWorker = new OutboxWorker(repositories, services.audit, discordClient);
   outboxWorker.start();
 
   // Announce online status
@@ -104,10 +109,18 @@ async function main(): Promise<void> {
     try {
       const expiredRequestsCount = await services.approval.cleanupExpiredRequests();
       const expiredSessionsCount = await services.auth.cleanupExpiredSessions();
-      if (expiredRequestsCount > 0 || expiredSessionsCount > 0) {
+      const auditMaintenance = await services.audit.runMaintenance();
+      if (
+        expiredRequestsCount > 0 ||
+        expiredSessionsCount > 0 ||
+        auditMaintenance.checkpointed ||
+        auditMaintenance.deleted > 0
+      ) {
         logger.info('Periodic cleanup executed', {
           expiredRequests: expiredRequestsCount,
           expiredSessions: expiredSessionsCount,
+          auditCheckpointed: auditMaintenance.checkpointed,
+          auditDeleted: auditMaintenance.deleted,
         });
       }
     } catch (error) {

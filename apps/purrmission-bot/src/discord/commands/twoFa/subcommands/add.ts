@@ -2,6 +2,7 @@ import type { ChatInputCommandInteraction } from 'discord.js';
 import type { CommandContext } from '../../context.js';
 import { logger } from '../../../../logging/logger.js';
 import { createTOTPAccountFromSecret, createTOTPAccountFromUri } from '../../../../domain/totp.js';
+import { createDiscordPrincipal } from '../../../../domain/principal.js';
 
 export async function handleAdd2FA(
   interaction: ChatInputCommandInteraction,
@@ -15,7 +16,7 @@ export async function handleAdd2FA(
   // const qrAttachment = interaction.options.getAttachment('qr', false) ?? undefined;
 
   const ownerDiscordUserId = interaction.user.id;
-  const { totp: totpRepository } = context.repositories;
+  const principal = createDiscordPrincipal(ownerDiscordUserId, interaction.id);
 
   try {
     let createdAccountSummary: string;
@@ -37,7 +38,7 @@ export async function handleAdd2FA(
         accountData.issuer = issuer;
       }
 
-      const created = await totpRepository.create(accountData);
+      const created = await context.services.resource.createTOTPAccount(accountData, principal);
       createdAccountSummary = `Account **${created.accountName}** added via URI mode.`;
     } else if (mode === 'secret') {
       if (!secret) {
@@ -49,7 +50,7 @@ export async function handleAdd2FA(
       }
 
       const accountData = createTOTPAccountFromSecret(ownerDiscordUserId, account, secret, issuer);
-      const created = await totpRepository.create(accountData);
+      const created = await context.services.resource.createTOTPAccount(accountData, principal);
       createdAccountSummary = `Account **${created.accountName}** added via Secret mode.`;
     } else if (mode === 'qr') {
       // QR mode stub for now

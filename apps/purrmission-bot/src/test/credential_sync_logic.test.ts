@@ -22,7 +22,6 @@ import {
   ResourceField,
   ApprovalRequest,
   ApprovalStatus,
-  AuditLog,
   CreateProjectInput,
   CreateEnvironmentInput,
   CreateResourceInput,
@@ -152,7 +151,7 @@ class MemGuardianRepo implements GuardianRepository {
   guardians: Guardian[] = [];
 
   async add(input: AddGuardianInput, _tx?: any): Promise<Guardian> {
-    const g: Guardian = { ...input, createdAt: new Date() };
+    const g: Guardian = { ...input, id: input.id ?? randomUUID(), createdAt: new Date() };
     this.guardians.push(g);
     return g;
   }
@@ -334,12 +333,9 @@ class MemOutboxRepo implements OutboxRepository {
 
   async create(input: CreateOutboxEventInput, _tx?: any): Promise<OutboxEvent> {
     const event: OutboxEvent = {
-      id: randomUUID(),
-      eventType: input.eventType,
-      payload: input.payload,
+      ...input,
       status: 'PENDING',
       attempts: 0,
-      createdAt: new Date(),
       updatedAt: new Date(),
     };
     this.events.push(event);
@@ -352,16 +348,16 @@ class MemOutboxRepo implements OutboxRepository {
 
   async updateStatus(
     id: string,
-    status: 'PENDING' | 'PROCESSED' | 'FAILED',
+    status: 'PENDING' | 'DELIVERED_PENDING_AUDIT' | 'PROCESSED' | 'FAILED',
     attempts: number,
-    lastError?: string,
+    lastErrorCode?: string,
     _tx?: any
   ): Promise<void> {
     const event = this.events.find((e) => e.id === id);
     if (event) {
       event.status = status;
       event.attempts = attempts;
-      event.lastError = lastError ?? null;
+      event.lastErrorCode = lastErrorCode ?? null;
       event.updatedAt = new Date();
     }
   }
@@ -385,30 +381,16 @@ describe('Credential Sync Logic Smoke Test', () => {
   const totpRepo = {} as TOTPRepository;
   const auditRepo: AuditRepository = {
     create: async (input: CreateAuditLogInput) => {
-      return {
-        id: randomUUID(),
-        schemaVersion: input.schemaVersion,
-        eventType: input.eventType,
-        outcomeCode: input.outcomeCode,
-        actorType: input.actorType,
-        actorId: input.actorId,
-        authKind: input.authKind,
-        resourceId: input.resourceId,
-        projectId: input.projectId,
-        environmentId: input.environmentId,
-        requestId: input.requestId,
-        grantId: input.grantId,
-        correlationId: input.correlationId,
-        causationId: input.causationId,
-        payload: input.payload,
-        createdAt: new Date(),
-      } as AuditLog;
+      return input;
     },
-    findByResourceId: async () => [],
-    findByProjectId: async () => [],
+    replace: async (input: CreateAuditLogInput) => input,
+    findByScope: async () => [],
   };
 
-  const repositories: Repositories = {
+  const repositories = {
+    transaction: async <T>(
+      callback: (tx: import('@prisma/client').Prisma.TransactionClient) => Promise<T>
+    ) => callback({} as import('@prisma/client').Prisma.TransactionClient),
     projects: projectRepo,
     resources: resourceRepo,
     guardians: guardianRepo,
@@ -442,20 +424,19 @@ describe('Credential Sync Logic Smoke Test', () => {
     const guardianId = 'guardian-456';
 
     // 1. Create Project
-    const project = await services.project.createProject({
-      name: 'smoke-test-proj',
-      ownerId,
-      description: 'A test project',
-    });
+    const owner = createDiscordPrincipal(ownerId);
+    const project = await services.project.createProject(
+      { name: 'smoke-test-proj', ownerId, description: 'A test project' },
+      owner
+    );
     assert.ok(project);
     assert.strictEqual(project.name, 'smoke-test-proj');
 
     // 2. Create Environment
-    const env = await services.project.createEnvironment({
-      name: 'Development',
-      slug: 'dev',
-      projectId: project.id,
-    });
+    const env = await services.project.createEnvironment(
+      { name: 'Development', slug: 'dev', projectId: project.id },
+      owner
+    );
     assert.ok(env);
     assert.ok(env.resourceId);
 
@@ -517,15 +498,15 @@ describe('Credential Sync Logic Smoke Test', () => {
     const requesterId = 'user-555';
 
     // Create a project and environment first
-    const project = await services.project.createProject({
-      name: 'expiry-test-proj',
-      ownerId,
-    });
-    const env = await services.project.createEnvironment({
-      name: 'Development',
-      slug: 'dev',
-      projectId: project.id,
-    });
+    const owner = createDiscordPrincipal(ownerId);
+    const project = await services.project.createProject(
+      { name: 'expiry-test-proj', ownerId },
+      owner
+    );
+    const env = await services.project.createEnvironment(
+      { name: 'Development', slug: 'dev', projectId: project.id },
+      owner
+    );
     assert.ok(env.resourceId, 'env.resourceId must be defined');
     const resourceId = env.resourceId;
 

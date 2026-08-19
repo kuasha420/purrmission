@@ -3,12 +3,12 @@ import assert from 'node:assert';
 import { createHttpServer } from '../http/server.js';
 import { createServices } from '../domain/services.js';
 import { createInMemoryRepositories } from '../domain/repositories.mock.js';
-import { createHash } from 'node:crypto';
-import { computeKeyedDigest } from '../domain/crypto.js';
 import type { FastifyInstance } from 'fastify';
 import type { Services } from '../domain/services.js';
 import type { Repositories } from '../domain/repositories.js';
 import type { Client } from 'discord.js';
+import { createDiscordPrincipal } from '../domain/principal.js';
+import { computeKeyedDigest } from '../domain/crypto.js';
 
 // Mock Discord Client (minimal)
 const mockDiscordClient = {
@@ -35,28 +35,15 @@ describe('Resource API', () => {
     services = createServices({ repositories });
 
     // Setup Auth
-    const hashedToken = createHash('sha256').update(validToken).digest('hex');
-    await repositories.auth.createApiToken({
-      token: hashedToken,
-      userId: userId,
-      name: 'Test Token',
-      expiresAt: new Date(Date.now() + 3600000),
-    });
     await repositories.credentials.create({
       type: 'PAWTHY_TOKEN',
       subjectId: userId,
-      name: 'Resource API test token',
+      name: 'Test Token',
       digest: computeKeyedDigest(validToken, 'PAWTHY_TOKEN'),
-      prefix: validToken.slice(0, 8),
-      scopes: [
-        'secret.metadata.read',
-        'secret.value.read',
-        'secret.write',
-        'secret.delete',
-        'totp.code.read',
-        'totp.link.manage',
-      ].join(','),
-      audience: 'cli',
+      prefix: 'valid',
+      scopes:
+        'resource.view,secret.metadata.read,secret.value.read,secret.write,secret.delete,totp.code.read,totp.link.manage',
+      audience: 'api',
       expiresAt: new Date(Date.now() + 3600000),
       revokedAt: null,
     });
@@ -113,8 +100,8 @@ describe('Resource API', () => {
   });
 
   it('should list fields', async () => {
-    await services.resource.createField(resourceId, 'F1', 'V1');
-    await services.resource.createField(resourceId, 'F2', 'V2');
+    await services.resource.createField(resourceId, 'F1', 'V1', createDiscordPrincipal(userId));
+    await services.resource.createField(resourceId, 'F2', 'V2', createDiscordPrincipal(userId));
 
     const listRes = await server.inject({
       method: 'GET',
@@ -131,7 +118,12 @@ describe('Resource API', () => {
   });
 
   it('should delete a field', async () => {
-    await services.resource.createField(resourceId, 'DEL_ME', 'VAL');
+    await services.resource.createField(
+      resourceId,
+      'DEL_ME',
+      'VAL',
+      createDiscordPrincipal(userId)
+    );
 
     const delRes = await server.inject({
       method: 'DELETE',
@@ -242,7 +234,12 @@ describe('Resource API', () => {
       expiresAt: new Date(Date.now() + 3600000),
       revokedAt: null,
     });
-    await services.resource.createField(resourceId, 'EXISTING', 'owner-created');
+    await services.resource.createField(
+      resourceId,
+      'EXISTING',
+      'owner-created',
+      createDiscordPrincipal(userId)
+    );
     const custodyOwnedTotp = await repositories.totp.create({
       ownerDiscordUserId: 'separate-custody-owner',
       accountName: 'Custody-owned account',

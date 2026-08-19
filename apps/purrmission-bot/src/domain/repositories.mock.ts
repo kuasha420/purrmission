@@ -52,6 +52,7 @@ import {
   CallbackDestinationRepository,
   OutboxRepository,
 } from './repositories.js';
+import { containsAuditSubject, type AuditScope } from './audit.js';
 import crypto from 'node:crypto';
 
 /**
@@ -143,6 +144,7 @@ export class InMemoryGuardianRepository implements GuardianRepository {
   async add(input: AddGuardianInput): Promise<Guardian> {
     const guardian: Guardian = {
       ...input,
+      id: input.id ?? crypto.randomUUID(),
       createdAt: new Date(),
     };
     this.guardians.set(guardian.id, guardian);
@@ -214,15 +216,14 @@ export class InMemoryApprovalRequestRepository implements ApprovalRequestReposit
     }
   }
 
-  async updateDeliveryReference(
-    id: string,
-    discordMessageId: string,
-    discordChannelId: string
-  ): Promise<void> {
+  async updateDeliveryReference(id: string, messageId: string, channelId: string): Promise<void> {
     const request = this.requests.get(id);
     if (request) {
-      request.discordMessageId = discordMessageId;
-      request.discordChannelId = discordChannelId;
+      this.requests.set(id, {
+        ...request,
+        discordMessageId: messageId,
+        discordChannelId: channelId,
+      });
     }
   }
 
@@ -592,23 +593,107 @@ export class InMemoryResourceFieldRepository implements ResourceFieldRepository 
  */
 export class InMemoryAuditRepository implements AuditRepository {
   private logs: AuditLog[] = [];
+  private checkpoints: import('./models.js').AuditCheckpoint[] = [];
 
-  async create(input: CreateAuditLogInput, _tx?: any): Promise<AuditLog> {
+  constructor(private readonly projects?: ProjectRepository) {}
+
+  async create(input: CreateAuditLogInput, _tx?: Prisma.TransactionClient): Promise<AuditLog> {
     const log: AuditLog = {
-      id: crypto.randomUUID(),
       ...input,
-      createdAt: new Date(),
     };
     this.logs.push(log);
     return log;
   }
 
-  async findByResourceId(resourceId: string): Promise<AuditLog[]> {
-    return this.logs.filter((log) => log.resourceId === resourceId);
+  async replace(event: AuditLog, _tx?: Prisma.TransactionClient): Promise<AuditLog> {
+    const index = this.logs.findIndex(({ id }) => id === event.id);
+    if (index < 0) throw new Error('audit event not found');
+    this.logs[index] = event;
+    return event;
   }
 
-  async findByProjectId(projectId: string): Promise<AuditLog[]> {
-    return this.logs.filter((log) => log.projectId === projectId);
+  async findByScope(scope: AuditScope): Promise<AuditLog[]> {
+    const projectEnvironments =
+      scope.type === 'PROJECT' && this.projects
+        ? await this.projects.listEnvironments(scope.id)
+        : [];
+    const environmentIds = new Set(projectEnvironments.map(({ id }) => id));
+    const resourceIds = new Set(
+      projectEnvironments.flatMap(({ resourceId }) =>
+        resourceId === undefined ? [] : [resourceId]
+      )
+    );
+    return this.logs.filter((log) => {
+      if (scope.type === 'PROJECT') {
+        return (
+          log.projectId === scope.id ||
+          (log.environmentId !== null &&
+            log.environmentId !== undefined &&
+            environmentIds.has(log.environmentId)) ||
+          (log.resourceId !== null &&
+            log.resourceId !== undefined &&
+            resourceIds.has(log.resourceId))
+        );
+      }
+      if (scope.type === 'RESOURCE') return log.resourceId === scope.id;
+      if (scope.type === 'REQUEST') return log.requestId === scope.id;
+      return containsAuditSubject(
+        {
+          targetId: log.targetId,
+          principalId: log.principalId,
+          actorId: log.actorId,
+          resolverId: log.resolverId,
+          payload: log.payload,
+        },
+        scope.id
+      );
+    });
+  }
+
+  async findThrough(through: Date): Promise<AuditLog[]> {
+    return this.logs
+      .filter(({ createdAt }) => createdAt <= through)
+      .sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime() || a.id.localeCompare(b.id));
+  }
+
+  async createCheckpoint(checkpoint: import('./models.js').AuditCheckpoint) {
+    if (this.checkpoints.some(({ id }) => id === checkpoint.id))
+      throw new Error('checkpoint conflict');
+    this.checkpoints.push(checkpoint);
+    return checkpoint;
+  }
+
+  async findLatestCheckpoint() {
+    return (
+      [...this.checkpoints].sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime())[0] ?? null
+    );
+  }
+
+  async deleteRetainedBefore(cutoff: Date): Promise<number> {
+    const before = this.logs.length;
+    this.logs = this.logs.filter(
+      (event) => event.createdAt >= cutoff || event.retentionClass === 'SECURITY'
+    );
+    return before - this.logs.length;
+  }
+
+  async countRetainedBefore(cutoff: Date): Promise<number> {
+    return this.logs.filter(
+      (event) =>
+        event.createdAt < cutoff && ['OPERATIONAL', 'PRIVACY'].includes(event.retentionClass)
+    ).length;
+  }
+
+  async countSinceCheckpoint(
+    throughCreatedAt: Date | null,
+    throughId: string | null
+  ): Promise<number> {
+    if (!throughCreatedAt) return this.logs.length;
+    return this.logs.filter(
+      ({ createdAt, id }) =>
+        createdAt > throughCreatedAt ||
+        (createdAt.getTime() === throughCreatedAt.getTime() && throughId !== null && id > throughId)
+    ).length;
   }
 }
 
@@ -619,14 +704,24 @@ export class InMemoryAuditRepository implements AuditRepository {
 export class InMemoryOutboxRepository implements OutboxRepository {
   private events: OutboxEvent[] = [];
 
-  async create(input: CreateOutboxEventInput, _tx?: any): Promise<OutboxEvent> {
+  async create(
+    input: CreateOutboxEventInput,
+    _tx?: Prisma.TransactionClient
+  ): Promise<OutboxEvent> {
     const event: OutboxEvent = {
-      id: input.id || crypto.randomUUID(),
+      id: input.id,
+      schemaVersion: input.schemaVersion,
       eventType: input.eventType,
+      resourceId: input.resourceId,
+      requestId: input.requestId,
+      correlationId: input.correlationId,
+      causationId: input.causationId,
+      integrityKeyId: input.integrityKeyId,
+      integrityHash: input.integrityHash,
       payload: input.payload,
       status: 'PENDING',
       attempts: 0,
-      createdAt: new Date(),
+      createdAt: input.createdAt,
       updatedAt: new Date(),
     };
     this.events.push(event);
@@ -639,16 +734,16 @@ export class InMemoryOutboxRepository implements OutboxRepository {
 
   async updateStatus(
     id: string,
-    status: 'PENDING' | 'PROCESSED' | 'FAILED',
+    status: 'PENDING' | 'DELIVERY_IN_PROGRESS' | 'DELIVERED_PENDING_AUDIT' | 'PROCESSED' | 'FAILED',
     attempts: number,
-    lastError?: string,
-    _tx?: any
+    lastErrorCode?: string,
+    _tx?: Prisma.TransactionClient
   ): Promise<void> {
     const event = this.events.find((e) => e.id === id);
     if (event) {
       event.status = status;
       event.attempts = attempts;
-      event.lastError = lastError ?? null;
+      event.lastErrorCode = lastErrorCode ?? null;
       event.updatedAt = new Date();
     }
   }
@@ -1099,15 +1194,17 @@ export class InMemoryCallbackDestinationRepository implements CallbackDestinatio
  */
 export function createInMemoryRepositories(): Repositories {
   const resources = new InMemoryResourceRepository();
+  const projects = new InMemoryProjectRepository();
   return {
+    transaction: (callback) => callback({} as Prisma.TransactionClient),
     resources,
     guardians: new InMemoryGuardianRepository(resources),
     approvalRequests: new InMemoryApprovalRequestRepository(),
     totp: new InMemoryTOTPRepository(resources),
     resourceFields: new InMemoryResourceFieldRepository(resources),
-    audit: new InMemoryAuditRepository(),
+    audit: new InMemoryAuditRepository(projects),
     auth: new InMemoryAuthRepository(),
-    projects: new InMemoryProjectRepository(),
+    projects,
     outbox: new InMemoryOutboxRepository(),
     credentials: new InMemoryCredentialRepository(),
     approvalGrants: new InMemoryApprovalGrantRepository(),

@@ -9,23 +9,23 @@
 - Conformance Report: [2026-07-26 Prerequisite Conformance Report](../reports/2026-07-26-prerequisite-conformance-report.md)
 - Dashboard readiness: **No-go** (do not file Discord OAuth/session or Web Dashboard backend/frontend implementation phases until the prerequisite remediation and independent gate are complete)
 - Baseline audited revision: `e4269cea4d6f` (`master`, 2026-07-26)
-- Current remediation checkpoint: #117 corrective PR #143 merged via
-  `a0144d46e92aceb9638b9609610896583a337162` and passed clean-`master` post-merge verification on
-  2026-08-13. #117 is Verified and closed. #118 and #119 are unblocked; Wave 2 begins with #119's
-  independently reviewed additive contract checkpoint, then rebased/completed #118, then #119
-  persistence completion.
+- Current remediation checkpoint: #117 is Verified and closed. #119's independently reviewed
+  additive contract checkpoint merged through PR #145 at `7ccc187d996a30ae29633942bbbc3fbacd8c8695`;
+  #119 remains open for persistence/version completion. #118 is rebased onto that checkpoint and
+  published as draft PR #146 with its common and populated-migration gates green. Human and
+  independent review of #146 is the active Wave 2 checkpoint.
 - Last progress update: 2026-08-13
 - Applies to: Discord commands, the Fastify API, Pawthy, and the future
   `apps/purrmission-web`
 
 ### Remediation progress ledger
 
-| Wave | Nodes     | State                                                                                               |
-| ---- | --------- | --------------------------------------------------------------------------------------------------- |
-| 1    | #117      | Verified and closed at `a0144d46`; common and representative migration gates pass                   |
-| 2    | #118      | Unblocked; corrective audit/outbox candidate remains under review and integrates after partial #119 |
-| 2    | #119      | Unblocked; additive query-contract checkpoint is next, while persistence completion remains open    |
-| 3-9  | #120-#130 | Blocked by the execution graph                                                                      |
+| Wave | Nodes     | State                                                                                           |
+| ---- | --------- | ----------------------------------------------------------------------------------------------- |
+| 1    | #117      | Verified and closed at `a0144d46`; common and representative migration gates pass               |
+| 2    | #118      | Draft PR #146 is rebased and gate-green; formal human and independent review is next            |
+| 2    | #119      | Partial query-contract PR #145 merged at `7ccc187`; persistence/version completion remains open |
+| 3-9  | #120-#130 | Blocked by the execution graph                                                                  |
 
 Sections 3-5 remain the point-in-time audit record for `e4269cea4d6f`; they are not silently
 rewritten as remediation lands. The ledger above and the execution graph are the live progress

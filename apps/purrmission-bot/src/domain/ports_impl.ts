@@ -10,23 +10,32 @@ import { ForbiddenError, NotFoundError } from './ports.js';
 import type { Principal, Project, Environment, ApprovalRequest, ApprovalGrant } from './models.js';
 import { ProjectService } from './project.js';
 import { ResourceService, ApprovalService } from './services.js';
+import { AuditService } from './audit.js';
+import type { Repositories } from './repositories.js';
 
 export class DomainPortsImpl implements DomainPorts {
   constructor(
     private readonly projectService: ProjectService,
     private readonly resourceService: ResourceService,
-    private readonly approvalService: ApprovalService
-  ) {}
+    private readonly approvalService: ApprovalService,
+    private readonly audit: AuditService,
+    private readonly repositories: Repositories
+  ) {
+    if (!audit) throw new TypeError('DomainPortsImpl requires an audit dependency.');
+  }
 
   // Projects
   async createProject(principal: Principal, dto: CreateProjectDTO): Promise<Project> {
     if (principal.type === 'SERVICE') {
       throw new ForbiddenError('Service principals cannot create projects');
     }
-    return this.projectService.createProject({
-      name: dto.name,
-      ownerId: principal.subjectId,
-    });
+    return this.projectService.createProject(
+      {
+        name: dto.name,
+        ownerId: principal.subjectId,
+      },
+      principal
+    );
   }
 
   async listProjects(principal: Principal): Promise<Project[]> {
@@ -54,12 +63,7 @@ export class DomainPortsImpl implements DomainPorts {
       throw new ForbiddenError('Only the project owner can add members');
     }
 
-    await this.projectService.addMember(
-      dto.projectId,
-      dto.memberUserId,
-      dto.role,
-      principal.subjectId
-    );
+    await this.projectService.addMember(dto.projectId, dto.memberUserId, dto.role, principal);
   }
 
   async removeProjectMember(
@@ -74,7 +78,7 @@ export class DomainPortsImpl implements DomainPorts {
       throw new ForbiddenError('Only the project owner can remove members');
     }
 
-    await this.projectService.removeMember(projectId, memberUserId);
+    await this.projectService.removeMember(projectId, memberUserId, principal);
   }
 
   async listProjectMembers(principal: Principal, projectId: string) {
@@ -91,11 +95,14 @@ export class DomainPortsImpl implements DomainPorts {
       throw new ForbiddenError('Only the project owner can create environments');
     }
 
-    return this.projectService.createEnvironment({
-      projectId: dto.projectId,
-      name: dto.name,
-      slug: dto.slug,
-    });
+    return this.projectService.createEnvironment(
+      {
+        projectId: dto.projectId,
+        name: dto.name,
+        slug: dto.slug,
+      },
+      principal
+    );
   }
 
   async listEnvironments(principal: Principal, projectId: string): Promise<Environment[]> {
@@ -162,11 +169,10 @@ export class DomainPortsImpl implements DomainPorts {
     url: string,
     secret: string
   ): Promise<CallbackDestinationDTO> {
-    const resource = await this.resourceService.deps.repositories.resources.findById(resourceId);
+    const resource = await this.repositories.resources.findById(resourceId);
     if (!resource) throw new NotFoundError('Resource not found');
 
-    const env =
-      await this.resourceService.deps.repositories.projects.findEnvironmentByResourceId(resourceId);
+    const env = await this.repositories.projects.findEnvironmentByResourceId(resourceId);
     if (!env) throw new NotFoundError('Associated environment not found');
 
     const project = await this.projectService.getProject(env.projectId);
@@ -174,10 +180,35 @@ export class DomainPortsImpl implements DomainPorts {
       throw new ForbiddenError('Only the project owner can register callbacks');
     }
 
-    const created = await this.resourceService.deps.repositories.callbackDestinations.create({
-      resourceId,
-      url,
-      secret,
+    const created = await this.repositories.transaction(async (tx) => {
+      const destination = await this.repositories.callbackDestinations.create(
+        { resourceId, url, secret },
+        tx
+      );
+      await this.audit.log(
+        {
+          eventFamily: 'RESOURCE_CONFIGURATION',
+          eventType: 'CALLBACK_REGISTER',
+          surface: 'DOMAIN',
+          operation: 'callback.register',
+          outcomeCode: 'SUCCESS',
+          capability: 'resource.policy.manage',
+          decisionCode: 'ALLOW',
+          reasonCode: 'OWNER',
+          authoritySources: ['PROJECT_OWNER'],
+          targetType: 'RESOURCE',
+          targetId: resourceId,
+          actorType: principal.type,
+          principalId: principal.id,
+          actorId: principal.subjectId,
+          authKind: principal.authKind,
+          projectId: env.projectId,
+          resourceId,
+          payload: {},
+        },
+        tx
+      );
+      return destination;
     });
 
     return {
@@ -190,16 +221,12 @@ export class DomainPortsImpl implements DomainPorts {
   }
 
   async listCallbacks(principal: Principal, resourceId: string): Promise<CallbackDestinationDTO[]> {
-    const env =
-      await this.resourceService.deps.repositories.projects.findEnvironmentByResourceId(resourceId);
+    const env = await this.repositories.projects.findEnvironmentByResourceId(resourceId);
     if (!env) throw new NotFoundError('Associated environment not found');
 
     await this.getProject(principal, env.projectId);
 
-    const dests =
-      await this.resourceService.deps.repositories.callbackDestinations.findByResourceId(
-        resourceId
-      );
+    const dests = await this.repositories.callbackDestinations.findByResourceId(resourceId);
     return dests.map((d) => ({
       id: d.id,
       resourceId: d.resourceId,
@@ -214,8 +241,7 @@ export class DomainPortsImpl implements DomainPorts {
     resourceId: string,
     callbackId: string
   ): Promise<void> {
-    const env =
-      await this.resourceService.deps.repositories.projects.findEnvironmentByResourceId(resourceId);
+    const env = await this.repositories.projects.findEnvironmentByResourceId(resourceId);
     if (!env) throw new NotFoundError('Associated environment not found');
 
     const project = await this.projectService.getProject(env.projectId);
@@ -223,8 +249,7 @@ export class DomainPortsImpl implements DomainPorts {
       throw new ForbiddenError('Only the project owner can delete callbacks');
     }
 
-    const callback =
-      await this.resourceService.deps.repositories.callbackDestinations.findById(callbackId);
+    const callback = await this.repositories.callbackDestinations.findById(callbackId);
     if (!callback) {
       throw new NotFoundError('Callback destination not found');
     }
@@ -232,7 +257,33 @@ export class DomainPortsImpl implements DomainPorts {
       throw new ForbiddenError('Callback destination does not belong to the requested resource');
     }
 
-    await this.resourceService.deps.repositories.callbackDestinations.delete(callbackId);
+    const remove = async (tx?: import('@prisma/client').Prisma.TransactionClient) => {
+      await this.repositories.callbackDestinations.delete(callbackId, tx);
+      await this.audit.log(
+        {
+          eventFamily: 'RESOURCE_CONFIGURATION',
+          eventType: 'CALLBACK_DELETE',
+          surface: 'DOMAIN',
+          operation: 'callback.delete',
+          outcomeCode: 'SUCCESS',
+          capability: 'resource.policy.manage',
+          decisionCode: 'ALLOW',
+          reasonCode: 'OWNER',
+          authoritySources: ['PROJECT_OWNER'],
+          targetType: 'RESOURCE',
+          targetId: resourceId,
+          actorType: principal.type,
+          principalId: principal.id,
+          actorId: principal.subjectId,
+          authKind: principal.authKind,
+          projectId: env.projectId,
+          resourceId,
+          payload: {},
+        },
+        tx
+      );
+    };
+    await this.repositories.transaction(remove);
   }
 
   // Approvals & Grants
@@ -244,6 +295,7 @@ export class DomainPortsImpl implements DomainPorts {
   ): Promise<{ success: boolean; request?: ApprovalRequest }> {
     return this.approvalService.createApprovalRequest({
       resourceId,
+      principal,
       requesterId: principal.subjectId,
       requesterType: principal.type === 'SERVICE' ? 'SERVICE_PRINCIPAL' : 'DISCORD_USER',
       authKind: principal.authKind,
@@ -271,9 +323,7 @@ export class DomainPortsImpl implements DomainPorts {
     const request = await this.approvalService.getApprovalRequest(requestId);
     if (!request) return null;
 
-    const env = await this.resourceService.deps.repositories.projects.findEnvironmentByResourceId(
-      request.resourceId
-    );
+    const env = await this.repositories.projects.findEnvironmentByResourceId(request.resourceId);
     if (!env) return null;
 
     const project = await this.projectService.getProject(env.projectId);
@@ -283,9 +333,7 @@ export class DomainPortsImpl implements DomainPorts {
       project.ownerId === principal.subjectId ||
       (await this.projectService.getMemberRole(env.projectId, principal.subjectId)) !== null;
     const isRequester = request.requesterId === principal.subjectId;
-    const guardians = await this.resourceService.deps.repositories.guardians.findByResourceId(
-      request.resourceId
-    );
+    const guardians = await this.repositories.guardians.findByResourceId(request.resourceId);
     const isGuardian = guardians.some((g) => g.discordUserId === principal.subjectId);
 
     if (!isMember && !isRequester && !isGuardian) {
@@ -302,6 +350,6 @@ export class DomainPortsImpl implements DomainPorts {
     const request = await this.getApprovalRequest(principal, requestId);
     if (!request) return null;
 
-    return this.approvalService.deps.repositories.approvalGrants.findByRequestId(requestId);
+    return this.repositories.approvalGrants.findByRequestId(requestId);
   }
 }

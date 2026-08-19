@@ -173,7 +173,7 @@ export type CreateResourceInput = Omit<Resource, 'id' | 'createdAt' | 'version'>
 /**
  * Input for adding a new guardian.
  */
-export type AddGuardianInput = Omit<Guardian, 'createdAt'>;
+export type AddGuardianInput = Omit<Guardian, 'id' | 'createdAt'> & { id?: string };
 
 /**
  * Input for creating a new approval request.
@@ -240,6 +240,9 @@ export interface TOTPAccount {
 
   /** Optional backup key / recovery code */
   backupKey?: string;
+
+  /** Legacy display compatibility; consent envelopes remain authoritative. */
+  shared?: boolean;
 
   /** Stable version identifier of the TOTP state */
   version: string;
@@ -329,17 +332,64 @@ export interface ResourceFieldMetadata {
  */
 export type CreateResourceFieldInput = Omit<ResourceField, 'id' | 'createdAt' | 'updatedAt'>;
 
-/**
- * Audit Log entry for sensitive actions.
- */
+export type AuditEventFamily =
+  | 'AUTHENTICATION'
+  | 'PROJECT_MEMBERSHIP'
+  | 'RESOURCE_CONFIGURATION'
+  | 'AUTHORIZATION'
+  | 'SECRET_LIFECYCLE'
+  | 'TOTP_LIFECYCLE'
+  | 'REQUEST_GRANT_LIFECYCLE'
+  | 'DELIVERY'
+  | 'AUDIT_ACCESS'
+  | 'LEGACY';
+
+export type AuditSurface = 'DISCORD' | 'HTTP' | 'PAWTHY' | 'DOMAIN' | 'WORKER' | 'SYSTEM';
+export type AuditOutcomeCode = 'SUCCESS' | 'DENIED' | 'FAILURE' | 'QUEUED' | 'NOOP';
+export type AuditRetentionClass = 'SECURITY' | 'OPERATIONAL' | 'PRIVACY';
+export type AuditTargetType =
+  | 'SUBJECT'
+  | 'PROJECT'
+  | 'ENVIRONMENT'
+  | 'RESOURCE'
+  | 'SECRET'
+  | 'TOTP_ACCOUNT'
+  | 'APPROVAL_REQUEST'
+  | 'APPROVAL_GRANT'
+  | 'CREDENTIAL'
+  | 'SESSION'
+  | 'DELIVERY'
+  | 'AUDIT_SCOPE'
+  | 'SYSTEM';
+
+export type AuditMetadataPrimitive = string | number | boolean | null;
+export type AuditMetadataValue =
+  | AuditMetadataPrimitive
+  | AuditMetadataValue[]
+  | { [key: string]: AuditMetadataValue };
+export type AuditMetadata = Record<string, AuditMetadataValue>;
+
+/** Version 2 append-only audit envelope. Secret-bearing values are forbidden in payload. */
 export interface AuditLog {
   id: string;
   schemaVersion: number;
+  eventFamily: AuditEventFamily;
   eventType: string;
-  outcomeCode: string;
-  actorType: string;
+  surface: AuditSurface;
+  operation: string;
+  outcomeCode: AuditOutcomeCode;
+  capability?: Capability | null;
+  decisionCode: DecisionCode;
+  reasonCode: ReasonCode;
+  targetType: AuditTargetType;
+  targetId?: string | null;
+  authoritySources: AuthoritySource[];
+  actorType: PrincipalType;
+  principalId: string;
   actorId?: string | null;
-  authKind?: string | null;
+  authKind?: AuthKind | null;
+  resolverType?: PrincipalType | null;
+  resolverId?: string | null;
   resourceId?: string | null;
   projectId?: string | null;
   environmentId?: string | null;
@@ -347,30 +397,52 @@ export interface AuditLog {
   grantId?: string | null;
   correlationId?: string | null;
   causationId?: string | null;
-  payload?: Record<string, unknown> | null; // Redacted JSON context
+  statusCode?: number | null;
+  durationMs?: number | null;
+  retentionClass: AuditRetentionClass;
+  integrityKeyId: string;
+  integrityHash: string;
+  payload?: AuditMetadata | null;
   createdAt: Date;
 }
 
-export type CreateAuditLogInput = Omit<AuditLog, 'id' | 'createdAt'>;
+/** Identity and time are supplied by the signing boundary, not generated after signing. */
+export type CreateAuditLogInput = AuditLog;
+
+export interface AuditCheckpoint {
+  id: string;
+  previousDigest: string | null;
+  eventDigest: string;
+  checkpointHash: string;
+  integrityKeyId: string;
+  eventCount: number;
+  throughId: string;
+  throughCreatedAt: Date;
+  createdAt: Date;
+}
 
 /**
  * OutboxEvent for transactional outbox side-effects.
  */
 export interface OutboxEvent {
   id: string;
+  schemaVersion: number;
   eventType: string;
-  payload: Record<string, unknown>;
-  status: 'PENDING' | 'PROCESSED' | 'FAILED';
+  resourceId?: string | null;
+  requestId?: string | null;
+  correlationId: string;
+  causationId?: string | null;
+  integrityKeyId: string;
+  integrityHash: string;
+  payload: AuditMetadata;
+  status: 'PENDING' | 'DELIVERY_IN_PROGRESS' | 'DELIVERED_PENDING_AUDIT' | 'PROCESSED' | 'FAILED';
   attempts: number;
-  lastError?: string | null;
+  lastErrorCode?: string | null;
   createdAt: Date;
   updatedAt: Date;
 }
 
-export type CreateOutboxEventInput = Omit<
-  OutboxEvent,
-  'attempts' | 'status' | 'createdAt' | 'updatedAt'
-> & { id?: string };
+export type CreateOutboxEventInput = Omit<OutboxEvent, 'attempts' | 'status' | 'updatedAt'>;
 
 /**
  * Represents a device login session (OAuth Device Flow).
@@ -592,6 +664,7 @@ export interface CapabilityContext {
 export type DecisionCode = 'ALLOW' | 'DENY' | 'APPROVAL_REQUIRED';
 
 export type ReasonCode =
+  | 'AUTHENTICATED_SUBJECT'
   | 'OWNER'
   | 'WRITER'
   | 'READER'

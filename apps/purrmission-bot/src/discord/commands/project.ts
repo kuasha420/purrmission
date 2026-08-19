@@ -13,6 +13,7 @@ import {
 import type { CommandContext } from './context.js';
 import { logger } from '../../logging/logger.js';
 import { ProjectMemberRole } from '../../domain/models.js';
+import { createDiscordPrincipal } from '../../domain/principal.js';
 import type { Services } from '../../domain/services.js';
 
 export const projectCommand = new SlashCommandBuilder()
@@ -127,7 +128,12 @@ export async function handleAddMember(
       return;
     }
 
-    await services.project.addMember(projectId, targetUser.id, role, actorId);
+    await services.project.addMember(
+      projectId,
+      targetUser.id,
+      role,
+      createDiscordPrincipal(actorId)
+    );
 
     await interaction.editReply(
       `✅ Added <@${targetUser.id}> as a **${role}** to project **${project.name}**.`
@@ -164,7 +170,7 @@ export async function handleRemoveMember(
       return;
     }
 
-    await services.project.removeMember(projectId, targetUser.id);
+    await services.project.removeMember(projectId, targetUser.id, createDiscordPrincipal(actorId));
 
     await interaction.editReply(`✅ Removed <@${targetUser.id}> from project **${project.name}**.`);
     logger.info('Removed project member', { projectId, targetUserId: targetUser.id, actorId });

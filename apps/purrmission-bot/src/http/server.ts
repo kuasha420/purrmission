@@ -20,8 +20,11 @@ import type { Capability, Principal } from '../domain/models.js';
 import { createDiscordPrincipal } from '../domain/principal.js';
 import type { Services } from '../domain/services.js';
 import { logger } from '../logging/logger.js';
-import crypto from 'node:crypto';
-import { correlationStorage } from '../logging/correlationContext.js';
+import {
+  correlationStorage,
+  isValidCorrelationId,
+  resolveCorrelationId,
+} from '../logging/correlationContext.js';
 
 declare module 'fastify' {
   interface FastifyRequest {
@@ -53,29 +56,8 @@ const createRequestSchema = z.object({
 
 type CreateRequestBody = z.infer<typeof createRequestSchema>;
 
-function redactBody(body: unknown): unknown {
-  if (!body || typeof body !== 'object') {
-    return body;
-  }
-  const sensitiveKeys = ['value', 'secret', 'apiKey', 'token', 'access_token', 'device_code'];
-  const redact = (obj: unknown): unknown => {
-    if (Array.isArray(obj)) {
-      return obj.map(redact);
-    }
-    if (obj && typeof obj === 'object') {
-      const copy: Record<string, unknown> = {};
-      for (const [key, val] of Object.entries(obj as Record<string, unknown>)) {
-        if (sensitiveKeys.some((sk) => key.toLowerCase().includes(sk.toLowerCase()))) {
-          copy[key] = '[REDACTED]';
-        } else {
-          copy[key] = redact(val);
-        }
-      }
-      return copy;
-    }
-    return obj;
-  };
-  return redact(body);
+function safeRoute(request: FastifyRequest): string {
+  return request.routeOptions.url || request.url.split('?', 1)[0] || 'unmatched';
 }
 
 /**
@@ -100,23 +82,45 @@ export function createHttpServer(deps: HttpServerDeps): FastifyInstance {
 
   // Generate and attach correlation ID
   server.addHook('onRequest', (request, reply, done) => {
-    const correlationId = (request.headers['x-correlation-id'] as string) || crypto.randomUUID();
+    let correlationId: string;
+    try {
+      correlationId = resolveCorrelationId(request.headers['x-correlation-id']);
+    } catch {
+      void reply.status(400).send({ error: 'Invalid x-correlation-id header' });
+      done();
+      return;
+    }
     request.headers['x-correlation-id'] = correlationId;
     request.correlationId = correlationId;
     reply.header('x-correlation-id', correlationId);
 
-    correlationStorage.run({ correlationId }, () => {
+    const causationId = request.headers['x-causation-id'];
+    if (causationId !== undefined && !isValidCorrelationId(causationId)) {
+      void reply.status(400).send({ error: 'Invalid x-causation-id header' });
+      done();
+      return;
+    }
+
+    correlationStorage.run({ correlationId, causationId, surface: 'HTTP' }, () => {
       done();
     });
   });
 
   // Log incoming requests inside correlation storage context
   server.addHook('preHandler', async (request) => {
-    const redactedBody = redactBody(request.body);
     logger.info('HTTP Request received', {
       method: request.method,
-      url: request.url,
-      body: redactedBody,
+      route: safeRoute(request),
+      correlationId: request.correlationId,
+    });
+  });
+
+  server.addHook('onError', async (request, _reply, error) => {
+    logger.error('HTTP Request failed', {
+      method: request.method,
+      route: safeRoute(request),
+      correlationId: request.correlationId,
+      errorType: error.name,
     });
   });
 
@@ -124,7 +128,7 @@ export function createHttpServer(deps: HttpServerDeps): FastifyInstance {
   server.addHook('onResponse', async (request, reply) => {
     logger.info('HTTP Response sent', {
       method: request.method,
-      url: request.url,
+      route: safeRoute(request),
       correlationId: request.correlationId,
       statusCode: reply.statusCode,
       responseTimeMs: reply.elapsedTime,
@@ -468,12 +472,16 @@ export function createHttpServer(deps: HttpServerDeps): FastifyInstance {
     async (req, rep) => {
       const { name, description } = req.body as z.infer<typeof CreateProjectSchema>;
       const userId = req.user.id;
+      const principal = extractPrincipal(req, userId);
 
-      const project = await services.project.createProject({
-        name,
-        description,
-        ownerId: userId,
-      });
+      const project = await services.project.createProject(
+        {
+          name,
+          description,
+          ownerId: userId,
+        },
+        principal
+      );
 
       return rep.status(201).send(project);
     }
@@ -526,16 +534,20 @@ export function createHttpServer(deps: HttpServerDeps): FastifyInstance {
       const { projectId } = req.params as z.infer<typeof ProjectParamsSchema>;
       const { name, slug } = req.body as z.infer<typeof CreateEnvironmentSchema>;
       const userId = req.user.id;
+      const principal = extractPrincipal(req, userId);
 
       const project = await services.project.getProject(projectId);
       if (!project) throw new ResourceNotFoundError('Project not found');
       if (project.ownerId !== userId) throw new AccessDeniedError('Access denied');
 
-      const env = await services.project.createEnvironment({
-        name,
-        slug,
-        projectId,
-      });
+      const env = await services.project.createEnvironment(
+        {
+          name,
+          slug,
+          projectId,
+        },
+        principal
+      );
       return rep.status(201).send(env);
     }
   );
@@ -656,7 +668,8 @@ export function createHttpServer(deps: HttpServerDeps): FastifyInstance {
       const { name, value } = req.body;
       await requireResourceCapability(req, 'secret.write', id, name);
 
-      const field = await services.resource.createField(id, name, value);
+      const principal = extractPrincipal(req, req.principal?.subjectId ?? 'unknown');
+      const field = await services.resource.createField(id, name, value, principal);
       return rep.status(201).send(field);
     }
   );
@@ -673,7 +686,8 @@ export function createHttpServer(deps: HttpServerDeps): FastifyInstance {
       const { id, name } = req.params;
       await requireResourceCapability(req, 'secret.value.read', id, name);
 
-      const field = await services.resource.getField(id, name);
+      const principal = extractPrincipal(req, req.principal?.subjectId ?? 'unknown');
+      const field = await services.resource.revealField(id, name, principal);
       if (!field) {
         throw new ResourceNotFoundError(`Field '${name}' not found`);
       }
@@ -694,7 +708,8 @@ export function createHttpServer(deps: HttpServerDeps): FastifyInstance {
       const { id, name } = req.params;
       await requireResourceCapability(req, 'secret.delete', id, name);
 
-      await services.resource.deleteField(id, name);
+      const principal = extractPrincipal(req, req.principal?.subjectId ?? 'unknown');
+      await services.resource.deleteField(id, name, principal);
       return rep.status(204).send();
     }
   );

@@ -2,6 +2,7 @@ import { describe, it, beforeEach } from 'node:test';
 import assert from 'node:assert';
 import { handleProjectCommand } from './project.js';
 import type { CommandContext } from './context.js';
+import type { Principal } from '../../domain/models.js';
 import type {
   CacheType,
   ChatInputCommandInteraction,
@@ -18,7 +19,7 @@ interface MockProjectServices {
       projectId: string,
       targetUserId: string,
       role: 'READER' | 'WRITER',
-      actorId: string
+      actorId: Principal
     ) => Promise<void>;
     removeMember: (projectId: string, targetUserId: string) => Promise<void>;
     getMemberRole: (projectId: string, userId: string) => Promise<'READER' | 'WRITER' | null>;
@@ -38,7 +39,7 @@ describe('handleProjectCommand', () => {
     projectId: string;
     targetUserId: string;
     role: 'READER' | 'WRITER';
-    actorId: string;
+    actorId: Principal;
   }> = [];
   let removeMemberCalls: Array<{ projectId: string; targetUserId: string }> = [];
   let listMembersCalls: string[] = [];
@@ -95,7 +96,7 @@ describe('handleProjectCommand', () => {
             projectId: string,
             targetUserId: string,
             role: 'READER' | 'WRITER',
-            actorId: string
+            actorId: Principal
           ) => {
             addMemberCalls.push({ projectId, targetUserId, role, actorId });
           },
@@ -116,14 +117,28 @@ describe('handleProjectCommand', () => {
     await handleProjectCommand(mockInteraction, mockContext);
 
     assert.deepStrictEqual(deferReplyCalls, [{ ephemeral: true }]);
-    assert.deepStrictEqual(addMemberCalls, [
+    assert.equal(addMemberCalls.length, 1);
+    assert.deepStrictEqual(
+      { ...addMemberCalls[0], actorId: undefined },
       {
         projectId: 'project-1',
         targetUserId: 'user-2',
         role: 'WRITER',
-        actorId: 'owner-1',
-      },
-    ]);
+        actorId: undefined,
+      }
+    );
+    assert.deepStrictEqual(
+      { ...addMemberCalls[0]?.actorId, id: undefined },
+      {
+        id: undefined,
+        type: 'DISCORD_USER',
+        subjectId: 'owner-1',
+        actorDiscordId: 'owner-1',
+        authKind: 'DISCORD',
+        correlationId: undefined,
+      }
+    );
+    assert.match(addMemberCalls[0]?.actorId.id ?? '', /^discord-interaction:/);
     assert.ok(
       typeof editReplyCalls[0] === 'string' &&
         editReplyCalls[0].includes('Added <@user-2> as a **WRITER**')
