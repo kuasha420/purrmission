@@ -1,6 +1,6 @@
 # Purrmission RBAC and Observability Knowledgebase
 
-- Status: **Prerequisite remediation active — Wave 1 Verified; Wave 2 integration underway (dashboard readiness remains No-go)**
+- Status: **Prerequisite remediation active — Waves 1-2 Verified; Wave 3 active (dashboard readiness remains No-go)**
 - Preparation issue: [#107](https://github.com/kuasha420/purrmission/issues/107) (complete)
 - Prerequisite epic: [#116](https://github.com/kuasha420/purrmission/issues/116) (open and active)
 - Execution graph:
@@ -9,11 +9,10 @@
 - Conformance Report: [2026-07-26 Prerequisite Conformance Report](../reports/2026-07-26-prerequisite-conformance-report.md)
 - Dashboard readiness: **No-go** (do not file Discord OAuth/session or Web Dashboard backend/frontend implementation phases until the prerequisite remediation and independent gate are complete)
 - Baseline audited revision: `e4269cea4d6f` (`master`, 2026-07-26)
-- Current remediation checkpoint: #117 and #118 are Verified and closed. #118 merged through PR
-  #146 at `4420664f1fcd06a9322ef322b26b42db0468051b` and passed clean-master build, full tests,
-  lint, and populated/interrupted migration rehearsals. #119's independently reviewed additive
-  contract checkpoint merged through PR #145 at `7ccc187d996a30ae29633942bbbc3fbacd8c8695`;
-  #119 is reopened and active for persistence/version completion on the verified #118 baseline.
+- Current remediation checkpoint: #117, #118, and #119 are Verified and closed. #119 completed
+  through PR #147 at merge `b4139782c61021fa6ec8ec3d6a4b8a952602b8de`; clean-master build,
+  lint, full tests, and fresh/populated/interrupted migration rehearsals pass. Wave 3 nodes #120
+  and #121 are unblocked and assigned for implementation.
 - Last progress update: 2026-08-20
 - Applies to: Discord commands, the Fastify API, Pawthy, and the future
   `apps/purrmission-web`
@@ -24,8 +23,9 @@
 | ---- | --------- | ---------------------------------------------------------------------------------------- |
 | 1    | #117      | Verified and closed at `a0144d46`; common and representative migration gates pass        |
 | 2    | #118      | Verified and closed at `4420664f`; common and populated/interrupted migration gates pass |
-| 2    | #119      | Partial query-contract PR #145 merged; persistence/version completion is active          |
-| 3-9  | #120-#130 | Blocked by the execution graph                                                           |
+| 2    | #119      | Verified and closed at `b4139782`; exact metadata/version and migration gates pass       |
+| 3    | #120/#121 | Unblocked and assigned; TOTP custody and credential lifecycle implementation active      |
+| 4-9  | #122-#130 | Blocked by the execution graph                                                           |
 
 Sections 3-5 remain the point-in-time audit record for `e4269cea4d6f`; they are not silently
 rewritten as remediation lands. The ledger above and the execution graph are the live progress

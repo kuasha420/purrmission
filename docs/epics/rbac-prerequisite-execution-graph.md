@@ -11,20 +11,18 @@
   routing are recorded in the
   [2026-07-26 prerequisite conformance report](../reports/2026-07-26-prerequisite-conformance-report.md)
   and [#138](https://github.com/kuasha420/purrmission/pull/138)
-- Current execution checkpoint: Wave 1 [#117](https://github.com/kuasha420/purrmission/issues/117)
-  is Verified and closed. Wave 2's partial #119 contract checkpoint merged through
-  [#145](https://github.com/kuasha420/purrmission/pull/145) at `7ccc187d996a30ae29633942bbbc3fbacd8c8695`.
-  #118 is Verified and closed after [#146](https://github.com/kuasha420/purrmission/pull/146)
-  merged at `4420664f1fcd06a9322ef322b26b42db0468051b`; clean-master build, lint, full tests, and
-  fresh/populated/interrupted migration rehearsals pass. #119 is reopened and active for its
-  remaining persistence, versioning, repository, service, and adapter completion.
+- Current execution checkpoint: Waves 1 and 2 are Verified and closed. #119 completed through
+  [#147](https://github.com/kuasha420/purrmission/pull/147) at merge
+  `b4139782c61021fa6ec8ec3d6a4b8a952602b8de`; clean-master build, lint, full tests, and
+  fresh/populated/interrupted migration rehearsals pass. Wave 3 nodes #120 and #121 are unblocked
+  and assigned for implementation.
 - Last assessed: 2026-08-20
 
 All implementation nodes and both gates were reopened after the No-go result. Reopening records
 ownership; it does not make every node ready at once. #117's first implementation failed
 independent post-merge verification, then its corrective lane passed review and post-merge
-verification. #118 and #119 are now the active Wave 2 lanes, serialized for integration as defined
-in Section 3.2. Issue #105 remains independently claimable on the parallel production-safety lane.
+verification. #118 and #119 completed the serialized Wave 2 integration defined in Section 3.2;
+#120 and #121 are now the active Wave 3 lanes. Issue #105 remains independently claimable on the parallel production-safety lane.
 Every later node must wait for the incoming dependencies in Section 3 to be post-merge verified
 and closed.
 
@@ -81,9 +79,9 @@ flowchart TD
   EPIC["#116<br/>Pre-dashboard remediation epic"]
   I117["#117<br/>Principal and capability contract<br/>Verified and closed"]
   I118["#118<br/>Audit, outbox, and correlation<br/>Verified and closed"]
-  I119["#119<br/>Metadata projections and target versions<br/>Persistence completion active"]
-  I120["#120<br/>TOTP custody and consent"]
-  I121["#121<br/>Credential lifecycle"]
+  I119["#119<br/>Metadata projections and target versions<br/>Verified and closed"]
+  I120["#120<br/>TOTP custody and consent<br/>Active"]
+  I121["#121<br/>Credential lifecycle<br/>Active"]
   I122["#122<br/>Approval Request V2 and grants"]
   I123["#123<br/>Notification and callback delivery"]
   I127["#127<br/>Shared adapter and transaction substrate"]
@@ -150,13 +148,14 @@ incomplete at final reassessment, #126 must preserve an explicit production roll
 
 ### 3.1 Current wave ledger
 
-| Node(s)   | Current state                                          | Evidence / merge gate                                                                       |
-| --------- | ------------------------------------------------------ | ------------------------------------------------------------------------------------------- |
-| #117      | Verified and closed at merge `a0144d46`                | Human and independent review complete; clean-master common and migration gates pass         |
-| #118      | Verified and closed at merge `4420664f`                | Human/automated review complete; clean-master common and populated migration gates pass     |
-| #119      | Persistence/version completion active on verified #118 | Partial contract/query PR #145 is merged; remaining acceptance is owned by the current lane |
-| #120-#130 | Blocked according to the dependency graph              | Planning and test design may begin only within the one-wave-ahead rule                      |
-| #105      | Open parallel production-safety lane                   | Blocks production migration/deployment, not local branch execution                          |
+| Node(s)   | Current state                             | Evidence / merge gate                                                                   |
+| --------- | ----------------------------------------- | --------------------------------------------------------------------------------------- |
+| #117      | Verified and closed at merge `a0144d46`   | Human and independent review complete; clean-master common and migration gates pass     |
+| #118      | Verified and closed at merge `4420664f`   | Human/automated review complete; clean-master common and populated migration gates pass |
+| #119      | Verified and closed at merge `b4139782`   | Automated review complete; clean-master common and migration gates pass                 |
+| #120/#121 | Active and assigned                       | Wave 3 is unblocked; lanes may implement independently                                  |
+| #122-#130 | Blocked according to the dependency graph | Planning and test design may begin only within the one-wave-ahead rule                  |
+| #105      | Open parallel production-safety lane      | Blocks production migration/deployment, not local branch execution                      |
 
 Research, threat modeling, test design, and file-collision planning may begin one wave early.
 Production implementation must not merge before every native blocker is **Verified** and closed.
