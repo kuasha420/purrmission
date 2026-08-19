@@ -43,6 +43,9 @@ import { createDiscordPrincipal } from './principal.js';
 import { generateTOTPCode } from './totp.js';
 import { computeKeyedDigest, deterministicUUID } from './crypto.js';
 import { DomainPorts } from './ports.js';
+import { resolveTargetVersions } from './target_versions.js';
+import { createRepositoryMetadataQueryService } from './metadata_persistence.js';
+import type { MetadataQueryService } from './metadata_queries.js';
 import { DomainPortsImpl } from './ports_impl.js';
 import { correlationStorage } from '../logging/correlationContext.js';
 
@@ -135,9 +138,17 @@ export class ApprovalService {
     const requesterType = input.requesterType || 'DISCORD_USER';
     const authKind = input.authKind || 'DISCORD';
     const action = input.action || 'resource.view';
-    const targetKey = input.targetKey || null;
-    const targetVersion = input.targetVersion || resource.version;
-    const policyVersion = input.policyVersion || resource.version;
+    const suppliedTargetKey = input.targetKey || null;
+    const versions = await resolveTargetVersions(
+      repositories,
+      input.resourceId,
+      action,
+      suppliedTargetKey
+    );
+    if (!versions) {
+      return { success: false, error: 'The exact request target does not exist.' };
+    }
+    const { targetKey, targetVersion, policyVersion } = versions;
 
     // Deduplication check: check if a PENDING request already exists for this exact signature
     let existingPending = null;
@@ -2005,6 +2016,7 @@ export interface Services {
   auth: AuthService;
   project: ProjectService;
   ports: DomainPorts;
+  metadata: MetadataQueryService;
 }
 
 /**
@@ -2039,5 +2051,6 @@ export function createServices(baseDeps: { repositories: Repositories }): Servic
     ),
     project,
     ports: new DomainPortsImpl(project, resource, approval, audit, baseDeps.repositories),
+    metadata: createRepositoryMetadataQueryService(baseDeps.repositories),
   };
 }

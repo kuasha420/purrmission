@@ -18,6 +18,12 @@ describe('Approval decisions and provisional authority fail closed', () => {
       mode: 'ONE_OF_N',
       apiKey: null,
     });
+    const account = await repos.totp.create({
+      ownerDiscordUserId: 'custody-owner',
+      accountName: 'Protected OTP',
+      secret: 'JBSWY3DPEHPK3PXP',
+    });
+    await repos.resources.update('res-1', { totpAccountId: account.id });
     await repos.guardians.add({
       id: 'guardian-row-1',
       resourceId: 'res-1',

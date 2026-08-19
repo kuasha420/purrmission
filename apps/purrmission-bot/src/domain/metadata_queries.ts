@@ -67,11 +67,7 @@ export interface ExactCapabilitySummaryDTO {
   decisions: CapabilityDecisionDTO[];
 }
 
-/**
- * These read contracts require stable grant-relevant versions. Prisma columns, populated
- * backfills, and same-transaction mutation advancement remain an explicit integration step after
- * #118 lands; this branch does not claim that persistence acceptance criterion yet.
- */
+/** Stable, non-sensitive metadata required by exact-object authorization consumers. */
 export interface ProjectMetadataRecord {
   id: string;
   name: string;

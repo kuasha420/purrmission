@@ -1,7 +1,9 @@
 import type {
   Resource,
+  ResourceMetadata,
   Guardian,
   ApprovalRequest,
+  ApprovalRequestMetadataProjection,
   CreateResourceInput,
   AddGuardianInput,
   CreateApprovalRequestInput,
@@ -27,6 +29,7 @@ import type {
   Credential,
   CreateCredentialInput,
   ApprovalGrant,
+  ApprovalGrantMetadataProjection,
   CreateApprovalGrantInput,
   CallbackDestination,
   CreateCallbackDestinationInput,
@@ -67,6 +70,7 @@ export class InMemoryResourceRepository implements ResourceRepository {
       ...input,
       id: input.id ?? crypto.randomUUID(),
       version: input.version || crypto.randomUUID(),
+      totpLinkVersion: input.totpLinkVersion || crypto.randomUUID(),
       createdAt: new Date(),
     };
     this.resources.set(resource.id, resource);
@@ -92,12 +96,14 @@ export class InMemoryResourceRepository implements ResourceRepository {
       totpAccountId?: string | null;
       totpDelegationEnvelope?: TOTPLinkEnvelope | null;
       version?: string;
+      totpLinkVersion?: string;
     }
   ): Promise<Resource> {
     const resource = this.resources.get(id);
     if (!resource) {
       throw new Error(`Resource not found: ${id}`);
     }
+    const linkChanges = 'totpAccountId' in data || 'totpDelegationEnvelope' in data;
     const updated: Resource = {
       ...resource,
       totpAccountId:
@@ -107,6 +113,8 @@ export class InMemoryResourceRepository implements ResourceRepository {
           ? undefined
           : (data.totpDelegationEnvelope ?? resource.totpDelegationEnvelope),
       version: data.version || crypto.randomUUID(),
+      totpLinkVersion:
+        data.totpLinkVersion ?? (linkChanges ? crypto.randomUUID() : resource.totpLinkVersion),
     };
     this.resources.set(id, updated);
     return updated;
@@ -122,6 +130,19 @@ export class InMemoryResourceRepository implements ResourceRepository {
       }
     }
     return result;
+  }
+
+  async findMetadataById(id: string): Promise<ResourceMetadata | null> {
+    const resource = this.resources.get(id);
+    if (!resource) return null;
+    const { name, mode, totpAccountId, version, totpLinkVersion, createdAt } = resource;
+    return { id, name, mode, totpAccountId, version, totpLinkVersion, createdAt };
+  }
+
+  async findMetadataManyByIds(ids: string[]): Promise<ResourceMetadata[]> {
+    return (await Promise.all(ids.map((id) => this.findMetadataById(id)))).filter(
+      (resource) => resource !== null
+    );
   }
 
   rotateVersion(id: string): void {
@@ -243,6 +264,62 @@ export class InMemoryApprovalRequestRepository implements ApprovalRequestReposit
 
   async findByResourceId(resourceId: string): Promise<ApprovalRequest[]> {
     return Array.from(this.requests.values()).filter((r) => r.resourceId === resourceId);
+  }
+
+  async findByRequesterId(requesterId: string): Promise<ApprovalRequest[]> {
+    return Array.from(this.requests.values()).filter(
+      (request) => request.requesterId === requesterId
+    );
+  }
+
+  private metadata(request: ApprovalRequest): ApprovalRequestMetadataProjection {
+    const {
+      id,
+      resourceId,
+      status,
+      requesterId,
+      requesterType,
+      authKind,
+      action,
+      targetKey,
+      targetVersion,
+      policyVersion,
+      createdAt,
+      expiresAt,
+    } = request;
+    return {
+      id,
+      resourceId,
+      status,
+      requesterId,
+      requesterType,
+      authKind,
+      action,
+      targetKey,
+      targetVersion,
+      policyVersion,
+      createdAt,
+      expiresAt,
+    };
+  }
+
+  async findMetadataById(id: string): Promise<ApprovalRequestMetadataProjection | null> {
+    const request = this.requests.get(id);
+    return request ? this.metadata(request) : null;
+  }
+
+  async findMetadataByRequesterId(
+    requesterId: string
+  ): Promise<ApprovalRequestMetadataProjection[]> {
+    return Array.from(this.requests.values())
+      .filter((request) => request.requesterId === requesterId)
+      .map((request) => this.metadata(request));
+  }
+
+  async findMetadataByResourceId(resourceId: string): Promise<ApprovalRequestMetadataProjection[]> {
+    return Array.from(this.requests.values())
+      .filter((request) => request.resourceId === resourceId)
+      .map((request) => this.metadata(request));
   }
 
   async findActiveByRequester(
@@ -503,6 +580,7 @@ export class InMemoryResourceFieldRepository implements ResourceFieldRepository 
     const field: ResourceField = {
       ...input,
       id: crypto.randomUUID(),
+      version: crypto.randomUUID(),
       createdAt: new Date(),
       updatedAt: new Date(),
     };
@@ -542,6 +620,7 @@ export class InMemoryResourceFieldRepository implements ResourceFieldRepository 
     const updated: ResourceField = {
       ...field,
       value,
+      version: crypto.randomUUID(),
       updatedAt: new Date(),
     };
     this.fields.set(id, updated);
@@ -564,6 +643,7 @@ export class InMemoryResourceFieldRepository implements ResourceFieldRepository 
         id: f.id,
         resourceId: f.resourceId,
         name: f.name,
+        version: f.version,
         createdAt: f.createdAt,
         updatedAt: f.updatedAt,
       }));
@@ -581,6 +661,7 @@ export class InMemoryResourceFieldRepository implements ResourceFieldRepository 
       id: field.id,
       resourceId: field.resourceId,
       name: field.name,
+      version: field.version,
       createdAt: field.createdAt,
       updatedAt: field.updatedAt,
     };
@@ -1095,6 +1176,15 @@ export class InMemoryApprovalGrantRepository implements ApprovalGrantRepository 
       }
     }
     return null;
+  }
+
+  async findMetadataByRequestId(
+    requestId: string
+  ): Promise<ApprovalGrantMetadataProjection | null> {
+    const grant = Array.from(this.grants.values()).find((item) => item.requestId === requestId);
+    if (!grant) return null;
+    const { id, resourceId, expiresAt, consumedAt, revokedAt } = grant;
+    return { id, requestId, resourceId, expiresAt, consumedAt, revokedAt };
   }
 
   async findActiveUnconsumed(

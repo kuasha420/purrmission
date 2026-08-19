@@ -36,6 +36,7 @@ model Resource {
   totpAccount            TOTPAccount? @relation(fields: [totpAccountId], references: [id], onDelete: SetNull)
   totpDelegationEnvelope Json?
   version                String       @default(uuid())
+  totpLinkVersion        String       @default(uuid())
 
   guardians            Guardian[]
   approvalRequests     ApprovalRequest[]
@@ -55,6 +56,7 @@ model ResourceField {
   resourceId String
   name       String
   value      String // Encrypted at rest
+  version    String   @default(uuid())
   createdAt  DateTime @default(now())
   updatedAt  DateTime @updatedAt
 

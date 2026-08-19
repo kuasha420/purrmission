@@ -5,7 +5,7 @@
 import type {
   Resource,
   Guardian,
-  ApprovalRequest,
+  ApprovalRequestMetadataProjection,
   Environment,
   Principal,
   Capability,
@@ -39,13 +39,13 @@ import type {
 } from './repositories.js';
 
 export interface CapabilityRepositories {
-  resources: Pick<ResourceRepository, 'findById'>;
+  resources: Pick<ResourceRepository, 'findMetadataById'>;
   guardians: Pick<GuardianRepository, 'findByResourceAndUser'>;
   projects: Pick<
     ProjectRepository,
     'findById' | 'getEnvironmentById' | 'findEnvironmentByResourceId' | 'getMemberRole'
   >;
-  approvalRequests: Pick<ApprovalRequestRepository, 'findById'>;
+  approvalRequests: Pick<ApprovalRequestRepository, 'findMetadataById'>;
   approvalGrants: Pick<ApprovalGrantRepository, 'findById'>;
   totp: Pick<TOTPRepository, 'findById' | 'findMetadataById'>;
 }
@@ -396,7 +396,7 @@ export async function hasCapability(
 
   let projectId = context.projectId;
   let resourceId = context.resourceId;
-  let resolvedRequest: ApprovalRequest | null = null;
+  let resolvedRequest: ApprovalRequestMetadataProjection | null = null;
   let resolvedEnvironment: Environment | null = null;
 
   if (context.environmentId && !projectId) {
@@ -422,7 +422,7 @@ export async function hasCapability(
   }
 
   if (context.requestId) {
-    resolvedRequest = await repositories.approvalRequests.findById(context.requestId);
+    resolvedRequest = await repositories.approvalRequests.findMetadataById(context.requestId);
     if (!resolvedRequest) {
       return deny('TARGET_SCOPE_MISMATCH', 'Approval request target does not exist.');
     }
@@ -576,12 +576,24 @@ export async function hasCapability(
 
     // --- TOTP CAPABILITIES ---
     case 'totp.metadata.read':
+      if (context.totpAccountId && repositories.totp && userId) {
+        const account = await repositories.totp.findMetadataById(context.totpAccountId);
+        if (account?.ownerDiscordUserId === userId) {
+          return allow('OWNER', 'Personal TOTP Owner can read account metadata', ['TOTP_OWNER']);
+        }
+      }
       if (isResourceOwner) return allow('OWNER', 'Resource Owner can read TOTP metadata');
       if (pMemberRole === 'WRITER') return allow('WRITER', 'Project Writer can read TOTP metadata');
       if (pMemberRole === 'READER') return allow('READER', 'Project Reader can read TOTP metadata');
       return deny('NO_ROLE', 'No TOTP metadata access');
 
     case 'totp.code.read':
+      if (!context.resourceId && context.totpAccountId && repositories.totp && userId) {
+        const account = await repositories.totp.findMetadataById(context.totpAccountId);
+        if (account?.ownerDiscordUserId === userId) {
+          return allow('OWNER', 'Personal TOTP Owner can read their current code', ['TOTP_OWNER']);
+        }
+      }
       if (isResourceOwner) return allow('OWNER', 'Resource Owner can read TOTP code');
       return deny('NO_ROLE', 'No direct TOTP code read access');
 
@@ -607,7 +619,7 @@ export async function hasCapability(
         repositories.totp &&
         userId
       ) {
-        const linkedResource = await repositories.resources.findById(context.resourceId);
+        const linkedResource = await repositories.resources.findMetadataById(context.resourceId);
         if (linkedResource?.totpAccountId !== context.totpAccountId) {
           return deny(
             'TARGET_SCOPE_MISMATCH',
