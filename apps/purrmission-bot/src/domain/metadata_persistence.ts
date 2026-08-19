@@ -101,6 +101,7 @@ class RepositoryMetadataSource implements SubjectBoundMetadataSource {
     const guardianships = await this.repositories.guardians.findByUserId(subjectId);
     const ownRequests =
       await this.repositories.approvalRequests.findMetadataByRequesterId(subjectId);
+    const requestByResource = new Map(ownRequests.map((request) => [request.resourceId, request]));
     const resourceIds = new Set([
       ...environmentByResource.keys(),
       ...guardianships.map(({ resourceId }) => resourceId),
@@ -108,7 +109,15 @@ class RepositoryMetadataSource implements SubjectBoundMetadataSource {
     ]);
     if (await this.repositories.resources.findMetadataById(subjectId)) resourceIds.add(subjectId);
     const resources = await this.repositories.resources.findMetadataManyByIds([...resourceIds]);
-    return Promise.all(resources.map((resource) => this.resourceRecord(resource)));
+    return Promise.all(
+      resources.map(async (resource) => {
+        const request = requestByResource.get(resource.id);
+        return {
+          ...(await this.resourceRecord(resource)),
+          ...(request ? { requestId: request.id } : {}),
+        };
+      })
+    );
   }
 
   private async queueResourceIds(subjectId: string): Promise<Set<string>> {
@@ -221,7 +230,9 @@ class RepositoryMetadataSource implements SubjectBoundMetadataSource {
             request.resourceId,
             request.targetKey as string
           );
-          return field ? { field, requestId: request.id } : null;
+          return field && field.version === request.targetVersion
+            ? { field, requestId: request.id }
+            : null;
         })
     );
     const scopedFields = dedupe(
@@ -417,10 +428,15 @@ class RepositoryRelationshipVerifier implements MetadataRelationshipVerifier {
       const environment = await this.repositories.projects.findEnvironmentByResourceId(
         projected.id
       );
-      return environment
+      const ancestryMatches = environment
         ? environment.id === projected.environmentId &&
-            environment.projectId === projected.projectId
+          environment.projectId === projected.projectId
         : projected.environmentId === undefined && projected.projectId === undefined;
+      if (!ancestryMatches || !projected.requestId) return ancestryMatches;
+      const request = await this.repositories.approvalRequests.findMetadataById(
+        projected.requestId
+      );
+      return request?.resourceId === projected.id;
     }
     if (kind === 'SECRET') {
       const projected = record as SecretMetadataRecord;
@@ -446,7 +462,8 @@ class RepositoryRelationshipVerifier implements MetadataRelationshipVerifier {
       return (
         request?.resourceId === projected.resourceId &&
         request.action === 'secret.value.read' &&
-        request.targetKey === projected.key
+        request.targetKey === projected.key &&
+        request.targetVersion === projected.version
       );
     }
     if (kind === 'TOTP_ACCOUNT') {

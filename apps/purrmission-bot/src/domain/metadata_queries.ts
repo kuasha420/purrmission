@@ -92,6 +92,7 @@ export interface ResourceMetadataRecord {
   id: string;
   projectId?: string;
   environmentId?: string;
+  requestId?: string;
   name: string;
   mode: string;
   version: string;
@@ -1002,6 +1003,7 @@ export class MetadataQueryService {
             projectId: record.projectId,
             environmentId: record.environmentId,
             resourceId: record.id,
+            authorizationRequestId: record.requestId,
           },
           this.evaluate
         )
@@ -1105,9 +1107,7 @@ export class MetadataQueryService {
           },
           this.evaluate
         );
-        if (!accountAuthorization) return null;
-
-        const metadataRead = accountAuthorization.capabilities.decisions.find(
+        const metadataRead = accountAuthorization?.capabilities.decisions.find(
           (decision) => decision.capability === 'totp.metadata.read'
         );
         const detailed =
@@ -1117,14 +1117,14 @@ export class MetadataQueryService {
             ['TOTP_OWNER', 'PROJECT_OWNER', 'RESOURCE_OWNER'].includes(source)
           );
         if (record.scope === 'PERSONAL') {
-          return detailed
+          return accountAuthorization && detailed
             ? {
                 record: { metadata: record, detailed },
                 capabilities: accountAuthorization.capabilities,
               }
             : null;
         }
-        if (detailed) {
+        if (accountAuthorization && detailed) {
           return {
             record: { metadata: record, detailed },
             capabilities: accountAuthorization.capabilities,

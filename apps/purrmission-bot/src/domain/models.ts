@@ -693,6 +693,8 @@ export interface CapabilityContext {
   /** Distinguishes Resource-owner link authority from custody-owner unlink authority. */
   totpLinkOperation?: 'LINK' | 'UNLINK';
   requestId?: string;
+  /** Request used as scoped authority evidence without changing the evaluated object target. */
+  authorizationRequestId?: string;
   fieldName?: string; // specific secret/field
   subjectId?: string;
   // For grant consumption validation

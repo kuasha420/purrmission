@@ -305,6 +305,7 @@ export async function hasCapability(
   context: CapabilityContext
 ): Promise<EvaluationResult> {
   const target = resolvePolicyTarget(context);
+  const authorityRequestId = context.requestId ?? context.authorizationRequestId;
   let isProjectOwner = false;
 
   const defaultAuthoritySources = (reasonCode: ReasonCode): AuthoritySource[] => {
@@ -338,7 +339,7 @@ export async function hasCapability(
     capability,
     target,
     authoritySources,
-    ...(context.requestId ? { approvalRequestId: context.requestId } : {}),
+    ...(authorityRequestId ? { approvalRequestId: authorityRequestId } : {}),
     ...(grantId ? { grantId } : {}),
     safeExplanation,
   });
@@ -354,10 +355,18 @@ export async function hasCapability(
     capability,
     target,
     authoritySources: [],
-    ...(context.requestId ? { approvalRequestId: context.requestId } : {}),
+    ...(authorityRequestId ? { approvalRequestId: authorityRequestId } : {}),
     ...(context.grantId ? { grantId: context.grantId } : {}),
     safeExplanation,
   });
+
+  if (
+    context.requestId &&
+    context.authorizationRequestId &&
+    context.requestId !== context.authorizationRequestId
+  ) {
+    return deny('TARGET_SCOPE_MISMATCH', 'Conflicting approval request authority context.');
+  }
 
   const principalValidation = validatePrincipal(principal, context.requiredAudience);
   if (!principalValidation.valid) {
@@ -421,8 +430,8 @@ export async function hasCapability(
     }
   }
 
-  if (context.requestId) {
-    resolvedRequest = await repositories.approvalRequests.findMetadataById(context.requestId);
+  if (authorityRequestId) {
+    resolvedRequest = await repositories.approvalRequests.findMetadataById(authorityRequestId);
     if (!resolvedRequest) {
       return deny('TARGET_SCOPE_MISMATCH', 'Approval request target does not exist.');
     }
@@ -542,6 +551,17 @@ export async function hasCapability(
       if (pMemberRole === 'READER') return allow('READER', 'Project Reader can view resource');
       if (explicitGuardianRole === 'GUARDIAN')
         return allow('GUARDIAN', 'Guardian can view resource');
+      if (
+        resolvedRequest &&
+        resolvedRequest.resourceId === resourceId &&
+        resolvedRequest.requesterId === userId
+      ) {
+        return allow(
+          'AUTHENTICATED_SUBJECT',
+          'Requester can view the exact Resource named by their request.',
+          ['AUTHENTICATED_SUBJECT']
+        );
+      }
       return deny('NO_ROLE', 'No role on resource');
 
     case 'resource.policy.manage':

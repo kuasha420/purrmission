@@ -117,6 +117,12 @@ describe('repository-backed metadata persistence', () => {
       [resource.id]
     );
     assert.deepEqual(
+      (await services.metadata.listResources(createDiscordPrincipal('requester'))).items.map(
+        ({ id }) => id
+      ),
+      [resource.id]
+    );
+    assert.deepEqual(
       (await services.metadata.listResources(createDiscordPrincipal('stranger'))).items,
       []
     );
@@ -217,6 +223,11 @@ describe('repository-backed metadata persistence', () => {
     assert.equal(linked.items[0]?.kind, 'TOTP_LINK_STATUS');
     assert.equal(JSON.stringify(linked).includes('Production OTP'), false);
     assert.equal(JSON.stringify(linked).includes('recovery-material'), false);
+    const guardianLinked = await services.metadata.listTOTPAccounts(
+      createDiscordPrincipal('guardian')
+    );
+    assert.equal(guardianLinked.items[0]?.kind, 'TOTP_LINK_STATUS');
+    assert.equal(JSON.stringify(guardianLinked).includes(account.id), false);
 
     const personal = await services.metadata.listTOTPAccounts(
       createDiscordPrincipal('custody-owner')
@@ -283,6 +294,14 @@ describe('repository-backed metadata persistence', () => {
   it('retains immutable request metadata after the current target changes', async () => {
     const { repositories, services, secret, account, request, resource } = await fixture();
     await repositories.resourceFields.update(secret.id, 'rotated-value');
+    assert.deepEqual(
+      (await services.metadata.listSecrets(createDiscordPrincipal('requester'))).items,
+      []
+    );
+    assert.deepEqual(
+      (await services.metadata.listSecrets(createDiscordPrincipal('guardian'))).items,
+      []
+    );
     const secretHistory = await services.metadata.listRequests(createDiscordPrincipal('requester'));
     assert.equal(secretHistory.items[0]?.id, request.id);
     assert.equal(secretHistory.items[0]?.target.targetVersion, request.targetVersion);
