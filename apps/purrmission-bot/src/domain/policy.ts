@@ -5,7 +5,7 @@
 import type {
   Resource,
   Guardian,
-  ApprovalRequest,
+  ApprovalRequestMetadataProjection,
   Environment,
   Principal,
   Capability,
@@ -39,15 +39,15 @@ import type {
 } from './repositories.js';
 
 export interface CapabilityRepositories {
-  resources: Pick<ResourceRepository, 'findById'>;
+  resources: Pick<ResourceRepository, 'findMetadataById'>;
   guardians: Pick<GuardianRepository, 'findByResourceAndUser'>;
   projects: Pick<
     ProjectRepository,
     'findById' | 'getEnvironmentById' | 'findEnvironmentByResourceId' | 'getMemberRole'
   >;
-  approvalRequests: Pick<ApprovalRequestRepository, 'findById'>;
+  approvalRequests: Pick<ApprovalRequestRepository, 'findMetadataById'>;
   approvalGrants: Pick<ApprovalGrantRepository, 'findById'>;
-  totp: Pick<TOTPRepository, 'findById' | 'findMetadataById'>;
+  totp: Pick<TOTPRepository, 'findMetadataById'>;
 }
 
 export interface EffectiveGuardianRepositories {
@@ -269,11 +269,11 @@ export async function getGuardedResourcesForUser(
  */
 function resolvePolicyTarget(context: CapabilityContext): PolicyTarget {
   if (context.grantId) return { type: 'APPROVAL_GRANT', id: context.grantId };
-  if (context.requestId) return { type: 'APPROVAL_REQUEST', id: context.requestId };
-  if (context.totpAccountId) return { type: 'TOTP_ACCOUNT', id: context.totpAccountId };
   if (context.resourceId && context.fieldName) {
     return { type: 'SECRET', resourceId: context.resourceId, key: context.fieldName };
   }
+  if (context.requestId) return { type: 'APPROVAL_REQUEST', id: context.requestId };
+  if (context.totpAccountId) return { type: 'TOTP_ACCOUNT', id: context.totpAccountId };
   if (context.resourceId) return { type: 'RESOURCE', id: context.resourceId };
   if (context.environmentId) return { type: 'ENVIRONMENT', id: context.environmentId };
   if (context.projectId) return { type: 'PROJECT', id: context.projectId };
@@ -305,6 +305,7 @@ export async function hasCapability(
   context: CapabilityContext
 ): Promise<EvaluationResult> {
   const target = resolvePolicyTarget(context);
+  const authorityRequestId = context.requestId ?? context.authorizationRequestId;
   let isProjectOwner = false;
 
   const defaultAuthoritySources = (reasonCode: ReasonCode): AuthoritySource[] => {
@@ -338,7 +339,7 @@ export async function hasCapability(
     capability,
     target,
     authoritySources,
-    ...(context.requestId ? { approvalRequestId: context.requestId } : {}),
+    ...(authorityRequestId ? { approvalRequestId: authorityRequestId } : {}),
     ...(grantId ? { grantId } : {}),
     safeExplanation,
   });
@@ -354,10 +355,18 @@ export async function hasCapability(
     capability,
     target,
     authoritySources: [],
-    ...(context.requestId ? { approvalRequestId: context.requestId } : {}),
+    ...(authorityRequestId ? { approvalRequestId: authorityRequestId } : {}),
     ...(context.grantId ? { grantId: context.grantId } : {}),
     safeExplanation,
   });
+
+  if (
+    context.requestId &&
+    context.authorizationRequestId &&
+    context.requestId !== context.authorizationRequestId
+  ) {
+    return deny('TARGET_SCOPE_MISMATCH', 'Conflicting approval request authority context.');
+  }
 
   const principalValidation = validatePrincipal(principal, context.requiredAudience);
   if (!principalValidation.valid) {
@@ -396,7 +405,7 @@ export async function hasCapability(
 
   let projectId = context.projectId;
   let resourceId = context.resourceId;
-  let resolvedRequest: ApprovalRequest | null = null;
+  let resolvedRequest: ApprovalRequestMetadataProjection | null = null;
   let resolvedEnvironment: Environment | null = null;
 
   if (context.environmentId && !projectId) {
@@ -421,8 +430,8 @@ export async function hasCapability(
     }
   }
 
-  if (context.requestId) {
-    resolvedRequest = await repositories.approvalRequests.findById(context.requestId);
+  if (authorityRequestId) {
+    resolvedRequest = await repositories.approvalRequests.findMetadataById(authorityRequestId);
     if (!resolvedRequest) {
       return deny('TARGET_SCOPE_MISMATCH', 'Approval request target does not exist.');
     }
@@ -542,6 +551,17 @@ export async function hasCapability(
       if (pMemberRole === 'READER') return allow('READER', 'Project Reader can view resource');
       if (explicitGuardianRole === 'GUARDIAN')
         return allow('GUARDIAN', 'Guardian can view resource');
+      if (
+        resolvedRequest &&
+        resolvedRequest.resourceId === resourceId &&
+        resolvedRequest.requesterId === userId
+      ) {
+        return allow(
+          'AUTHENTICATED_SUBJECT',
+          'Requester can view the exact Resource named by their request.',
+          ['AUTHENTICATED_SUBJECT']
+        );
+      }
       return deny('NO_ROLE', 'No role on resource');
 
     case 'resource.policy.manage':
@@ -560,6 +580,27 @@ export async function hasCapability(
         return allow('WRITER', 'Project Writer can read secret metadata');
       if (pMemberRole === 'READER')
         return allow('READER', 'Project Reader can read secret metadata');
+      if (
+        resolvedRequest?.action === 'secret.value.read' &&
+        resolvedRequest.resourceId === resourceId &&
+        resolvedRequest.targetKey === context.fieldName &&
+        userId
+      ) {
+        if (resolvedRequest.requesterId === userId) {
+          return allow(
+            'AUTHENTICATED_SUBJECT',
+            'Requester can read metadata for the exact secret named by their request.',
+            ['AUTHENTICATED_SUBJECT']
+          );
+        }
+        if (resolvedRequest.status === 'PENDING' && explicitGuardianRole === 'GUARDIAN') {
+          return allow(
+            'GUARDIAN',
+            'Guardian can read metadata for the exact secret in their pending queue.',
+            ['EXPLICIT_GUARDIAN']
+          );
+        }
+      }
       return deny('NO_ROLE', 'No secret metadata access');
 
     case 'secret.value.read':
@@ -576,12 +617,24 @@ export async function hasCapability(
 
     // --- TOTP CAPABILITIES ---
     case 'totp.metadata.read':
+      if (context.totpAccountId && repositories.totp && userId) {
+        const account = await repositories.totp.findMetadataById(context.totpAccountId);
+        if (account?.ownerDiscordUserId === userId) {
+          return allow('OWNER', 'Personal TOTP Owner can read account metadata', ['TOTP_OWNER']);
+        }
+      }
       if (isResourceOwner) return allow('OWNER', 'Resource Owner can read TOTP metadata');
       if (pMemberRole === 'WRITER') return allow('WRITER', 'Project Writer can read TOTP metadata');
       if (pMemberRole === 'READER') return allow('READER', 'Project Reader can read TOTP metadata');
       return deny('NO_ROLE', 'No TOTP metadata access');
 
     case 'totp.code.read':
+      if (!context.resourceId && context.totpAccountId && repositories.totp && userId) {
+        const account = await repositories.totp.findMetadataById(context.totpAccountId);
+        if (account?.ownerDiscordUserId === userId) {
+          return allow('OWNER', 'Personal TOTP Owner can read their current code', ['TOTP_OWNER']);
+        }
+      }
       if (isResourceOwner) return allow('OWNER', 'Resource Owner can read TOTP code');
       return deny('NO_ROLE', 'No direct TOTP code read access');
 
@@ -607,7 +660,7 @@ export async function hasCapability(
         repositories.totp &&
         userId
       ) {
-        const linkedResource = await repositories.resources.findById(context.resourceId);
+        const linkedResource = await repositories.resources.findMetadataById(context.resourceId);
         if (linkedResource?.totpAccountId !== context.totpAccountId) {
           return deny(
             'TARGET_SCOPE_MISMATCH',

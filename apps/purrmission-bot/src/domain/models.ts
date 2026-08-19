@@ -57,9 +57,18 @@ export interface Resource {
   /** Stable version identifier of the resource state */
   version: string;
 
+  /** Stable version of the linked/unlinked TOTP relationship itself. */
+  totpLinkVersion: string;
+
   /** Timestamp when the resource was created */
   createdAt: Date;
 }
+
+/** Value-free Resource projection for discovery and capability summaries. */
+export type ResourceMetadata = Pick<
+  Resource,
+  'id' | 'name' | 'mode' | 'totpAccountId' | 'version' | 'totpLinkVersion' | 'createdAt'
+>;
 
 /**
  * Role of a guardian for a resource.
@@ -136,6 +145,29 @@ export interface ApprovalGrant {
   revokedAt: Date | null;
 }
 
+/** Request projection that cannot carry callback or free-form context/constraints. */
+export type ApprovalRequestMetadataProjection = Pick<
+  ApprovalRequest,
+  | 'id'
+  | 'resourceId'
+  | 'status'
+  | 'requesterId'
+  | 'requesterType'
+  | 'authKind'
+  | 'action'
+  | 'targetKey'
+  | 'targetVersion'
+  | 'policyVersion'
+  | 'createdAt'
+  | 'expiresAt'
+>;
+
+/** Grant projection that excludes constraints and credential/auth provenance. */
+export type ApprovalGrantMetadataProjection = Pick<
+  ApprovalGrant,
+  'id' | 'requestId' | 'resourceId' | 'expiresAt' | 'consumedAt' | 'revokedAt'
+>;
+
 /**
  * Decision made on an approval request.
  */
@@ -165,9 +197,13 @@ export interface DecisionResult {
 /**
  * Input for creating a new resource.
  */
-export type CreateResourceInput = Omit<Resource, 'id' | 'createdAt' | 'version'> & {
+export type CreateResourceInput = Omit<
+  Resource,
+  'id' | 'createdAt' | 'version' | 'totpLinkVersion'
+> & {
   id?: string;
   version?: string;
+  totpLinkVersion?: string;
 };
 
 /**
@@ -309,6 +345,9 @@ export interface ResourceField {
   /** Field value (decrypted in domain layer) */
   value: string;
 
+  /** Stable exact-secret version; advances whenever this value changes. */
+  version: string;
+
   /** Timestamp when the field was created */
   createdAt: Date;
 
@@ -323,6 +362,7 @@ export interface ResourceFieldMetadata {
   id: string;
   resourceId: string;
   name: string;
+  version: string;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -330,7 +370,10 @@ export interface ResourceFieldMetadata {
 /**
  * Input for creating a new resource field.
  */
-export type CreateResourceFieldInput = Omit<ResourceField, 'id' | 'createdAt' | 'updatedAt'>;
+export type CreateResourceFieldInput = Omit<
+  ResourceField,
+  'id' | 'version' | 'createdAt' | 'updatedAt'
+>;
 
 export type AuditEventFamily =
   | 'AUTHENTICATION'
@@ -650,6 +693,8 @@ export interface CapabilityContext {
   /** Distinguishes Resource-owner link authority from custody-owner unlink authority. */
   totpLinkOperation?: 'LINK' | 'UNLINK';
   requestId?: string;
+  /** Request used as scoped authority evidence without changing the evaluated object target. */
+  authorizationRequestId?: string;
   fieldName?: string; // specific secret/field
   subjectId?: string;
   // For grant consumption validation

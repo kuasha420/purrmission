@@ -19,8 +19,10 @@ import type {
   ApiToken,
   ApprovalMode,
   ApprovalRequest,
+  ApprovalRequestMetadataProjection,
   ApprovalStatus,
   ApprovalGrant,
+  ApprovalGrantMetadataProjection,
   CreateApprovalGrantInput,
   AuditLog,
   AuditCheckpoint,
@@ -41,6 +43,7 @@ import type {
   ProjectMember,
   ProjectMemberRole,
   Resource,
+  ResourceMetadata,
   ResourceField,
   TOTPAccount,
   Credential,
@@ -70,11 +73,14 @@ export interface ResourceRepository {
       totpAccountId?: string | null;
       totpDelegationEnvelope?: TOTPLinkEnvelope | null;
       version?: string;
+      totpLinkVersion?: string;
     },
     tx?: Prisma.TransactionClient
   ): Promise<Resource>;
 
   findManyByIds(ids: string[], query?: string): Promise<Resource[]>;
+  findMetadataById(id: string): Promise<ResourceMetadata | null>;
+  findMetadataManyByIds(ids: string[]): Promise<ResourceMetadata[]>;
 }
 
 /**
@@ -156,6 +162,12 @@ export interface ApprovalRequestRepository {
    */
   findByResourceId(resourceId: string): Promise<ApprovalRequest[]>;
 
+  /** Subject-bound request discovery; never substitutes a global request scan. */
+  findByRequesterId(requesterId: string): Promise<ApprovalRequest[]>;
+  findMetadataById(id: string): Promise<ApprovalRequestMetadataProjection | null>;
+  findMetadataByRequesterId(requesterId: string): Promise<ApprovalRequestMetadataProjection[]>;
+  findMetadataByResourceId(resourceId: string): Promise<ApprovalRequestMetadataProjection[]>;
+
   /**
    * Find an active approval request by resource, requester, action and targetKey.
    */
@@ -189,6 +201,7 @@ export interface ApprovalGrantRepository {
   findById(id: string): Promise<ApprovalGrant | null>;
 
   findByRequestId(requestId: string): Promise<ApprovalGrant | null>;
+  findMetadataByRequestId(requestId: string): Promise<ApprovalGrantMetadataProjection | null>;
 
   findActiveUnconsumed(
     resourceId: string,
@@ -303,6 +316,7 @@ export class PrismaResourceRepository implements ResourceRepository {
         apiKey: input.apiKey,
         totpAccountId: input.totpAccountId ?? null,
         version: input.version || randomUUID(),
+        totpLinkVersion: input.totpLinkVersion || randomUUID(),
       },
     });
     return this.mapPrismaToDomain(created);
@@ -328,16 +342,19 @@ export class PrismaResourceRepository implements ResourceRepository {
       totpAccountId?: string | null;
       totpDelegationEnvelope?: TOTPLinkEnvelope | null;
       version?: string;
+      totpLinkVersion?: string;
     },
     tx?: Prisma.TransactionClient
   ): Promise<Resource> {
     const client = tx || this.prisma;
+    const linkChanges = 'totpAccountId' in data || 'totpDelegationEnvelope' in data;
     const updated = await client.resource.update({
       where: { id },
       data: {
         totpAccountId: data.totpAccountId,
         totpDelegationEnvelope: data.totpDelegationEnvelope as any,
         version: data.version || randomUUID(),
+        totpLinkVersion: data.totpLinkVersion ?? (linkChanges ? randomUUID() : undefined),
       },
     });
     return this.mapPrismaToDomain(updated);
@@ -357,6 +374,36 @@ export class PrismaResourceRepository implements ResourceRepository {
     return rows.map((row) => this.mapPrismaToDomain(row));
   }
 
+  async findMetadataById(id: string): Promise<ResourceMetadata | null> {
+    return this.prisma.resource.findUnique({
+      where: { id },
+      select: {
+        id: true,
+        name: true,
+        mode: true,
+        totpAccountId: true,
+        version: true,
+        totpLinkVersion: true,
+        createdAt: true,
+      },
+    });
+  }
+
+  async findMetadataManyByIds(ids: string[]): Promise<ResourceMetadata[]> {
+    return this.prisma.resource.findMany({
+      where: { id: { in: ids } },
+      select: {
+        id: true,
+        name: true,
+        mode: true,
+        totpAccountId: true,
+        version: true,
+        totpLinkVersion: true,
+        createdAt: true,
+      },
+    });
+  }
+
   private mapPrismaToDomain(row: {
     id: string;
     name: string;
@@ -365,6 +412,7 @@ export class PrismaResourceRepository implements ResourceRepository {
     totpAccountId: string | null;
     totpDelegationEnvelope: any;
     version: string;
+    totpLinkVersion: string;
     createdAt: Date;
   }): Resource {
     // Validate mode is a valid ApprovalMode
@@ -382,6 +430,7 @@ export class PrismaResourceRepository implements ResourceRepository {
         ? (row.totpDelegationEnvelope as unknown as TOTPLinkEnvelope)
         : undefined,
       version: row.version,
+      totpLinkVersion: row.totpLinkVersion,
       createdAt: row.createdAt,
     };
   }
@@ -813,6 +862,7 @@ export class PrismaResourceFieldRepository implements ResourceFieldRepository {
         resourceId: input.resourceId,
         name: input.name,
         value: encryptedValue,
+        version: randomUUID(),
       },
     });
     // Rotate version on parent Resource
@@ -855,7 +905,7 @@ export class PrismaResourceFieldRepository implements ResourceFieldRepository {
     const encryptedValue = encryptValue(value);
     const updated = await client.resourceField.update({
       where: { id },
-      data: { value: encryptedValue },
+      data: { value: encryptedValue, version: randomUUID() },
     });
     // Rotate version on parent Resource
     await client.resource.update({
@@ -898,6 +948,7 @@ export class PrismaResourceFieldRepository implements ResourceFieldRepository {
         id: true,
         resourceId: true,
         name: true,
+        version: true,
         createdAt: true,
         updatedAt: true,
       },
@@ -921,6 +972,7 @@ export class PrismaResourceFieldRepository implements ResourceFieldRepository {
         id: true,
         resourceId: true,
         name: true,
+        version: true,
         createdAt: true,
         updatedAt: true,
       },
@@ -933,6 +985,7 @@ export class PrismaResourceFieldRepository implements ResourceFieldRepository {
     resourceId: string;
     name: string;
     value: string;
+    version: string;
     createdAt: Date;
     updatedAt: Date;
   }): ResourceField {
@@ -950,6 +1003,7 @@ export class PrismaResourceFieldRepository implements ResourceFieldRepository {
       resourceId: row.resourceId,
       name: row.name,
       value: decryptedValue,
+      version: row.version,
       createdAt: row.createdAt,
       updatedAt: row.updatedAt,
     };
@@ -1556,6 +1610,51 @@ export class PrismaApprovalRequestRepository implements ApprovalRequestRepositor
     return rows.map((row) => this.mapPrismaToDomain(row));
   }
 
+  async findByRequesterId(requesterId: string): Promise<ApprovalRequest[]> {
+    const rows = await this.prisma.approvalRequest.findMany({ where: { requesterId } });
+    return rows.map((row) => this.mapPrismaToDomain(row));
+  }
+
+  private metadataSelect() {
+    return {
+      id: true,
+      resourceId: true,
+      status: true,
+      requesterId: true,
+      requesterType: true,
+      authKind: true,
+      action: true,
+      targetKey: true,
+      targetVersion: true,
+      policyVersion: true,
+      createdAt: true,
+      expiresAt: true,
+    } as const;
+  }
+
+  async findMetadataById(id: string): Promise<ApprovalRequestMetadataProjection | null> {
+    return this.prisma.approvalRequest.findUnique({
+      where: { id },
+      select: this.metadataSelect(),
+    });
+  }
+
+  async findMetadataByRequesterId(
+    requesterId: string
+  ): Promise<ApprovalRequestMetadataProjection[]> {
+    return this.prisma.approvalRequest.findMany({
+      where: { requesterId },
+      select: this.metadataSelect(),
+    });
+  }
+
+  async findMetadataByResourceId(resourceId: string): Promise<ApprovalRequestMetadataProjection[]> {
+    return this.prisma.approvalRequest.findMany({
+      where: { resourceId },
+      select: this.metadataSelect(),
+    });
+  }
+
   async findActiveByRequester(
     resourceId: string,
     requesterId: string,
@@ -1676,6 +1775,22 @@ export class PrismaApprovalGrantRepository implements ApprovalGrantRepository {
   async findByRequestId(requestId: string): Promise<ApprovalGrant | null> {
     const row = await this.prisma.approvalGrant.findUnique({ where: { requestId } });
     return row ? this.mapRow(row) : null;
+  }
+
+  async findMetadataByRequestId(
+    requestId: string
+  ): Promise<ApprovalGrantMetadataProjection | null> {
+    return this.prisma.approvalGrant.findUnique({
+      where: { requestId },
+      select: {
+        id: true,
+        requestId: true,
+        resourceId: true,
+        expiresAt: true,
+        consumedAt: true,
+        revokedAt: true,
+      },
+    });
   }
 
   async findActiveUnconsumed(

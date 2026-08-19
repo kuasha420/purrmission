@@ -14,11 +14,11 @@
 - Current execution checkpoint: Wave 1 [#117](https://github.com/kuasha420/purrmission/issues/117)
   is Verified and closed. Wave 2's partial #119 contract checkpoint merged through
   [#145](https://github.com/kuasha420/purrmission/pull/145) at `7ccc187d996a30ae29633942bbbc3fbacd8c8695`.
-  #118 is now rebased, integrated, and published as draft
-  [#146](https://github.com/kuasha420/purrmission/pull/146) with build, lint, full tests, and
-  fresh/populated migration rehearsals green. Formal review of #146 is the active checkpoint;
-  after #118 is verified, #119 resumes for persistence completion.
-- Last assessed: 2026-08-13
+  #118 is Verified and closed after [#146](https://github.com/kuasha420/purrmission/pull/146)
+  merged at `4420664f1fcd06a9322ef322b26b42db0468051b`; clean-master build, lint, full tests, and
+  fresh/populated/interrupted migration rehearsals pass. #119 is reopened and active for its
+  remaining persistence, versioning, repository, service, and adapter completion.
+- Last assessed: 2026-08-20
 
 All implementation nodes and both gates were reopened after the No-go result. Reopening records
 ownership; it does not make every node ready at once. #117's first implementation failed
@@ -80,8 +80,8 @@ flowchart TD
   BASE["#107 / #115<br/>Baseline audit and knowledgebase<br/>Complete"]
   EPIC["#116<br/>Pre-dashboard remediation epic"]
   I117["#117<br/>Principal and capability contract<br/>Verified and closed"]
-  I118["#118<br/>Audit, outbox, and correlation<br/>Draft PR #146; formal review next"]
-  I119["#119<br/>Metadata projections and target versions<br/>Partial PR #145 merged; persistence remains"]
+  I118["#118<br/>Audit, outbox, and correlation<br/>Verified and closed"]
+  I119["#119<br/>Metadata projections and target versions<br/>Persistence completion active"]
   I120["#120<br/>TOTP custody and consent"]
   I121["#121<br/>Credential lifecycle"]
   I122["#122<br/>Approval Request V2 and grants"]
@@ -150,13 +150,13 @@ incomplete at final reassessment, #126 must preserve an explicit production roll
 
 ### 3.1 Current wave ledger
 
-| Node(s)   | Current state                                               | Evidence / merge gate                                                                              |
-| --------- | ----------------------------------------------------------- | -------------------------------------------------------------------------------------------------- |
-| #117      | Verified and closed at merge `a0144d46`                     | Human and independent review complete; clean-master common and migration gates pass                |
-| #118      | Draft PR #146 rebased and gate-green; formal review is next | Preserves #117's fail-closed baseline; requires human and independent security review before merge |
-| #119      | Partial contract/query PR #145 merged at `7ccc187`          | Issue stays open; persistence/version acceptance resumes after verified #118                       |
-| #120-#130 | Blocked according to the dependency graph                   | Planning and test design may begin only within the one-wave-ahead rule                             |
-| #105      | Open parallel production-safety lane                        | Blocks production migration/deployment, not local branch execution                                 |
+| Node(s)   | Current state                                          | Evidence / merge gate                                                                       |
+| --------- | ------------------------------------------------------ | ------------------------------------------------------------------------------------------- |
+| #117      | Verified and closed at merge `a0144d46`                | Human and independent review complete; clean-master common and migration gates pass         |
+| #118      | Verified and closed at merge `4420664f`                | Human/automated review complete; clean-master common and populated migration gates pass     |
+| #119      | Persistence/version completion active on verified #118 | Partial contract/query PR #145 is merged; remaining acceptance is owned by the current lane |
+| #120-#130 | Blocked according to the dependency graph              | Planning and test design may begin only within the one-wave-ahead rule                      |
+| #105      | Open parallel production-safety lane                   | Blocks production migration/deployment, not local branch execution                          |
 
 Research, threat modeling, test design, and file-collision planning may begin one wave early.
 Production implementation must not merge before every native blocker is **Verified** and closed.

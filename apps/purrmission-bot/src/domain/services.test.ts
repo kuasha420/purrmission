@@ -293,6 +293,9 @@ describe('ApprovalService', () => {
       mockApprovalRepo.findById = mock.fn(
         async () => mockRequest
       ) as unknown as ApprovalRequestRepository['findById'];
+      mockApprovalRepo.findMetadataById = mock.fn(
+        async () => mockRequest
+      ) as unknown as ApprovalRequestRepository['findMetadataById'];
       mockApprovalRepo.updateStatus = mock.fn(
         async () => {}
       ) as unknown as ApprovalRequestRepository['updateStatus'];

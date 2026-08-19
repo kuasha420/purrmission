@@ -65,6 +65,7 @@ const resource: Resource = {
   totpAccountId: null,
   totpDelegationEnvelope: null,
   version: 'resource-v1',
+  totpLinkVersion: 'link-v1',
   createdAt: new Date('2026-01-01T00:00:00Z'),
 };
 
@@ -181,10 +182,17 @@ function capabilityRepositories(options?: {
 }): CapabilityRepositories {
   return {
     resources: {
-      async findById(resourceId) {
-        return resourceId === RESOURCE_ID
-          ? { ...resource, totpAccountId: custodyOwnedTotpAccount.id }
-          : null;
+      async findMetadataById(resourceId) {
+        if (resourceId !== RESOURCE_ID) return null;
+        return {
+          id: resource.id,
+          name: resource.name,
+          mode: resource.mode,
+          totpAccountId: custodyOwnedTotpAccount.id,
+          version: resource.version,
+          totpLinkVersion: resource.totpLinkVersion,
+          createdAt: resource.createdAt,
+        };
       },
     },
     guardians: {
@@ -211,7 +219,7 @@ function capabilityRepositories(options?: {
       },
     },
     approvalRequests: {
-      async findById() {
+      async findMetadataById() {
         options?.approvalLookup?.();
         return options?.request ?? null;
       },
@@ -223,11 +231,6 @@ function capabilityRepositories(options?: {
       },
     },
     totp: {
-      async findById(totpAccountId) {
-        if (totpAccountId === totpAccount.id) return totpAccount;
-        if (totpAccountId === custodyOwnedTotpAccount.id) return custodyOwnedTotpAccount;
-        return null;
-      },
       async findMetadataById(totpAccountId) {
         if (totpAccountId === totpAccount.id) return totpAccount;
         if (totpAccountId === custodyOwnedTotpAccount.id) return custodyOwnedTotpAccount;
@@ -553,9 +556,7 @@ describe('Principal and exact-object capability policy', () => {
 
   it('allows a TOTP custody owner to unlink only, without granting link or Guardian authority', async () => {
     const repositories = capabilityRepositories();
-    repositories.totp.findById = async () => {
-      throw new Error('value-bearing TOTP lookup must not run during link authorization');
-    };
+    assert.equal('findById' in repositories.totp, false);
     const unlinkContext: CapabilityContext = {
       resourceId: RESOURCE_ID,
       totpAccountId: custodyOwnedTotpAccount.id,

@@ -67,11 +67,7 @@ export interface ExactCapabilitySummaryDTO {
   decisions: CapabilityDecisionDTO[];
 }
 
-/**
- * These read contracts require stable grant-relevant versions. Prisma columns, populated
- * backfills, and same-transaction mutation advancement remain an explicit integration step after
- * #118 lands; this branch does not claim that persistence acceptance criterion yet.
- */
+/** Stable, non-sensitive metadata required by exact-object authorization consumers. */
 export interface ProjectMetadataRecord {
   id: string;
   name: string;
@@ -96,6 +92,7 @@ export interface ResourceMetadataRecord {
   id: string;
   projectId?: string;
   environmentId?: string;
+  requestId?: string;
   name: string;
   mode: string;
   version: string;
@@ -107,6 +104,7 @@ export interface SecretMetadataRecord {
   projectId?: string;
   environmentId?: string;
   resourceId: string;
+  requestId?: string;
   key: string;
   version: string;
   createdAt: Date;
@@ -568,11 +566,12 @@ interface CursorPayload {
 }
 
 function expectedPolicyTarget(context: CapabilityContext): PolicyTarget {
-  if (context.requestId) return { type: 'APPROVAL_REQUEST', id: context.requestId };
-  if (context.totpAccountId) return { type: 'TOTP_ACCOUNT', id: context.totpAccountId };
+  if (context.grantId) return { type: 'APPROVAL_GRANT', id: context.grantId };
   if (context.resourceId && context.fieldName) {
     return { type: 'SECRET', resourceId: context.resourceId, key: context.fieldName };
   }
+  if (context.requestId) return { type: 'APPROVAL_REQUEST', id: context.requestId };
+  if (context.totpAccountId) return { type: 'TOTP_ACCOUNT', id: context.totpAccountId };
   if (context.resourceId) return { type: 'RESOURCE', id: context.resourceId };
   if (context.environmentId) return { type: 'ENVIRONMENT', id: context.environmentId };
   if (context.projectId) return { type: 'PROJECT', id: context.projectId };
@@ -1004,6 +1003,7 @@ export class MetadataQueryService {
             projectId: record.projectId,
             environmentId: record.environmentId,
             resourceId: record.id,
+            authorizationRequestId: record.requestId,
           },
           this.evaluate
         )
@@ -1048,6 +1048,7 @@ export class MetadataQueryService {
             projectId: record.projectId,
             environmentId: record.environmentId,
             resourceId: record.resourceId,
+            requestId: record.requestId,
             fieldName: record.key,
             targetVersion: record.version,
           },
@@ -1106,9 +1107,7 @@ export class MetadataQueryService {
           },
           this.evaluate
         );
-        if (!accountAuthorization) return null;
-
-        const metadataRead = accountAuthorization.capabilities.decisions.find(
+        const metadataRead = accountAuthorization?.capabilities.decisions.find(
           (decision) => decision.capability === 'totp.metadata.read'
         );
         const detailed =
@@ -1118,14 +1117,14 @@ export class MetadataQueryService {
             ['TOTP_OWNER', 'PROJECT_OWNER', 'RESOURCE_OWNER'].includes(source)
           );
         if (record.scope === 'PERSONAL') {
-          return detailed
+          return accountAuthorization && detailed
             ? {
                 record: { metadata: record, detailed },
                 capabilities: accountAuthorization.capabilities,
               }
             : null;
         }
-        if (detailed) {
+        if (accountAuthorization && detailed) {
           return {
             record: { metadata: record, detailed },
             capabilities: accountAuthorization.capabilities,

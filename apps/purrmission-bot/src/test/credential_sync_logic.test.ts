@@ -34,6 +34,8 @@ import {
   OutboxEvent,
   CreateOutboxEventInput,
   CreateAuditLogInput,
+  ResourceMetadata,
+  ApprovalRequestMetadataProjection,
 } from '../domain/models.js';
 import { randomUUID } from 'crypto';
 
@@ -124,6 +126,7 @@ class MemResourceRepo implements ResourceRepository {
       mode: input.mode,
       apiKey: input.apiKey,
       version: input.version ?? randomUUID(),
+      totpLinkVersion: input.totpLinkVersion ?? randomUUID(),
       createdAt: new Date(),
     };
     this.resources.push(r);
@@ -143,6 +146,17 @@ class MemResourceRepo implements ResourceRepository {
     return this.resources.filter(
       (r) =>
         ids.includes(r.id) && (!normalizedQuery || r.name.toLowerCase().includes(normalizedQuery))
+    );
+  }
+  async findMetadataById(id: string): Promise<ResourceMetadata | null> {
+    const resource = await this.findById(id);
+    if (!resource) return null;
+    const { name, mode, totpAccountId, version, totpLinkVersion, createdAt } = resource;
+    return { id, name, mode, totpAccountId, version, totpLinkVersion, createdAt };
+  }
+  async findMetadataManyByIds(ids: string[]): Promise<ResourceMetadata[]> {
+    return (await Promise.all(ids.map((id) => this.findMetadataById(id)))).filter(
+      (resource) => resource !== null
     );
   }
 }
@@ -183,6 +197,7 @@ class MemFieldRepo implements ResourceFieldRepository {
     const f: ResourceField = {
       id: randomUUID(),
       ...input,
+      version: randomUUID(),
       createdAt: new Date(),
       updatedAt: new Date(),
     };
@@ -199,6 +214,7 @@ class MemFieldRepo implements ResourceFieldRepository {
     const f = this.fields.find((f) => f.id === id);
     if (!f) throw new Error('Not found');
     f.value = value;
+    f.version = randomUUID();
     return f;
   }
   async delete(id: string, _tx?: any): Promise<void> {
@@ -210,10 +226,11 @@ class MemFieldRepo implements ResourceFieldRepository {
   async findMetadataByResourceId(resourceId: string) {
     return this.fields
       .filter((field) => field.resourceId === resourceId)
-      .map(({ id, resourceId: fieldResourceId, name, createdAt, updatedAt }) => ({
+      .map(({ id, resourceId: fieldResourceId, name, version, createdAt, updatedAt }) => ({
         id,
         resourceId: fieldResourceId,
         name,
+        version,
         createdAt,
         updatedAt,
       }));
@@ -225,6 +242,7 @@ class MemFieldRepo implements ResourceFieldRepository {
       id: field.id,
       resourceId: field.resourceId,
       name: field.name,
+      version: field.version,
       createdAt: field.createdAt,
       updatedAt: field.updatedAt,
     };
@@ -311,6 +329,51 @@ class MemApprovalRepo implements ApprovalRequestRepository {
   }
   async findByResourceId(resourceId: string): Promise<ApprovalRequest[]> {
     return this.requests.filter((r) => r.resourceId === resourceId);
+  }
+  async findByRequesterId(requesterId: string): Promise<ApprovalRequest[]> {
+    return this.requests.filter((request) => request.requesterId === requesterId);
+  }
+  private metadata(request: ApprovalRequest): ApprovalRequestMetadataProjection {
+    const {
+      id,
+      resourceId,
+      status,
+      requesterId,
+      requesterType,
+      authKind,
+      action,
+      targetKey,
+      targetVersion,
+      policyVersion,
+      createdAt,
+      expiresAt,
+    } = request;
+    return {
+      id,
+      resourceId,
+      status,
+      requesterId,
+      requesterType,
+      authKind,
+      action,
+      targetKey,
+      targetVersion,
+      policyVersion,
+      createdAt,
+      expiresAt,
+    };
+  }
+  async findMetadataById(id: string): Promise<ApprovalRequestMetadataProjection | null> {
+    const request = await this.findById(id);
+    return request ? this.metadata(request) : null;
+  }
+  async findMetadataByRequesterId(
+    requesterId: string
+  ): Promise<ApprovalRequestMetadataProjection[]> {
+    return (await this.findByRequesterId(requesterId)).map((request) => this.metadata(request));
+  }
+  async findMetadataByResourceId(resourceId: string): Promise<ApprovalRequestMetadataProjection[]> {
+    return (await this.findByResourceId(resourceId)).map((request) => this.metadata(request));
   }
   async findPendingByResourceId(resourceId: string): Promise<ApprovalRequest[]> {
     return this.requests.filter((r) => r.resourceId === resourceId && r.status === 'PENDING');
