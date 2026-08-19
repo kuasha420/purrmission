@@ -231,11 +231,6 @@ function capabilityRepositories(options?: {
       },
     },
     totp: {
-      async findById(totpAccountId) {
-        if (totpAccountId === totpAccount.id) return totpAccount;
-        if (totpAccountId === custodyOwnedTotpAccount.id) return custodyOwnedTotpAccount;
-        return null;
-      },
       async findMetadataById(totpAccountId) {
         if (totpAccountId === totpAccount.id) return totpAccount;
         if (totpAccountId === custodyOwnedTotpAccount.id) return custodyOwnedTotpAccount;
@@ -561,9 +556,7 @@ describe('Principal and exact-object capability policy', () => {
 
   it('allows a TOTP custody owner to unlink only, without granting link or Guardian authority', async () => {
     const repositories = capabilityRepositories();
-    repositories.totp.findById = async () => {
-      throw new Error('value-bearing TOTP lookup must not run during link authorization');
-    };
+    assert.equal('findById' in repositories.totp, false);
     const unlinkContext: CapabilityContext = {
       resourceId: RESOURCE_ID,
       totpAccountId: custodyOwnedTotpAccount.id,

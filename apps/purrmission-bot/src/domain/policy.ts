@@ -47,7 +47,7 @@ export interface CapabilityRepositories {
   >;
   approvalRequests: Pick<ApprovalRequestRepository, 'findMetadataById'>;
   approvalGrants: Pick<ApprovalGrantRepository, 'findById'>;
-  totp: Pick<TOTPRepository, 'findById' | 'findMetadataById'>;
+  totp: Pick<TOTPRepository, 'findMetadataById'>;
 }
 
 export interface EffectiveGuardianRepositories {
