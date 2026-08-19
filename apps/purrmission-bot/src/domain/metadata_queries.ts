@@ -103,6 +103,7 @@ export interface SecretMetadataRecord {
   projectId?: string;
   environmentId?: string;
   resourceId: string;
+  requestId?: string;
   key: string;
   version: string;
   createdAt: Date;
@@ -564,11 +565,12 @@ interface CursorPayload {
 }
 
 function expectedPolicyTarget(context: CapabilityContext): PolicyTarget {
-  if (context.requestId) return { type: 'APPROVAL_REQUEST', id: context.requestId };
-  if (context.totpAccountId) return { type: 'TOTP_ACCOUNT', id: context.totpAccountId };
+  if (context.grantId) return { type: 'APPROVAL_GRANT', id: context.grantId };
   if (context.resourceId && context.fieldName) {
     return { type: 'SECRET', resourceId: context.resourceId, key: context.fieldName };
   }
+  if (context.requestId) return { type: 'APPROVAL_REQUEST', id: context.requestId };
+  if (context.totpAccountId) return { type: 'TOTP_ACCOUNT', id: context.totpAccountId };
   if (context.resourceId) return { type: 'RESOURCE', id: context.resourceId };
   if (context.environmentId) return { type: 'ENVIRONMENT', id: context.environmentId };
   if (context.projectId) return { type: 'PROJECT', id: context.projectId };
@@ -1044,6 +1046,7 @@ export class MetadataQueryService {
             projectId: record.projectId,
             environmentId: record.environmentId,
             resourceId: record.resourceId,
+            requestId: record.requestId,
             fieldName: record.key,
             targetVersion: record.version,
           },

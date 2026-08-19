@@ -269,11 +269,11 @@ export async function getGuardedResourcesForUser(
  */
 function resolvePolicyTarget(context: CapabilityContext): PolicyTarget {
   if (context.grantId) return { type: 'APPROVAL_GRANT', id: context.grantId };
-  if (context.requestId) return { type: 'APPROVAL_REQUEST', id: context.requestId };
-  if (context.totpAccountId) return { type: 'TOTP_ACCOUNT', id: context.totpAccountId };
   if (context.resourceId && context.fieldName) {
     return { type: 'SECRET', resourceId: context.resourceId, key: context.fieldName };
   }
+  if (context.requestId) return { type: 'APPROVAL_REQUEST', id: context.requestId };
+  if (context.totpAccountId) return { type: 'TOTP_ACCOUNT', id: context.totpAccountId };
   if (context.resourceId) return { type: 'RESOURCE', id: context.resourceId };
   if (context.environmentId) return { type: 'ENVIRONMENT', id: context.environmentId };
   if (context.projectId) return { type: 'PROJECT', id: context.projectId };
@@ -560,6 +560,27 @@ export async function hasCapability(
         return allow('WRITER', 'Project Writer can read secret metadata');
       if (pMemberRole === 'READER')
         return allow('READER', 'Project Reader can read secret metadata');
+      if (
+        resolvedRequest?.action === 'secret.value.read' &&
+        resolvedRequest.resourceId === resourceId &&
+        resolvedRequest.targetKey === context.fieldName &&
+        userId
+      ) {
+        if (resolvedRequest.requesterId === userId) {
+          return allow(
+            'AUTHENTICATED_SUBJECT',
+            'Requester can read metadata for the exact secret named by their request.',
+            ['AUTHENTICATED_SUBJECT']
+          );
+        }
+        if (resolvedRequest.status === 'PENDING' && explicitGuardianRole === 'GUARDIAN') {
+          return allow(
+            'GUARDIAN',
+            'Guardian can read metadata for the exact secret in their pending queue.',
+            ['EXPLICIT_GUARDIAN']
+          );
+        }
+      }
       return deny('NO_ROLE', 'No secret metadata access');
 
     case 'secret.value.read':

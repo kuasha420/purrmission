@@ -76,13 +76,13 @@ describe('legacy AuditLog populated upgrade', () => {
     applyMigrations(db, (migration) => migration !== '20260820010000_metadata_target_versions');
     db.exec(`
       INSERT INTO "Project" ("id", "name", "ownerId", "policyVersion", "createdAt", "updatedAt")
-      VALUES ('project-v', 'Versioned', 'owner', 'legacy', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP);
+      VALUES ('project-v', 'Versioned', 'owner', 'old-project-version', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP);
       INSERT INTO "TOTPAccount"
         ("id", "ownerDiscordUserId", "accountName", "secret", "version", "createdAt", "updatedAt")
-      VALUES ('totp-v', 'custody', 'OTP', 'encrypted', 'legacy', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP);
+      VALUES ('totp-v', 'custody', 'OTP', 'encrypted', 'old-account-version', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP);
       INSERT INTO "Resource"
         ("id", "name", "mode", "apiKey", "createdAt", "totpAccountId", "version")
-      VALUES ('resource-v', 'Protected', 'ONE_OF_N', NULL, CURRENT_TIMESTAMP, 'totp-v', 'legacy');
+      VALUES ('resource-v', 'Protected', 'ONE_OF_N', NULL, CURRENT_TIMESTAMP, 'totp-v', 'old-resource-version');
       INSERT INTO "Environment"
         ("id", "name", "slug", "projectId", "createdAt", "updatedAt", "resourceId")
       VALUES ('environment-v', 'Production', 'prod', 'project-v', CURRENT_TIMESTAMP,
@@ -94,19 +94,19 @@ describe('legacy AuditLog populated upgrade', () => {
         ("id", "resourceId", "status", "requesterId", "requesterType", "authKind", "action",
          "targetKey", "targetVersion", "policyVersion", "createdAt", "expiresAt")
       VALUES ('request-v', 'resource-v', 'PENDING', 'requester', 'DISCORD_USER', 'DISCORD',
-              'secret.value.read', 'PASSWORD', 'legacy', 'legacy', CURRENT_TIMESTAMP,
+              'secret.value.read', 'PASSWORD', 'old-request-target', 'old-request-policy', CURRENT_TIMESTAMP,
               '2030-01-01T00:00:00.000Z');
       INSERT INTO "ApprovalRequest"
         ("id", "resourceId", "status", "requesterId", "requesterType", "authKind", "action",
          "targetKey", "targetVersion", "policyVersion", "createdAt", "expiresAt")
       VALUES ('request-v-totp', 'resource-v', 'PENDING', 'requester', 'DISCORD_USER', 'DISCORD',
-              'totp.code.read', NULL, 'legacy', 'legacy', CURRENT_TIMESTAMP,
+              'totp.code.read', NULL, 'old-request-target', 'old-request-policy', CURRENT_TIMESTAMP,
               '2030-01-01T00:00:00.000Z');
       INSERT INTO "ApprovalGrant"
         ("id", "requestId", "resourceId", "requesterId", "requesterType", "authKind", "action",
          "targetKey", "targetVersion", "policyVersion", "createdAt", "expiresAt")
       VALUES ('grant-v', 'request-v', 'resource-v', 'requester', 'DISCORD_USER', 'DISCORD',
-              'secret.value.read', 'PASSWORD', 'legacy', 'legacy', CURRENT_TIMESTAMP,
+              'secret.value.read', 'PASSWORD', 'old-grant-target', 'old-grant-policy', CURRENT_TIMESTAMP,
               '2030-01-01T00:00:00.000Z');
     `);
 
@@ -123,7 +123,7 @@ describe('legacy AuditLog populated upgrade', () => {
                 r."totpLinkVersion" AS linkVersion, t."version" AS accountVersion,
                 p."policyVersion" AS projectVersion, ar."targetVersion" AS requestTarget,
                 ar."policyVersion" AS requestPolicy, ag."targetVersion" AS grantTarget,
-                ag."policyVersion" AS grantPolicy
+                ag."policyVersion" AS grantPolicy, ag."revokedAt" AS grantRevokedAt
          FROM "ResourceField" rf
          JOIN "Resource" r ON r."id" = rf."resourceId"
          JOIN "TOTPAccount" t ON t."id" = r."totpAccountId"
@@ -140,6 +140,7 @@ describe('legacy AuditLog populated upgrade', () => {
     assert.equal(row.requestTarget, row.fieldVersion);
     assert.equal(row.grantTarget, row.requestTarget);
     assert.equal(row.grantPolicy, row.requestPolicy);
+    assert.ok(row.grantRevokedAt, 'pre-upgrade grant must be revoked rather than reauthorized');
     const encodeVersion = (kind: string, ...versions: string[]) =>
       ['purrmission.target-version.v1', kind, ...versions]
         .map((value) => `${Buffer.byteLength(value, 'utf8')}:${value}`)

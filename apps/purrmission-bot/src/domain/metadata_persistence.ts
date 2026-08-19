@@ -216,19 +216,23 @@ class RepositoryMetadataSource implements SubjectBoundMetadataSource {
     const requestedFields = await Promise.all(
       requests
         .filter((request) => request.action === 'secret.value.read' && request.targetKey !== null)
-        .map((request) =>
-          this.repositories.resourceFields.findMetadataByResourceAndName(
+        .map(async (request) => {
+          const field = await this.repositories.resourceFields.findMetadataByResourceAndName(
             request.resourceId,
             request.targetKey as string
-          )
-        )
+          );
+          return field ? { field, requestId: request.id } : null;
+        })
     );
-    const fields = dedupe(
-      [...broadFields, ...requestedFields.filter((field) => field !== null)],
-      ({ id }) => id
+    const scopedFields = dedupe(
+      [
+        ...broadFields.map((field) => ({ field, requestId: undefined })),
+        ...requestedFields.filter((entry) => entry !== null),
+      ],
+      ({ field }) => field.id
     );
     const records = await Promise.all(
-      fields.map(async (field): Promise<SecretMetadataRecord> => {
+      scopedFields.map(async ({ field, requestId }): Promise<SecretMetadataRecord> => {
         const environment = await this.repositories.projects.findEnvironmentByResourceId(
           field.resourceId
         );
@@ -238,6 +242,7 @@ class RepositoryMetadataSource implements SubjectBoundMetadataSource {
             ? { projectId: environment.projectId, environmentId: environment.id }
             : {}),
           resourceId: field.resourceId,
+          ...(requestId ? { requestId } : {}),
           key: field.name,
           version: field.version,
           createdAt: field.createdAt,
@@ -423,14 +428,25 @@ class RepositoryRelationshipVerifier implements MetadataRelationshipVerifier {
         projected.resourceId,
         projected.key
       );
-      return (
-        field?.id === projected.id &&
-        field.version === projected.version &&
-        (await this.matchesResourceAncestry(
+      if (
+        field?.id !== projected.id ||
+        field.version !== projected.version ||
+        !(await this.matchesResourceAncestry(
           projected.resourceId,
           projected.projectId,
           projected.environmentId
         ))
+      ) {
+        return false;
+      }
+      if (!projected.requestId) return true;
+      const request = await this.repositories.approvalRequests.findMetadataById(
+        projected.requestId
+      );
+      return (
+        request?.resourceId === projected.resourceId &&
+        request.action === 'secret.value.read' &&
+        request.targetKey === projected.key
       );
     }
     if (kind === 'TOTP_ACCOUNT') {

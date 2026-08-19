@@ -182,14 +182,35 @@ describe('repository-backed metadata persistence', () => {
   });
 
   it('uses metadata-only secret/TOTP projections with role-minimized output', async () => {
-    const { services, secret, account } = await fixture();
+    const { repositories, services, secret, account, resource, request } = await fixture();
+    await repositories.resourceFields.create({
+      resourceId: resource.id,
+      name: 'UNREQUESTED_VALUE',
+      value: 'must-not-enter-request-scope',
+    });
     const secrets = await services.metadata.listSecrets(createDiscordPrincipal('reader'));
-    assert.equal(secrets.items[0]?.id, secret.id);
-    assert.equal(secrets.items[0]?.version, secret.version);
+    assert.equal(
+      secrets.items.some(({ id, version }) => id === secret.id && version === secret.version),
+      true
+    );
     assert.equal(JSON.stringify(secrets).includes('protected-value'), false);
 
+    for (const subjectId of ['guardian', 'requester']) {
+      const scoped = await services.metadata.listSecrets(createDiscordPrincipal(subjectId));
+      assert.deepEqual(
+        scoped.items.map(({ id }) => id),
+        [secret.id]
+      );
+      const metadataDecision = scoped.items[0]?.capabilities.decisions.find(
+        ({ capability }) => capability === 'secret.metadata.read'
+      );
+      assert.equal(metadataDecision?.allowed, true);
+      assert.equal(metadataDecision?.approvalRequestId, request.id);
+      assert.equal(JSON.stringify(scoped).includes('UNREQUESTED_VALUE'), false);
+      assert.equal(JSON.stringify(scoped).includes('must-not-enter-request-scope'), false);
+    }
     assert.deepEqual(
-      (await services.metadata.listSecrets(createDiscordPrincipal('guardian'))).items,
+      (await services.metadata.listSecrets(createDiscordPrincipal('stranger'))).items,
       []
     );
     const linked = await services.metadata.listTOTPAccounts(createDiscordPrincipal('reader'));

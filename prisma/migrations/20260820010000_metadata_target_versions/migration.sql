@@ -30,7 +30,7 @@ SET "targetKey" = (
   SELECT r."totpAccountId" FROM "Resource" r
   WHERE r."id" = "ApprovalRequest"."resourceId"
 )
-WHERE "action" = 'totp.code.read' AND "targetKey" IS NULL;
+WHERE "action" = 'totp.code.read';
 
 -- Repair legacy pending request bindings from their canonical current targets.
 UPDATE "ApprovalRequest"
@@ -53,8 +53,7 @@ SET "targetVersion" = CASE
                length(CAST(r."totpLinkVersion" AS BLOB)) || ':' || r."totpLinkVersion"
         FROM "Resource" r WHERE r."id" = "ApprovalRequest"."resourceId"))
   ELSE (SELECT r."version" FROM "Resource" r WHERE r."id" = "ApprovalRequest"."resourceId")
-END
-WHERE "targetVersion" = 'legacy' OR trim("targetVersion") = '';
+END;
 
 UPDATE "ApprovalRequest"
 SET "policyVersion" = COALESCE((
@@ -65,9 +64,11 @@ SET "policyVersion" = COALESCE((
   JOIN "Project" p ON p."id" = e."projectId"
   JOIN "Resource" r ON r."id" = e."resourceId"
   WHERE e."resourceId" = "ApprovalRequest"."resourceId"
-), (SELECT r."version" FROM "Resource" r WHERE r."id" = "ApprovalRequest"."resourceId"))
-WHERE "policyVersion" = 'legacy' OR trim("policyVersion") = '';
+), (SELECT r."version" FROM "Resource" r WHERE r."id" = "ApprovalRequest"."resourceId"));
 
+-- Every pre-upgrade grant was issued under the former broad version scheme. Preserve its
+-- lifecycle metadata but revoke it rather than silently expanding old authority onto new exact
+-- targets. #122 may issue new grants only after re-evaluating the current request and policy.
 UPDATE "ApprovalGrant"
 SET "targetKey" = COALESCE((
   SELECT ar."targetKey" FROM "ApprovalRequest" ar
@@ -80,9 +81,7 @@ SET "targetKey" = COALESCE((
 "policyVersion" = COALESCE((
   SELECT ar."policyVersion" FROM "ApprovalRequest" ar
   WHERE ar."id" = "ApprovalGrant"."requestId"
-), "policyVersion")
-WHERE "targetVersion" = 'legacy' OR trim("targetVersion") = ''
-   OR "policyVersion" = 'legacy' OR trim("policyVersion") = ''
-   OR ("action" = 'totp.code.read' AND "targetKey" IS NULL);
+), "policyVersion"),
+"revokedAt" = COALESCE("revokedAt", CURRENT_TIMESTAMP);
 
 CREATE INDEX "ResourceField_version_idx" ON "ResourceField"("version");
