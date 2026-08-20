@@ -14,6 +14,7 @@ import {
   Resource,
   Guardian,
   TOTPAccount,
+  TOTPAccountMetadata,
   ResourceField,
   ResourceFieldMetadata,
   TOTPLinkConsent,
@@ -39,7 +40,7 @@ import {
   isEffectiveOwner,
   hasCapability,
 } from './policy.js';
-import { createDiscordPrincipal } from './principal.js';
+import { createDiscordPrincipal, validatePrincipal } from './principal.js';
 import { generateTOTPCode } from './totp.js';
 import { computeKeyedDigest, deterministicUUID } from './crypto.js';
 import { DomainPorts } from './ports.js';
@@ -48,6 +49,13 @@ import { createRepositoryMetadataQueryService } from './metadata_persistence.js'
 import type { MetadataQueryService } from './metadata_queries.js';
 import { DomainPortsImpl } from './ports_impl.js';
 import { correlationStorage } from '../logging/correlationContext.js';
+import {
+  boundedConsentExpiry,
+  CODE_OPERATION,
+  createTOTPLinkEnvelope,
+  parseTOTPDelegationPolicy,
+  validateTOTPLinkEnvelope,
+} from './totp_custody.js';
 
 /**
  * Service dependencies.
@@ -1302,23 +1310,95 @@ export class ResourceService {
    * Link a TOTP account to a resource using a one-time consent token.
    */
   async linkTOTPAccount(
-    _resourceId: string,
-    _totpAccountId: string,
-    _principal: Principal | string,
-    _consentId: string
+    resourceId: string,
+    totpAccountId: string,
+    principal: Principal,
+    consentId: string
   ): Promise<void> {
-    throw new ForbiddenError(
-      'TOTP linking is deferred until authenticated, seed-version-bound custody consent lands in #120.'
-    );
+    const { repositories } = this.deps;
+    const decision = await this.evaluateCapability(principal, 'totp.link.manage', {
+      resourceId,
+      totpAccountId,
+      totpLinkOperation: 'LINK',
+    });
+    if (!decision.allowed || decision.decisionCode !== 'ALLOW') {
+      throw new ForbiddenError(decision.safeExplanation);
+    }
+    await this.runTransaction(async (tx) => {
+      const [resource, account, consent] = await Promise.all([
+        repositories.resources.findById(resourceId, tx),
+        repositories.totp.findMetadataById(totpAccountId, tx),
+        repositories.totp.findLinkConsentById(consentId, tx),
+      ]);
+      if (!resource || !account || !consent) {
+        throw new AccessDeniedError('Invalid TOTP link consent.');
+      }
+      if (
+        resource.totpAccountId ||
+        consent.usedAt ||
+        consent.expiresAt <= new Date() ||
+        consent.resourceId !== resourceId ||
+        consent.accountId !== totpAccountId ||
+        consent.accountVersion !== account.version ||
+        consent.ownerDiscordUserId !== account.ownerDiscordUserId ||
+        consent.initiatingResourceOwnerId !== principal.subjectId
+      ) {
+        throw new AccessDeniedError(
+          'TOTP link consent is stale, used, or does not match the link.'
+        );
+      }
+      const envelope = createTOTPLinkEnvelope({
+        consentId,
+        resourceId,
+        initiatingResourceOwnerId: principal.subjectId,
+        accountOwnerDiscordUserId: account.ownerDiscordUserId,
+        accountVersion: account.version,
+        linkPolicyVersion: consent.linkPolicyVersion,
+        delegationPolicy: parseTOTPDelegationPolicy(consent.delegationPolicy),
+      });
+      if (!(await repositories.totp.useLinkConsent(consentId, tx))) {
+        throw new AccessDeniedError('TOTP link consent was already consumed or expired.');
+      }
+      await repositories.resources.update(
+        resourceId,
+        {
+          totpAccountId,
+          totpDelegationEnvelope: envelope,
+          totpLinkVersion: envelope.linkPolicyVersion,
+        },
+        tx
+      );
+      await this.audit.log(
+        {
+          eventFamily: 'TOTP_LIFECYCLE',
+          eventType: 'TOTP_LINK',
+          surface: correlationStorage.getStore()?.surface ?? 'DOMAIN',
+          operation: 'totp.link',
+          outcomeCode: 'SUCCESS',
+          capability: 'totp.link.manage',
+          decisionCode: 'ALLOW',
+          reasonCode: decision.reasonCode,
+          authoritySources: decision.authoritySources,
+          targetType: 'TOTP_ACCOUNT',
+          targetId: totpAccountId,
+          actorType: principal.type,
+          principalId: principal.id,
+          actorId: principal.subjectId,
+          authKind: principal.authKind,
+          resourceId,
+          payload: { totpAccountId, consentId },
+        },
+        tx
+      );
+    });
   }
 
   /**
    * Unlink TOTP account from a resource.
    */
-  async unlinkTOTPAccount(resourceId: string, principal: Principal | string): Promise<void> {
+  async unlinkTOTPAccount(resourceId: string, principal: Principal): Promise<void> {
     const { repositories } = this.deps;
-    const actorPrincipal =
-      typeof principal === 'string' ? createDiscordPrincipal(principal) : principal;
+    const actorPrincipal = principal;
     const actorId = actorPrincipal.subjectId;
 
     // Verify resource exists
@@ -1336,7 +1416,7 @@ export class ResourceService {
       totpAccountId: resource.totpAccountId,
       totpLinkOperation: 'UNLINK',
     });
-    if (!unlinkDecision.allowed) {
+    if (!unlinkDecision.allowed || unlinkDecision.decisionCode !== 'ALLOW') {
       throw new ForbiddenError(unlinkDecision.safeExplanation);
     }
 
@@ -1353,7 +1433,7 @@ export class ResourceService {
           {
             eventFamily: 'TOTP_LIFECYCLE',
             eventType: 'TOTP_UNLINK',
-            surface: 'DOMAIN',
+            surface: correlationStorage.getStore()?.surface ?? 'DOMAIN',
             operation: 'totp.unlink',
             outcomeCode: 'SUCCESS',
             capability: 'totp.link.manage',
@@ -1388,29 +1468,98 @@ export class ResourceService {
   /**
    * Get the linked TOTP account for a resource.
    */
-  async getLinkedTOTPAccount(resourceId: string): Promise<TOTPAccount | null> {
+  async hasLinkedTOTP(resourceId: string): Promise<boolean> {
     const { repositories } = this.deps;
 
     const resource = await repositories.resources.findById(resourceId);
     if (!resource || !resource.totpAccountId) {
-      return null;
+      return false;
     }
-
-    return repositories.totp.findById(resource.totpAccountId);
+    return Boolean(await repositories.totp.findMetadataById(resource.totpAccountId));
   }
 
   /**
    * Create a link consent for a TOTP account.
    */
   async createTOTPLinkConsent(
-    _accountId: string,
-    _resourceId: string,
-    _ownerDiscordUserId: string,
-    _delegationPolicy: Record<string, unknown>
+    accountId: string,
+    resourceId: string,
+    principal: Principal,
+    initiatingResourceOwnerId: string,
+    delegationPolicyInput: Record<string, unknown>
   ): Promise<TOTPLinkConsent> {
-    throw new ForbiddenError(
-      'TOTP link consent is deferred until authenticated, seed-version-bound custody consent lands in #120.'
+    const authority = await hasCapability(
+      this.deps.repositories,
+      principal,
+      'totp.account.manage',
+      { totpAccountId: accountId }
     );
+    if (!authority.allowed || authority.decisionCode !== 'ALLOW') {
+      throw new AccessDeniedError(authority.safeExplanation);
+    }
+    const [account, resource] = await Promise.all([
+      this.deps.repositories.totp.findMetadataById(accountId),
+      this.deps.repositories.resources.findMetadataById(resourceId),
+    ]);
+    if (!account || !resource || account.ownerDiscordUserId !== principal.subjectId) {
+      throw new AccessDeniedError(
+        'Only the authenticated TOTP custody owner can consent to linking.'
+      );
+    }
+    const initiatingOwnerAuthority = await hasCapability(
+      this.deps.repositories,
+      createDiscordPrincipal(initiatingResourceOwnerId),
+      'totp.link.manage',
+      {
+        resourceId,
+        totpAccountId: accountId,
+        totpLinkOperation: 'LINK',
+      }
+    );
+    if (!initiatingOwnerAuthority.allowed || initiatingOwnerAuthority.decisionCode !== 'ALLOW') {
+      throw new AccessDeniedError(
+        'Link consent must name a current Resource or Project owner as its initiator.'
+      );
+    }
+    const delegationPolicy = parseTOTPDelegationPolicy(delegationPolicyInput);
+    return this.runTransaction(async (tx) => {
+      const consent = await this.deps.repositories.totp.createLinkConsent(
+        {
+          accountId,
+          resourceId,
+          ownerDiscordUserId: principal.subjectId,
+          initiatingResourceOwnerId,
+          accountVersion: account.version,
+          linkPolicyVersion: crypto.randomUUID(),
+          delegationPolicy,
+          expiresAt: boundedConsentExpiry(),
+        },
+        tx
+      );
+      await this.audit.log(
+        {
+          eventFamily: 'TOTP_LIFECYCLE',
+          eventType: 'TOTP_LINK_CONSENT_CREATE',
+          surface: correlationStorage.getStore()?.surface ?? 'DOMAIN',
+          operation: 'totp.link-consent.create',
+          outcomeCode: 'SUCCESS',
+          capability: 'totp.account.manage',
+          decisionCode: 'ALLOW',
+          reasonCode: 'AUTHENTICATED_SUBJECT',
+          authoritySources: ['TOTP_OWNER'],
+          targetType: 'TOTP_ACCOUNT',
+          targetId: accountId,
+          actorType: principal.type,
+          principalId: principal.id,
+          actorId: principal.subjectId,
+          authKind: principal.authKind,
+          resourceId,
+          payload: { delegationEnabled: delegationPolicy.allowDelegation },
+        },
+        tx
+      );
+      return consent;
+    });
   }
 
   /**
@@ -1421,6 +1570,9 @@ export class ResourceService {
     input: Omit<TOTPAccount, 'id' | 'createdAt' | 'updatedAt' | 'version'>,
     principal: Principal
   ): Promise<TOTPAccount> {
+    if (!validatePrincipal(principal).valid) {
+      throw new AccessDeniedError('Authenticated TOTP custody principal is invalid.');
+    }
     if (input.ownerDiscordUserId !== principal.subjectId) {
       throw new AccessDeniedError('A TOTP account can only be created for the authenticated user.');
     }
@@ -1454,7 +1606,15 @@ export class ResourceService {
 
   /** Update personal TOTP metadata without ever putting recovery material in audit or logs. */
   async updateTOTPAccount(account: TOTPAccount, principal: Principal): Promise<TOTPAccount> {
-    if (account.ownerDiscordUserId !== principal.subjectId) {
+    if (!validatePrincipal(principal).valid) {
+      throw new AccessDeniedError('Authenticated TOTP custody principal is invalid.');
+    }
+    const current = await this.deps.repositories.totp.findMetadataById(account.id);
+    if (
+      !current ||
+      current.ownerDiscordUserId !== principal.subjectId ||
+      account.ownerDiscordUserId !== current.ownerDiscordUserId
+    ) {
       throw new AccessDeniedError('Only the TOTP account owner can update the account.');
     }
 
@@ -1488,19 +1648,155 @@ export class ResourceService {
     });
   }
 
+  async updateTOTPBackupKey(
+    accountName: string,
+    backupKey: string,
+    principal: Principal
+  ): Promise<TOTPAccountMetadata> {
+    const account = await this.deps.repositories.totp.findMetadataByOwnerAndName(
+      principal.subjectId,
+      accountName
+    );
+    if (!account || account.ownerDiscordUserId !== principal.subjectId) {
+      throw new AccessDeniedError('Only the TOTP account owner can update the backup key.');
+    }
+    const authority = await hasCapability(
+      this.deps.repositories,
+      principal,
+      'totp.account.manage',
+      { totpAccountId: account.id }
+    );
+    if (!authority.allowed || authority.decisionCode !== 'ALLOW') {
+      throw new AccessDeniedError(authority.safeExplanation);
+    }
+    return this.runTransaction(async (tx) => {
+      const updated = await this.deps.repositories.totp.updateBackupKey(account.id, backupKey, tx);
+      await this.audit.log(
+        {
+          eventFamily: 'TOTP_LIFECYCLE',
+          eventType: 'TOTP_ACCOUNT_UPDATE',
+          surface: correlationStorage.getStore()?.surface ?? 'DOMAIN',
+          operation: 'totp.backup-key.update',
+          outcomeCode: 'SUCCESS',
+          capability: 'totp.account.manage',
+          decisionCode: 'ALLOW',
+          reasonCode: 'AUTHENTICATED_SUBJECT',
+          authoritySources: ['TOTP_OWNER'],
+          targetType: 'TOTP_ACCOUNT',
+          targetId: updated.id,
+          actorType: principal.type,
+          principalId: principal.id,
+          actorId: principal.subjectId,
+          authKind: principal.authKind,
+          payload: { accountName: updated.accountName, backupKeyConfigured: true },
+        },
+        tx
+      );
+      return updated;
+    });
+  }
+
   /**
    * Create a delegation consent token.
    */
   async createTOTPDelegationConsent(
-    _resourceId: string,
-    _totpAccountId: string,
-    _requesterId: string,
-    _operation: string,
-    _authFamily: string
+    input: {
+      resourceId: string;
+      requesterId: string;
+      operation: string;
+      authFamily: string;
+      audience: string;
+    },
+    principal: Principal
   ): Promise<TOTPDelegationConsent> {
-    throw new ForbiddenError(
-      'TOTP delegation consent is deferred until request-bound authenticated custody consent lands in #120/#122.'
-    );
+    return this.runTransaction(async (tx) => {
+      const resource = await this.deps.repositories.resources.findById(input.resourceId, tx);
+      if (!resource?.totpAccountId) throw new AccessDeniedError('No linked TOTP account.');
+      const account = await this.deps.repositories.totp.findMetadataById(
+        resource.totpAccountId,
+        tx
+      );
+      if (account) {
+        const authority = await hasCapability(
+          this.deps.repositories,
+          principal,
+          'totp.account.manage',
+          { totpAccountId: account.id }
+        );
+        if (!authority.allowed || authority.decisionCode !== 'ALLOW') {
+          throw new AccessDeniedError(authority.safeExplanation);
+        }
+      }
+      const envelope = validateTOTPLinkEnvelope(resource.totpDelegationEnvelope);
+      if (
+        !account ||
+        !envelope ||
+        account.ownerDiscordUserId !== principal.subjectId ||
+        envelope.accountOwnerDiscordUserId !== principal.subjectId ||
+        envelope.accountVersion !== account.version ||
+        envelope.resourceId !== resource.id ||
+        envelope.linkPolicyVersion !== resource.totpLinkVersion
+      )
+        throw new AccessDeniedError('Only the current authenticated custody owner may delegate.');
+      const policy = envelope.delegationPolicy;
+      if (
+        !policy.allowDelegation ||
+        input.operation !== CODE_OPERATION ||
+        !policy.allowedOperations.includes(CODE_OPERATION) ||
+        !policy.allowedAuthFamilies.includes(input.authFamily) ||
+        !policy.allowedAudiences.includes(input.audience)
+      )
+        throw new AccessDeniedError(
+          'The current TOTP link policy does not permit this delegation.'
+        );
+      const expiresAt = boundedConsentExpiry();
+      const maxGrantExpiresAt = new Date(
+        Math.min(expiresAt.getTime(), Date.now() + policy.maxGrantTtlSeconds * 1000)
+      );
+      const consent = await this.deps.repositories.totp.createDelegationConsent(
+        {
+          resourceId: resource.id,
+          totpAccountId: account.id,
+          operation: CODE_OPERATION,
+          requesterId: input.requesterId,
+          ownerDiscordUserId: principal.subjectId,
+          authFamily: input.authFamily,
+          audience: input.audience,
+          accountVersion: account.version,
+          linkVersion: resource.totpLinkVersion,
+          maxGrantExpiresAt,
+          expiresAt,
+        },
+        tx
+      );
+      await this.audit.log(
+        {
+          eventFamily: 'TOTP_LIFECYCLE',
+          eventType: 'TOTP_DELEGATION_CONSENT_CREATE',
+          surface: correlationStorage.getStore()?.surface ?? 'DOMAIN',
+          operation: 'totp.delegation-consent.create',
+          outcomeCode: 'SUCCESS',
+          capability: 'totp.account.manage',
+          decisionCode: 'ALLOW',
+          reasonCode: 'AUTHENTICATED_SUBJECT',
+          authoritySources: ['TOTP_OWNER'],
+          targetType: 'TOTP_ACCOUNT',
+          targetId: account.id,
+          actorType: principal.type,
+          principalId: principal.id,
+          actorId: principal.subjectId,
+          authKind: principal.authKind,
+          resourceId: resource.id,
+          payload: {
+            action: CODE_OPERATION,
+            authFamily: input.authFamily,
+            audience: input.audience,
+          },
+        },
+        tx
+      );
+      return consent;
+    });
   }
 
   /**
@@ -1508,13 +1804,12 @@ export class ResourceService {
    */
   async revealTOTPCode(
     resourceId: string,
-    principal: Principal | string,
+    principal: Principal,
     grantId?: string,
     consentId?: string
   ): Promise<string> {
     const { repositories } = this.deps;
-    const userPrincipal: Principal =
-      typeof principal === 'string' ? createDiscordPrincipal(principal) : principal;
+    const userPrincipal = principal;
 
     const actorId = userPrincipal.subjectId;
 
@@ -1522,8 +1817,6 @@ export class ResourceService {
     const evalResult = await hasCapability(repositories, userPrincipal, 'totp.code.read', {
       resourceId,
     });
-
-    const authorized = evalResult.allowed;
 
     const resource = await repositories.resources.findById(resourceId);
     if (!resource || !resource.totpAccountId) {
@@ -1535,9 +1828,43 @@ export class ResourceService {
       throw new Error('TOTP account not found.');
     }
 
+    const linkEnvelope = validateTOTPLinkEnvelope(resource.totpDelegationEnvelope);
+    const linkIsCurrent = Boolean(
+      linkEnvelope &&
+      linkEnvelope.resourceId === resource.id &&
+      linkEnvelope.accountOwnerDiscordUserId === accountMetadata.ownerDiscordUserId &&
+      linkEnvelope.accountVersion === accountMetadata.version &&
+      linkEnvelope.linkPolicyVersion === resource.totpLinkVersion
+    );
+    const authorized = evalResult.allowed && evalResult.decisionCode === 'ALLOW' && linkIsCurrent;
+
     if (!authorized) {
       void grantId;
       void consentId;
+      await this.audit.log({
+        eventFamily: 'AUTHORIZATION',
+        eventType: 'TOTP_REVEAL_DENIED',
+        surface: correlationStorage.getStore()?.surface ?? 'DOMAIN',
+        operation: 'totp.code.reveal',
+        outcomeCode: 'DENIED',
+        capability: 'totp.code.read',
+        decisionCode: 'DENY',
+        reasonCode: linkIsCurrent ? evalResult.reasonCode : 'TARGET_SCOPE_MISMATCH',
+        authoritySources: evalResult.authoritySources,
+        targetType: 'TOTP_ACCOUNT',
+        targetId: accountMetadata.id,
+        actorType: userPrincipal.type,
+        principalId: userPrincipal.id,
+        actorId,
+        authKind: userPrincipal.authKind,
+        resourceId,
+        payload: { reason: linkIsCurrent ? 'No direct TOTP code authority' : 'Stale TOTP link' },
+      });
+      if (!linkIsCurrent) {
+        throw new AccessDeniedError(
+          'The TOTP link consent is stale or malformed; relink before revealing codes.'
+        );
+      }
       throw new AccessDeniedError(
         'Delegated TOTP reveal is deferred until request-bound consent and grant authority lands in #120/#122.'
       );
@@ -1554,13 +1881,13 @@ export class ResourceService {
     await this.audit.log({
       eventFamily: 'TOTP_LIFECYCLE',
       eventType: 'TOTP_CODE_REVEAL',
-      surface: 'DOMAIN',
+      surface: correlationStorage.getStore()?.surface ?? 'DOMAIN',
       operation: 'totp.code.reveal',
       outcomeCode: 'SUCCESS',
       capability: 'totp.code.read',
       decisionCode: 'ALLOW',
-      reasonCode: authorized ? evalResult.reasonCode : 'GRANT',
-      authoritySources: authorized ? evalResult.authoritySources : ['APPROVAL_GRANT'],
+      reasonCode: evalResult.reasonCode,
+      authoritySources: evalResult.authoritySources,
       targetType: 'TOTP_ACCOUNT',
       targetId: account.id,
       actorType: userPrincipal.type,
@@ -1568,7 +1895,7 @@ export class ResourceService {
       actorId,
       authKind: userPrincipal.authKind,
       resourceId,
-      grantId: authorized ? null : grantId,
+      grantId: null,
       payload: { totpAccountId: account.id },
     });
 
@@ -1577,38 +1904,106 @@ export class ResourceService {
     return code;
   }
 
+  /** Reveal a personal current code. This path never accepts Resource or grant authority. */
+  async revealPersonalTOTPCode(totpAccountId: string, principal: Principal): Promise<string> {
+    const decision = await hasCapability(this.deps.repositories, principal, 'totp.code.read', {
+      totpAccountId,
+    });
+    if (!decision.allowed || decision.decisionCode !== 'ALLOW') {
+      await this.audit.log({
+        eventFamily: 'AUTHORIZATION',
+        eventType: 'TOTP_REVEAL_DENIED',
+        surface: correlationStorage.getStore()?.surface ?? 'DOMAIN',
+        operation: 'totp.personal-code.reveal',
+        outcomeCode: 'DENIED',
+        capability: 'totp.code.read',
+        decisionCode: 'DENY',
+        reasonCode: decision.reasonCode,
+        authoritySources: decision.authoritySources,
+        targetType: 'TOTP_ACCOUNT',
+        targetId: totpAccountId,
+        actorType: principal.type,
+        principalId: principal.id,
+        actorId: principal.subjectId,
+        authKind: principal.authKind,
+        payload: { reason: 'Personal TOTP owner required' },
+      });
+      throw new AccessDeniedError(decision.safeExplanation);
+    }
+    const account = await this.deps.repositories.totp.findById(totpAccountId);
+    if (!account || account.ownerDiscordUserId !== principal.subjectId) {
+      throw new AccessDeniedError('Only the personal TOTP owner may reveal this code.');
+    }
+    await this.audit.log({
+      eventFamily: 'TOTP_LIFECYCLE',
+      eventType: 'TOTP_PERSONAL_CODE_REVEAL',
+      surface: correlationStorage.getStore()?.surface ?? 'DOMAIN',
+      operation: 'totp.personal-code.reveal',
+      outcomeCode: 'SUCCESS',
+      capability: 'totp.code.read',
+      decisionCode: 'ALLOW',
+      reasonCode: decision.reasonCode,
+      authoritySources: decision.authoritySources,
+      targetType: 'TOTP_ACCOUNT',
+      targetId: account.id,
+      actorType: principal.type,
+      principalId: principal.id,
+      actorId: principal.subjectId,
+      authKind: principal.authKind,
+      payload: { totpAccountId: account.id },
+    });
+    return generateTOTPCode(account);
+  }
+
   /**
    * Reveal recovery key if authorized.
    */
-  async revealTOTPRecoveryKey(totpAccountId: string, actorId: string): Promise<string> {
+  async revealTOTPRecoveryKey(totpAccountId: string, principal: Principal): Promise<string> {
     const { repositories } = this.deps;
 
     // Check capability 'totp.recovery.read'
-    const principal = createDiscordPrincipal(actorId);
     const evalResult = await hasCapability(repositories, principal, 'totp.recovery.read', {
       totpAccountId,
     });
 
-    if (!evalResult.allowed) {
-      throw new Error(
+    if (!evalResult.allowed || evalResult.decisionCode !== 'ALLOW') {
+      await this.audit.log({
+        eventFamily: 'AUTHORIZATION',
+        eventType: 'TOTP_REVEAL_DENIED',
+        surface: correlationStorage.getStore()?.surface ?? 'DOMAIN',
+        operation: 'totp.recovery.reveal',
+        outcomeCode: 'DENIED',
+        capability: 'totp.recovery.read',
+        decisionCode: 'DENY',
+        reasonCode: evalResult.reasonCode,
+        authoritySources: evalResult.authoritySources,
+        targetType: 'TOTP_ACCOUNT',
+        targetId: totpAccountId,
+        actorType: principal.type,
+        principalId: principal.id,
+        actorId: principal.subjectId,
+        authKind: principal.authKind,
+        payload: { reason: 'Personal TOTP owner required' },
+      });
+      throw new ForbiddenError(
         'Access denied. Only the personal owner of the TOTP account can view the recovery key.'
       );
     }
 
     const account = await repositories.totp.findById(totpAccountId);
     if (!account) {
-      throw new Error('TOTP account not found.');
+      throw new ResourceNotFoundError('TOTP account not found.');
     }
 
     if (!account.backupKey) {
-      throw new Error('No recovery key/backup key configured for this account.');
+      throw new ResourceNotFoundError('No recovery key/backup key configured for this account.');
     }
 
     // Persist the authorized reveal record before returning recovery material.
     await this.audit.log({
       eventFamily: 'TOTP_LIFECYCLE',
       eventType: 'TOTP_RECOVERY_REVEAL',
-      surface: 'DOMAIN',
+      surface: correlationStorage.getStore()?.surface ?? 'DOMAIN',
       operation: 'totp.recovery.reveal',
       outcomeCode: 'SUCCESS',
       capability: 'totp.recovery.read',
@@ -1619,7 +2014,7 @@ export class ResourceService {
       targetId: totpAccountId,
       actorType: principal.type,
       principalId: principal.id,
-      actorId,
+      actorId: principal.subjectId,
       authKind: principal.authKind,
       payload: { totpAccountId },
     });

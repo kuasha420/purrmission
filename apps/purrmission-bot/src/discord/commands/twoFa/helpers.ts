@@ -1,15 +1,5 @@
 import type { ChatInputCommandInteraction } from 'discord.js';
-import type { TOTPAccount } from '../../../domain/models.js';
-import type { TOTPRepository } from '../../../domain/repositories.js';
 import { logger } from '../../../logging/logger.js';
-
-export async function resolveUserAccessibleAccount(
-  totpRepository: TOTPRepository,
-  userId: string,
-  accountName: string
-): Promise<TOTPAccount | null> {
-  return totpRepository.findByOwnerAndName(userId, accountName);
-}
 
 /**
  * Send a DM to the user with message lines.

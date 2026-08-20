@@ -14,7 +14,6 @@ import {
 import type { CommandContext } from './context.js';
 import { logger } from '../../logging/logger.js';
 import { env } from '../../config/env.js';
-import { generateTOTPCode } from '../../domain/totp.js';
 import type {
   AccessRequestContext,
   AccessRequestContextWithExtras,
@@ -795,7 +794,7 @@ async function handleLink2FA(
   const consentId = interaction.options.getString('consent-id', true);
   const userId = interaction.user.id;
 
-  const { resources, totp } = context.repositories;
+  const { resources } = context.repositories;
 
   // Check resource exists
   const resource = await resources.findById(resourceId);
@@ -807,33 +806,17 @@ async function handleLink2FA(
     return;
   }
 
-  // Find the TOTP account by ID (from autocomplete)
-  const account = await totp.findMetadataById(accountId);
-
-  if (!account) {
-    await interaction.reply({
-      content: '❌ 2FA account not found.',
-      ephemeral: true,
-    });
-    return;
-  }
-
-  // Verify the user has permission to use this account
-  if (account.ownerDiscordUserId !== userId) {
-    await interaction.reply({
-      content: `❌ You do not have permission to use the 2FA account \`${account.accountName}\`.`,
-      ephemeral: true,
-    });
-    return;
-  }
-
   try {
-    await context.services.resource.linkTOTPAccount(resourceId, account.id, userId, consentId);
+    await context.services.resource.linkTOTPAccount(
+      resourceId,
+      accountId,
+      createDiscordPrincipal(userId),
+      consentId
+    );
 
     logger.info('Linked 2FA account to resource', {
       resourceId,
-      totpAccountId: account.id,
-      accountName: account.accountName,
+      totpAccountId: accountId,
       userId,
     });
 
@@ -842,7 +825,7 @@ async function handleLink2FA(
         '✅ **2FA account linked successfully!**',
         '',
         `**Resource:** ${resource.name}`,
-        `**2FA Account:** ${account.accountName}`,
+        `**2FA Account ID:** \`${accountId}\``,
         '',
         '_Use `/resource 2fa get` to retrieve codes._',
       ].join('\n'),
@@ -944,19 +927,10 @@ async function handleGet2FA(
     return;
   }
 
-  // Get linked TOTP account
-  const linkedAccount = await context.services.resource.getLinkedTOTPAccount(resourceId);
-
-  if (!linkedAccount) {
-    await interaction.reply({
-      content: '❌ No 2FA account is linked to this resource.',
-      ephemeral: true,
-    });
-    return;
-  }
-
-  // Generate TOTP code
-  const code = generateTOTPCode(linkedAccount);
+  const code = await context.services.resource.revealTOTPCode(
+    resourceId,
+    createDiscordPrincipal(userId)
+  );
 
   // Send via DM
   try {
@@ -967,36 +941,13 @@ async function handleGet2FA(
         '',
         `**${code}**`,
         '',
-        `_Account: ${linkedAccount.accountName}_`,
         '_Code is time-based and will expire soon._',
       ].join('\n')
     );
 
     logger.info('Sent linked 2FA code via DM', {
       resourceId,
-      totpAccountId: linkedAccount.id,
       userId,
-    });
-
-    await context.services.audit.log({
-      eventFamily: 'TOTP_LIFECYCLE',
-      eventType: 'TOTP_CODE_REVEAL',
-      surface: 'DISCORD',
-      operation: 'resource.totp.get',
-      outcomeCode: 'SUCCESS',
-      capability: 'totp.code.read',
-      decisionCode: 'ALLOW',
-      reasonCode: 'OWNER',
-      authoritySources: ['RESOURCE_OWNER'],
-      targetType: 'TOTP_ACCOUNT',
-      targetId: linkedAccount.id,
-      actorType: 'DISCORD_USER',
-      principalId: `discord-interaction:${interaction.id}`,
-      resourceId,
-      actorId: userId,
-      authKind: 'DISCORD',
-      correlationId: interaction.id,
-      payload: { totpAccountId: linkedAccount.id },
     });
 
     await interaction.reply({
@@ -1132,8 +1083,7 @@ async function create2FAAccessRequest(
   const { approval, resource: resourceService } = context.services;
 
   // Validate TOTP account still linked before creating approval request (prevent race condition)
-  const linkedAccount = await resourceService.getLinkedTOTPAccount(resourceId);
-  if (!linkedAccount) {
+  if (!(await resourceService.hasLinkedTOTP(resourceId))) {
     await interaction.reply({
       content: '❌ No 2FA account is linked to this resource anymore.',
       ephemeral: true,

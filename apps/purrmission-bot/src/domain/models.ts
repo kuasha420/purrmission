@@ -21,12 +21,23 @@ export type ApprovalMode = 'ONE_OF_N';
  * A protected resource that requires guardian approval for access.
  */
 export interface TOTPLinkEnvelope {
+  schemaVersion: 1;
   consentId: string;
-  delegationPolicy: Record<string, unknown>;
+  resourceId: string;
+  initiatingResourceOwnerId: string;
+  delegationPolicy: TOTPDelegationPolicy;
   accountOwnerDiscordUserId: string;
   accountVersion: string;
-  linkVersion: string;
-  createdAt: Date;
+  linkPolicyVersion: string;
+  createdAt: string;
+}
+
+export interface TOTPDelegationPolicy {
+  allowDelegation: boolean;
+  allowedOperations: readonly 'totp.code.read'[];
+  allowedAuthFamilies: readonly string[];
+  allowedAudiences: readonly string[];
+  maxGrantTtlSeconds: number;
 }
 
 /**
@@ -277,9 +288,6 @@ export interface TOTPAccount {
   /** Optional backup key / recovery code */
   backupKey?: string;
 
-  /** Legacy display compatibility; consent envelopes remain authoritative. */
-  shared?: boolean;
-
   /** Stable version identifier of the TOTP state */
   version: string;
 
@@ -308,7 +316,10 @@ export interface TOTPLinkConsent {
   accountId: string;
   resourceId: string;
   ownerDiscordUserId: string;
-  delegationPolicy: Record<string, unknown>;
+  initiatingResourceOwnerId: string;
+  accountVersion: string;
+  linkPolicyVersion: string;
+  delegationPolicy: TOTPDelegationPolicy;
   expiresAt: Date;
   usedAt: Date | null;
   createdAt: Date;
@@ -320,9 +331,12 @@ export interface TOTPDelegationConsent {
   totpAccountId: string;
   operation: string;
   requesterId: string;
+  ownerDiscordUserId: string;
   authFamily: string;
+  audience: string;
   accountVersion: string;
   linkVersion: string;
+  maxGrantExpiresAt: Date;
   expiresAt: Date;
   usedAt: Date | null;
   createdAt: Date;

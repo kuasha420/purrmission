@@ -179,7 +179,10 @@ describe('verified encrypted database backup', () => {
       manifest: { packageId: string; sha256: string };
       ciphertext: string;
     };
-    parsed.manifest.sha256 = `${parsed.manifest.sha256.slice(0, -1)}0`;
+    const finalDigestCharacter = parsed.manifest.sha256.at(-1);
+    parsed.manifest.sha256 = `${parsed.manifest.sha256.slice(0, -1)}${
+      finalDigestCharacter === '0' ? '1' : '0'
+    }`;
     const tampered = path.join(fixture.root, 'tampered.purrbackup');
     fs.writeFileSync(tampered, JSON.stringify(parsed));
     assert.throws(() => verify(tampered), /authentication|decryption/);

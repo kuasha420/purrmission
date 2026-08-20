@@ -24,12 +24,12 @@ Provides the API for secure secret synchronization:
 
 ### 🔐 2FA / TOTP Management
 
-Manage shared and personal 2FA accounts directly from Discord.
+Manage personal-custody 2FA accounts and explicitly consented Resource links.
 
 | Command       | Description                        |
 | ------------- | ---------------------------------- |
 | `/2fa add`    | Add account via URI, secret, or QR |
-| `/2fa list`   | View personal/shared accounts      |
+| `/2fa list`   | View personal accounts             |
 | `/2fa get`    | Get current TOTP code              |
 | `/2fa update` | Update backup key (owner only)     |
 
@@ -47,9 +47,9 @@ Manage shared and personal 2FA accounts directly from Discord.
 | `/resource 2fa unlink`    | Remove a linked 2FA account          |
 | `/resource 2fa get`       | Retrieve the linked 2FA code         |
 
-New Resource↔TOTP links and delegated TOTP reveals currently fail closed pending the authenticated,
-seed-version-bound consent model in #120 and request-bound conditional grants in #122. Approval
-records decision state only and does not mint reveal authority.
+Resource↔TOTP links require a one-time, seed-version-bound consent from the account owner.
+Delegation-consent records grant no reveal authority; delegated reveal remains fail closed until
+#122 issues and atomically consumes an exact matching grant. Approval status alone is not authority.
 
 ### 🛡️ Guardian Management
 

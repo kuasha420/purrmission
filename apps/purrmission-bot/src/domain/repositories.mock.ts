@@ -423,6 +423,22 @@ export class InMemoryTOTPRepository implements TOTPRepository {
     return updated;
   }
 
+  async updateBackupKey(id: string, backupKey: string): Promise<TOTPAccountMetadata> {
+    const account = this.accounts.get(id);
+    if (!account) throw new Error(`TOTP account not found: ${id}`);
+    const updated = { ...account, backupKey, version: crypto.randomUUID(), updatedAt: new Date() };
+    this.accounts.set(id, updated);
+    return {
+      id: updated.id,
+      ownerDiscordUserId: updated.ownerDiscordUserId,
+      accountName: updated.accountName,
+      issuer: updated.issuer,
+      version: updated.version,
+      createdAt: updated.createdAt,
+      updatedAt: updated.updatedAt,
+    };
+  }
+
   async deleteById(id: string): Promise<void> {
     this.accounts.delete(id);
     if (this.resources) {
@@ -494,6 +510,27 @@ export class InMemoryTOTPRepository implements TOTPRepository {
       }));
   }
 
+  async findMetadataByOwnerAndName(
+    ownerDiscordUserId: string,
+    accountName: string
+  ): Promise<TOTPAccountMetadata | null> {
+    const account = Array.from(this.accounts.values()).find(
+      (candidate) =>
+        candidate.ownerDiscordUserId === ownerDiscordUserId && candidate.accountName === accountName
+    );
+    return account
+      ? {
+          id: account.id,
+          ownerDiscordUserId: account.ownerDiscordUserId,
+          accountName: account.accountName,
+          issuer: account.issuer,
+          version: account.version,
+          createdAt: account.createdAt,
+          updatedAt: account.updatedAt,
+        }
+      : null;
+  }
+
   async createLinkConsent(
     input: Omit<TOTPLinkConsent, 'id' | 'createdAt' | 'usedAt'>
   ): Promise<TOTPLinkConsent> {
@@ -537,29 +574,25 @@ export class InMemoryTOTPRepository implements TOTPRepository {
     return this.delegationConsents.get(id) ?? null;
   }
 
-  async findActiveDelegationConsent(
-    resourceId: string,
-    requesterId: string,
-    operation: string
-  ): Promise<TOTPDelegationConsent | null> {
-    const now = new Date();
-    for (const consent of this.delegationConsents.values()) {
-      if (
-        consent.resourceId === resourceId &&
-        consent.requesterId === requesterId &&
-        consent.operation === operation &&
-        consent.usedAt === null &&
-        consent.expiresAt > now
-      ) {
-        return consent;
-      }
-    }
-    return null;
-  }
-
-  async useDelegationConsent(id: string): Promise<boolean> {
-    const found = this.delegationConsents.get(id);
-    if (found && found.usedAt === null && found.expiresAt > new Date()) {
+  async consumeDelegationConsent(
+    expected: Parameters<TOTPRepository['consumeDelegationConsent']>[0]
+  ): Promise<boolean> {
+    const found = this.delegationConsents.get(expected.id);
+    if (
+      found &&
+      found.usedAt === null &&
+      found.expiresAt > new Date() &&
+      found.resourceId === expected.resourceId &&
+      found.totpAccountId === expected.totpAccountId &&
+      found.operation === expected.operation &&
+      found.requesterId === expected.requesterId &&
+      found.ownerDiscordUserId === expected.ownerDiscordUserId &&
+      found.authFamily === expected.authFamily &&
+      found.audience === expected.audience &&
+      found.accountVersion === expected.accountVersion &&
+      found.linkVersion === expected.linkVersion &&
+      found.maxGrantExpiresAt >= expected.grantExpiresAt
+    ) {
       found.usedAt = new Date();
       return true;
     }

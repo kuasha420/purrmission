@@ -176,9 +176,10 @@ export async function restoreLegacyHardeningRows(prisma: PrismaClient): Promise<
     );
     await tx.$executeRawUnsafe(
       `INSERT INTO "Resource"
-         ("id", "name", "mode", "apiKey", "createdAt", "totpAccountId", "version")
-       SELECT "id", "name", "mode", "apiKey", "createdAt", "totpAccountId",
-              'legacy-resource-' || "id"
+         ("id", "name", "mode", "apiKey", "createdAt", "totpAccountId",
+          "totpDelegationEnvelope", "version", "totpLinkVersion")
+       SELECT "id", "name", "mode", "apiKey", "createdAt", NULL, NULL,
+              'legacy-resource-' || "id", 'legacy-link-' || "id"
        FROM "_purrmission_stage_Resource"`
     );
     await tx.$executeRawUnsafe(
