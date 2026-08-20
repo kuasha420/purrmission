@@ -203,7 +203,7 @@ async function main() {
     }
 
     if (!config.dryRun) {
-      await backupDatabase();
+      await backupDatabase([config.oldKey, config.newKey]);
     }
 
     const prisma = getPrismaClient();

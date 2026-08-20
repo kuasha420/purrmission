@@ -12,6 +12,11 @@
   - [ ] `PORT` is set (default 3000).
 
 - [ ] **Database & Migrations**:
+  - [ ] **Verified backup configuration**: Configure the dedicated backup key ring, active key,
+        retention, and a separately mounted `BACKUP_OFFSITE_DIR` described in
+        [Verified production backup and restore](operations/verified-backup-restore.md).
+  - [ ] **Restore proof**: Confirm the workflow uploaded, downloaded, authenticated, and restored
+        the current package in isolation before migration began.
   - [ ] **Artifact Check**: Ensure `prisma/` directory (containing `schema.prisma`) is included in the deployment artifact.
     - _Current Status_: `deploy.yml` includes Prisma plus the supported migration wrapper and its Guardian reconciliation dependency.
   - [ ] **Migration Check**: Run `pnpm prisma:deploy` on the server after deployment. This supported wrapper performs the required RBAC reconciliation before invoking Prisma.
@@ -24,7 +29,8 @@
 ## Deployment Steps
 
 1.  **Merge to `deploy` branch**: Triggers GitHub Action.
-2.  **Monitor Action**: Watch for build and deploy job success.
+2.  **Monitor Action**: Confirm the verified offsite backup step succeeds before cleanup and
+    migration, then watch the remaining deploy job.
 3.  **Post-Deployment Server Checks**:
     - SSH into server.
     - Navigate to deployment directory.
@@ -36,6 +42,8 @@
 
 - **"Schema not found"**: The `prisma` directory was not uploaded. Copy it manually or update `deploy.yml`.
 - **"Database is locked"**: Common with SQLite if multiple processes access it. Restart PM2.
+- **Backup step failed**: Keep the deployment stopped. Verify the offsite mount, dedicated key ring,
+  retention policy, and package age; never bypass it with a plaintext local copy.
 - **Missing Dependencies**: If `pnpm` or Prisma is not found, ensure project dependencies were installed with `pnpm install`.
 
 > [!WARNING]

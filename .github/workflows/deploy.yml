@@ -20,6 +20,8 @@ on:
       - 'prisma/**'
       # Supported migration and environment-validation entrypoints packaged in the deploy artifact
       - 'scripts/deploy-migrations.ts'
+      - 'scripts/backup-db.ts'
+      - 'scripts/backup-db-cli.ts'
       - 'scripts/reconcile-guardians-owners.ts'
       - 'scripts/validate-env.cjs'
   workflow_dispatch:
@@ -56,7 +58,7 @@ jobs:
         run: |
           find apps/purrmission-bot/dist -type f -exec sha256sum {} \; | sort > dist-checksums.txt
           find dist-scripts -type f -exec sha256sum {} \; | sort >> dist-checksums.txt
-          sha256sum package.json pnpm-lock.yaml ecosystem.config.cjs >> dist-checksums.txt
+          sha256sum package.json pnpm-lock.yaml ecosystem.config.cjs .nvmrc >> dist-checksums.txt
           sha256sum scripts/deploy-migrations.ts scripts/reconcile-guardians-owners.ts scripts/validate-env.cjs >> dist-checksums.txt
           cat dist-checksums.txt
 
@@ -74,6 +76,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: bot-build
+          include-hidden-files: true
           path: |
             apps/purrmission-bot/dist
             apps/purrmission-bot/package.json
@@ -81,6 +84,7 @@ jobs:
             pnpm-lock.yaml
             pnpm-workspace.yaml
             ecosystem.config.cjs
+            .nvmrc
             prisma
             dist-scripts
             dist-checksums.txt
@@ -102,6 +106,44 @@ jobs:
         run: |
           echo "Verifying artifact integrity..."
           sha256sum -c dist-checksums.txt
+
+      - name: Stage verified backup tooling
+        uses: appleboy/scp-action@v1
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USERNAME }}
+          key: ${{ secrets.SSH_KEY }}
+          port: ${{ secrets.SSH_PORT || 22 }}
+          target: '${{ secrets.SSH_TARGET }}/.backup-verifier-${{ github.run_id }}'
+          source: 'dist-scripts,.nvmrc'
+
+      - name: Create, upload, download, and verify encrypted production backup
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USERNAME }}
+          key: ${{ secrets.SSH_KEY }}
+          port: ${{ secrets.SSH_PORT || 22 }}
+          script: |
+            set -eu
+            export NVM_DIR="$HOME/.nvm"
+            if [ ! -s "$NVM_DIR/nvm.sh" ]; then
+              echo "NVM is required on the deploy host to install the artifact-pinned Node runtime."
+              exit 1
+            fi
+            \. "$NVM_DIR/nvm.sh"
+            cd ${{ secrets.SSH_TARGET }}
+            backup_stage=".backup-verifier-${{ github.run_id }}"
+            trap 'rm -rf -- "$backup_stage"' EXIT
+            pinned_node_version="$(cat "$backup_stage/.nvmrc")"
+            nvm install "$pinned_node_version"
+            nvm use "$pinned_node_version"
+            if [ ! -f ".env" ]; then
+              echo "Production .env is missing; verified backup cannot run."
+              exit 1
+            fi
+            export DEPLOYMENT_ROOT="$PWD"
+            node "$backup_stage/dist-scripts/backup-db-cli.js" --env-file .env
 
       - name: Stop PM2 and clean target directory
         uses: appleboy/ssh-action@v1
@@ -160,40 +202,6 @@ jobs:
             fi
 
             mkdir -p data
-            mkdir -p backups
-
-            # 3. DYNAMIC DATABASE BACKUP
-            # Parse DATABASE_URL to find the actual file to backup
-            DB_PATH=""
-            if [ -n "$db_url_value" ]; then
-                case "$db_url_value" in
-                    file:*|sqlite:*)
-                        # Remove scheme and normalize
-                        path_part="${db_url_value#file:}"
-                        path_part="${path_part#sqlite:}"
-                        # Handle sqlite:/// absolute paths or file: relative
-                        while [ "${path_part#"/"}" != "$path_part" ]; do path_part="${path_part#"/"}"; done
-                        
-                        # If it doesn't start with /, treat as relative to root
-                        case "$path_part" in
-                            /*) DB_PATH="$path_part" ;;
-                            *) DB_PATH="./$path_part" ;;
-                        esac
-                        ;;
-                esac
-            fi
-
-            # Fallback to default if parsing failed
-            if [ -z "$DB_PATH" ]; then DB_PATH="data/purrmission.db"; fi
-
-            if [ -f "$DB_PATH" ]; then
-                echo "Backing up database from '$DB_PATH'..."
-                BACKUP_NAME="$(basename "$DB_PATH").$(date +%Y%m%d%H%M%S).bak"
-                cp "$DB_PATH" "backups/$BACKUP_NAME"
-            else
-                echo "No database file found at '$DB_PATH'; skipping backup."
-            fi
-
             # Flush target directory except .env files and persistent data
             # Preserved: .env*, *.db (legacy), data/, backups/
             find . -mindepth 1 -maxdepth 1 \
@@ -216,7 +224,7 @@ jobs:
           key: ${{ secrets.SSH_KEY }}
           port: ${{ secrets.SSH_PORT || 22 }}
           target: ${{ secrets.SSH_TARGET }}
-          source: 'apps,package.json,pnpm-lock.yaml,pnpm-workspace.yaml,ecosystem.config.cjs,dist-checksums.txt,prisma,dist-scripts,scripts/deploy-migrations.ts,scripts/reconcile-guardians-owners.ts,scripts/validate-env.cjs'
+          source: 'apps,package.json,pnpm-lock.yaml,pnpm-workspace.yaml,ecosystem.config.cjs,.nvmrc,dist-checksums.txt,prisma,dist-scripts,scripts/deploy-migrations.ts,scripts/reconcile-guardians-owners.ts,scripts/validate-env.cjs'
 
       - name: Verify deployment integrity
         uses: appleboy/ssh-action@v1

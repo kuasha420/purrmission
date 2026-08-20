@@ -7,7 +7,6 @@ import { execFileSync, spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { PrismaClient } from '@prisma/client';
 import { env } from '../apps/purrmission-bot/src/config/env.js';
-import { backupDatabase } from './backup-db.js';
 import {
   classifyMigrationDatabaseTables,
   runMigrationPreflight,
@@ -56,27 +55,6 @@ describe('Operations Scripts', () => {
       fs.rmSync(directory, { recursive: true, force: true });
     }
   });
-  describe('backup-db', () => {
-    it('should create a backup file for a valid SQLite DB', async () => {
-      // Mock env.DATABASE_URL if possible, or just rely on existing dev.db if it exists
-      // Since we can't easily mock the 'env' import here without a more complex setup,
-      // we'll assume the function uses the current env.
-      // If DATABASE_URL is not set to a file: path, it will throw.
-
-      try {
-        const backupPath = await backupDatabase();
-        assert.ok(fs.existsSync(backupPath));
-        assert.ok(backupPath.includes('backups'));
-      } catch (err) {
-        if (err instanceof Error && err.message.includes('only supported for SQLite')) {
-          // Skip if not SQLite
-          return;
-        }
-        throw err;
-      }
-    });
-  });
-
   // rotate-keys.ts is harder to test without a full Prisma mock setup,
   // but we can verify it exports what we expect and doesn't crash on import.
   describe('rotate-keys', () => {
@@ -120,7 +98,35 @@ describe('Operations Scripts', () => {
       assert.match(deployWorkflow, /pnpm prisma:deploy/);
       assert.match(deployWorkflow, /scripts\/deploy-migrations\.ts/);
       assert.match(deployWorkflow, /scripts\/reconcile-guardians-owners\.ts/);
+      assert.match(deployWorkflow, /dist-scripts\/backup-db-cli\.js/);
+      assert.ok(
+        deployWorkflow.indexOf('nvm install "$pinned_node_version"') <
+          deployWorkflow.indexOf('dist-scripts/backup-db-cli.js'),
+        'the deploy host must install the pinned Node runtime before running backup verification'
+      );
+      assert.match(
+        deployWorkflow,
+        /NVM is required on the deploy host/,
+        'missing NVM must fail with an actionable deployment diagnostic'
+      );
+      assert.ok(
+        deployWorkflow.indexOf('dist-scripts/backup-db-cli.js') <
+          deployWorkflow.indexOf('pnpm prisma:deploy'),
+        'verified offsite restore must complete before migrations'
+      );
+      assert.ok(
+        deployWorkflow.indexOf('dist-scripts/backup-db-cli.js') <
+          deployWorkflow.indexOf('pm2 stop Purrmission'),
+        'a backup-gate failure must leave the existing production process running'
+      );
+      assert.doesNotMatch(
+        deployWorkflow,
+        /cp\s+[^\n]*\.(?:db|sqlite)[^\n]*backups/,
+        'deploy workflow must not substitute a plaintext local copy for verified backup'
+      );
       for (const script of [
+        'scripts/backup-db.ts',
+        'scripts/backup-db-cli.ts',
         'scripts/deploy-migrations.ts',
         'scripts/reconcile-guardians-owners.ts',
         'scripts/validate-env.cjs',
