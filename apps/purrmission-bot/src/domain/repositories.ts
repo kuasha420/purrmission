@@ -16,7 +16,6 @@ import { DuplicateError } from './errors.js';
 import { containsAuditSubject, type AuditScope } from './audit.js';
 import type {
   AddGuardianInput,
-  ApiToken,
   ApprovalMode,
   ApprovalRequest,
   ApprovalRequestMetadataProjection,
@@ -28,7 +27,6 @@ import type {
   AuditCheckpoint,
   AuthSession,
   AuthSessionStatus,
-  CreateApiTokenInput,
   CreateApprovalRequestInput,
   CreateAuditLogInput,
   CreateEnvironmentInput,
@@ -64,8 +62,6 @@ export interface ResourceRepository {
   create(resource: CreateResourceInput, tx?: Prisma.TransactionClient): Promise<Resource>;
 
   findById(id: string, tx?: Prisma.TransactionClient): Promise<Resource | null>;
-
-  findByApiKey(apiKey: string): Promise<Resource | null>;
 
   update(
     id: string,
@@ -330,7 +326,6 @@ export class PrismaResourceRepository implements ResourceRepository {
         id: input.id ?? undefined,
         name: input.name,
         mode: input.mode,
-        apiKey: input.apiKey,
         totpAccountId: input.totpAccountId ?? null,
         version: input.version || randomUUID(),
         totpLinkVersion: input.totpLinkVersion || randomUUID(),
@@ -342,13 +337,6 @@ export class PrismaResourceRepository implements ResourceRepository {
   async findById(id: string, tx?: Prisma.TransactionClient): Promise<Resource | null> {
     const row = await (tx ?? this.prisma).resource.findUnique({
       where: { id },
-    });
-    return row ? this.mapPrismaToDomain(row) : null;
-  }
-
-  async findByApiKey(apiKey: string): Promise<Resource | null> {
-    const row = await this.prisma.resource.findFirst({
-      where: { apiKey },
     });
     return row ? this.mapPrismaToDomain(row) : null;
   }
@@ -428,7 +416,6 @@ export class PrismaResourceRepository implements ResourceRepository {
     id: string;
     name: string;
     mode: string;
-    apiKey: string | null;
     totpAccountId: string | null;
     totpDelegationEnvelope: any;
     version: string;
@@ -444,7 +431,6 @@ export class PrismaResourceRepository implements ResourceRepository {
       id: row.id,
       name: row.name,
       mode: row.mode as ApprovalMode,
-      apiKey: row.apiKey,
       totpAccountId: row.totpAccountId ?? undefined,
       totpDelegationEnvelope: row.totpDelegationEnvelope
         ? (row.totpDelegationEnvelope as unknown as TOTPLinkEnvelope)
@@ -1915,8 +1901,14 @@ export interface AuthRepository {
     },
     tx?: Prisma.TransactionClient
   ): Promise<AuthSession>;
-  findSessionByDeviceCode(deviceCode: string): Promise<AuthSession | null>;
-  findSessionByUserCode(userCode: string): Promise<AuthSession | null>;
+  findSessionByDeviceCode(
+    deviceCode: string,
+    tx?: Prisma.TransactionClient
+  ): Promise<AuthSession | null>;
+  findSessionByUserCode(
+    userCode: string,
+    tx?: Prisma.TransactionClient
+  ): Promise<AuthSession | null>;
   updateSessionStatus(
     id: string,
     status: AuthSessionStatus,
@@ -1930,18 +1922,28 @@ export interface AuthRepository {
     userId?: string,
     tx?: Prisma.TransactionClient
   ): Promise<boolean>;
-  createApiToken(input: CreateApiTokenInput, tx?: Prisma.TransactionClient): Promise<ApiToken>;
-  findApiToken(token: string): Promise<ApiToken | null>;
-  updateApiTokenLastUsed(id: string, tx?: Prisma.TransactionClient): Promise<void>;
+  incrementSessionAttempts(
+    id: string,
+    kind: 'APPROVAL' | 'POLL',
+    maximum: number,
+    tx?: Prisma.TransactionClient
+  ): Promise<boolean>;
   deleteExpiredSessions(tx?: Prisma.TransactionClient): Promise<number>;
 }
 
 export interface CredentialRepository {
   create(input: CreateCredentialInput, tx?: Prisma.TransactionClient): Promise<Credential>;
-  findById(id: string): Promise<Credential | null>;
-  findByDigest(digest: string): Promise<Credential | null>;
-  findBySubject(subjectId: string): Promise<Credential[]>;
-  revoke(id: string, tx?: Prisma.TransactionClient): Promise<void>;
+  findById(id: string, tx?: Prisma.TransactionClient): Promise<Credential | null>;
+  findByDigest(digest: string, tx?: Prisma.TransactionClient): Promise<Credential | null>;
+  findBySubject(subjectId: string, type?: CredentialType): Promise<Credential[]>;
+  findByTarget(targetType: string, targetId: string): Promise<Credential[]>;
+  updateDigest(
+    id: string,
+    digest: string,
+    digestKeyId: string,
+    tx?: Prisma.TransactionClient
+  ): Promise<void>;
+  revoke(id: string, reason: string, tx?: Prisma.TransactionClient): Promise<void>;
   updateLastUsed(id: string, tx?: Prisma.TransactionClient): Promise<void>;
 }
 
@@ -1989,13 +1991,19 @@ export class PrismaAuthRepository implements AuthRepository {
     return this.mapSession(session);
   }
 
-  async findSessionByDeviceCode(deviceCode: string): Promise<AuthSession | null> {
-    const session = await this.prisma.authSession.findUnique({ where: { deviceCode } });
+  async findSessionByDeviceCode(
+    deviceCode: string,
+    tx?: Prisma.TransactionClient
+  ): Promise<AuthSession | null> {
+    const session = await (tx ?? this.prisma).authSession.findUnique({ where: { deviceCode } });
     return session ? this.mapSession(session) : null;
   }
 
-  async findSessionByUserCode(userCode: string): Promise<AuthSession | null> {
-    const session = await this.prisma.authSession.findUnique({ where: { userCode } });
+  async findSessionByUserCode(
+    userCode: string,
+    tx?: Prisma.TransactionClient
+  ): Promise<AuthSession | null> {
+    const session = await (tx ?? this.prisma).authSession.findUnique({ where: { userCode } });
     return session ? this.mapSession(session) : null;
   }
 
@@ -2010,9 +2018,13 @@ export class PrismaAuthRepository implements AuthRepository {
     }
 
     const client = tx || this.prisma;
+    const data: Prisma.AuthSessionUpdateInput = { status };
+    if (userId !== undefined) data.userId = userId;
+    if (status === 'APPROVED') data.approvedAt = new Date();
+    if (status === 'CONSUMED') data.consumedAt = new Date();
     await client.authSession.update({
       where: { id },
-      data: { status, userId: userId || null },
+      data,
     });
   }
 
@@ -2027,6 +2039,8 @@ export class PrismaAuthRepository implements AuthRepository {
     if (userId !== undefined) {
       data.userId = userId;
     }
+    if (toStatus === 'APPROVED') data.approvedAt = new Date();
+    if (toStatus === 'CONSUMED') data.consumedAt = new Date();
     const client = tx || this.prisma;
     const result = await client.authSession.updateMany({
       where: {
@@ -2038,33 +2052,19 @@ export class PrismaAuthRepository implements AuthRepository {
     return result.count === 1;
   }
 
-  async createApiToken(
-    input: CreateApiTokenInput,
+  async incrementSessionAttempts(
+    id: string,
+    kind: 'APPROVAL' | 'POLL',
+    maximum: number,
     tx?: Prisma.TransactionClient
-  ): Promise<ApiToken> {
+  ): Promise<boolean> {
     const client = tx || this.prisma;
-    const token = await client.apiToken.create({
-      data: {
-        token: input.token,
-        userId: input.userId,
-        name: input.name,
-        expiresAt: input.expiresAt,
-      },
+    const field = kind === 'APPROVAL' ? 'approvalAttempts' : 'pollAttempts';
+    const result = await client.authSession.updateMany({
+      where: { id, [field]: { lt: maximum } },
+      data: { [field]: { increment: 1 } },
     });
-    return this.mapToken(token);
-  }
-
-  async findApiToken(token: string): Promise<ApiToken | null> {
-    const row = await this.prisma.apiToken.findUnique({ where: { token } });
-    return row ? this.mapToken(row) : null;
-  }
-
-  async updateApiTokenLastUsed(id: string, tx?: Prisma.TransactionClient): Promise<void> {
-    const client = tx || this.prisma;
-    await client.apiToken.update({
-      where: { id },
-      data: { lastUsedAt: new Date() },
-    });
+    return result.count === 1;
   }
 
   async deleteExpiredSessions(tx?: Prisma.TransactionClient): Promise<number> {
@@ -2092,6 +2092,10 @@ export class PrismaAuthRepository implements AuthRepository {
     userCode: string;
     status: string; // Prisma returns string for enums unless typed
     userId: string | null;
+    approvalAttempts: number;
+    pollAttempts: number;
+    approvedAt: Date | null;
+    consumedAt: Date | null;
     expiresAt: Date;
     createdAt: Date;
     updatedAt: Date;
@@ -2106,29 +2110,13 @@ export class PrismaAuthRepository implements AuthRepository {
       userCode: row.userCode,
       status: status,
       userId: row.userId ?? undefined,
+      approvalAttempts: row.approvalAttempts,
+      pollAttempts: row.pollAttempts,
+      approvedAt: row.approvedAt,
+      consumedAt: row.consumedAt,
       expiresAt: row.expiresAt,
       createdAt: row.createdAt,
       updatedAt: row.updatedAt,
-    };
-  }
-
-  private mapToken(row: {
-    id: string;
-    token: string;
-    userId: string;
-    name: string;
-    lastUsedAt: Date | null;
-    expiresAt: Date;
-    createdAt: Date;
-  }): ApiToken {
-    return {
-      id: row.id,
-      token: row.token,
-      userId: row.userId,
-      name: row.name,
-      lastUsedAt: row.lastUsedAt,
-      expiresAt: row.expiresAt,
-      createdAt: row.createdAt,
     };
   }
 }
@@ -2374,36 +2362,57 @@ export class PrismaCredentialRepository implements CredentialRepository {
         subjectId: input.subjectId,
         name: input.name,
         digest: input.digest,
+        digestKeyId: input.digestKeyId,
         prefix: input.prefix,
-        scopes: input.scopes,
+        scopes: JSON.stringify(input.scopes),
         audience: input.audience,
+        targetType: input.targetType,
+        targetId: input.targetId,
         expiresAt: input.expiresAt,
         revokedAt: input.revokedAt,
+        revokedReason: input.revokedReason,
       },
     });
     return this.mapRow(row);
   }
 
-  async findById(id: string): Promise<Credential | null> {
-    const row = await this.prisma.credential.findUnique({ where: { id } });
+  async findById(id: string, tx?: Prisma.TransactionClient): Promise<Credential | null> {
+    const row = await (tx ?? this.prisma).credential.findUnique({ where: { id } });
     return row ? this.mapRow(row) : null;
   }
 
-  async findByDigest(digest: string): Promise<Credential | null> {
-    const row = await this.prisma.credential.findUnique({ where: { digest } });
+  async findByDigest(digest: string, tx?: Prisma.TransactionClient): Promise<Credential | null> {
+    const row = await (tx ?? this.prisma).credential.findUnique({ where: { digest } });
     return row ? this.mapRow(row) : null;
   }
 
-  async findBySubject(subjectId: string): Promise<Credential[]> {
-    const rows = await this.prisma.credential.findMany({ where: { subjectId } });
+  async findBySubject(subjectId: string, type?: CredentialType): Promise<Credential[]> {
+    const rows = await this.prisma.credential.findMany({ where: { subjectId, type } });
     return rows.map((r) => this.mapRow(r));
   }
 
-  async revoke(id: string, tx?: Prisma.TransactionClient): Promise<void> {
+  async findByTarget(targetType: string, targetId: string): Promise<Credential[]> {
+    const rows = await this.prisma.credential.findMany({ where: { targetType, targetId } });
+    return rows.map((row) => this.mapRow(row));
+  }
+
+  async updateDigest(
+    id: string,
+    digest: string,
+    digestKeyId: string,
+    tx?: Prisma.TransactionClient
+  ): Promise<void> {
+    await (tx ?? this.prisma).credential.update({
+      where: { id },
+      data: { digest, digestKeyId, version: randomUUID() },
+    });
+  }
+
+  async revoke(id: string, reason: string, tx?: Prisma.TransactionClient): Promise<void> {
     const client = tx || this.prisma;
     await client.credential.update({
       where: { id },
-      data: { revokedAt: new Date() },
+      data: { revokedAt: new Date(), revokedReason: reason, version: randomUUID() },
     });
   }
 
@@ -2415,19 +2424,48 @@ export class PrismaCredentialRepository implements CredentialRepository {
     });
   }
 
-  private mapRow(row: any): Credential {
+  private mapRow(row: {
+    id: string;
+    type: string;
+    subjectId: string;
+    name: string;
+    digest: string;
+    digestKeyId: string;
+    prefix: string;
+    scopes: string;
+    audience: string;
+    targetType: string;
+    targetId: string;
+    createdAt: Date;
+    expiresAt: Date | null;
+    revokedAt: Date | null;
+    revokedReason: string | null;
+    lastUsedAt: Date | null;
+    version: string;
+  }): Credential {
+    const scopes = JSON.parse(row.scopes) as unknown;
+    if (!Array.isArray(scopes) || !scopes.every((scope) => typeof scope === 'string')) {
+      throw new Error(`Credential ${row.id} has invalid scopes.`);
+    }
+    if (!['ACCOUNT', 'PROJECT', 'ENVIRONMENT', 'RESOURCE'].includes(row.targetType)) {
+      throw new Error(`Credential ${row.id} has invalid target type.`);
+    }
     return {
       id: row.id,
       type: row.type as CredentialType,
       subjectId: row.subjectId,
       name: row.name,
       digest: row.digest,
+      digestKeyId: row.digestKeyId,
       prefix: row.prefix,
-      scopes: row.scopes,
+      scopes,
       audience: row.audience,
+      targetType: row.targetType as Credential['targetType'],
+      targetId: row.targetId,
       createdAt: row.createdAt,
       expiresAt: row.expiresAt,
       revokedAt: row.revokedAt,
+      revokedReason: row.revokedReason,
       lastUsedAt: row.lastUsedAt,
       version: row.version,
     };

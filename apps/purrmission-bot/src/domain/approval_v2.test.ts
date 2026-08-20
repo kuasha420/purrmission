@@ -17,7 +17,6 @@ describe('Approval decisions and provisional authority fail closed', () => {
       id: 'res-1',
       name: 'Protected Resource',
       mode: 'ONE_OF_N',
-      apiKey: null,
     });
     const account = await repos.totp.create({
       ownerDiscordUserId: 'custody-owner',

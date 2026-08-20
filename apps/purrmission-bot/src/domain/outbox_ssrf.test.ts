@@ -184,7 +184,6 @@ describe('SSRF Protection, Idempotent Outbox, and Batch Secrets API', () => {
           id: 'res-1',
           name: 'resource-1',
           mode: 'ONE_OF_N',
-          apiKey: 'key',
         });
 
         await resourceService.setSecrets('res-1', largeSecrets, {
@@ -209,7 +208,6 @@ describe('SSRF Protection, Idempotent Outbox, and Batch Secrets API', () => {
           id: 'res-1',
           name: 'resource-1',
           mode: 'ONE_OF_N',
-          apiKey: 'key',
         });
 
         await resourceService.setSecrets('res-1', invalidSecrets, {
@@ -235,7 +233,6 @@ describe('SSRF Protection, Idempotent Outbox, and Batch Secrets API', () => {
           id: 'res-1',
           name: 'resource-1',
           mode: 'ONE_OF_N',
-          apiKey: 'key',
         });
 
         await resourceService.setSecrets('res-1', invalidSecrets, {

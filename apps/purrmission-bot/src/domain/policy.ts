@@ -298,6 +298,10 @@ function auditReadCapabilitiesForTarget(target: PolicyTarget): Capability[] {
   }
 }
 
+function isServicePrincipal(principal: Principal): boolean {
+  return principal.type === 'SERVICE';
+}
+
 export async function hasCapability(
   repositories: CapabilityRepositories,
   principal: Principal,
@@ -385,16 +389,19 @@ export async function hasCapability(
     return deny('INSUFFICIENT_SCOPES', 'Credential has no capability scopes.');
   }
 
-  // Service credentials currently carry capability names but no immutable target binding. A scope
-  // alone must not authorize an arbitrary caller-supplied object. #121 owns target-bound service
-  // credentials; until then only the service's exact own-subject audit target can proceed.
   if (
-    principal.type === 'SERVICE' &&
-    (target.type !== 'SUBJECT' || target.id !== authorizationSubjectId(principal))
+    isServicePrincipal(principal) &&
+    !principal.credentialTarget &&
+    capability === 'audit.export' &&
+    target.type === 'SUBJECT' &&
+    target.id === authorizationSubjectId(principal)
   ) {
+    return allow('SERVICE', 'Service may export its exact own-subject audit trail.');
+  }
+  if (isServicePrincipal(principal) && !principal.credentialTarget) {
     return deny(
       'TARGET_SCOPE_MISMATCH',
-      'Service credential is not bound to this exact authorization target.'
+      'Service credential has no immutable authorization target.'
     );
   }
 
@@ -462,7 +469,32 @@ export async function hasCapability(
     const env = await repositories.projects.findEnvironmentByResourceId(resourceId);
     if (env) {
       projectId = env.projectId;
+      resolvedEnvironment = env;
     }
+  }
+
+  if (isServicePrincipal(principal)) {
+    const binding = principal.credentialTarget;
+    if (!binding) {
+      return deny('TARGET_SCOPE_MISMATCH', 'Service credential target is missing.');
+    }
+    const bound =
+      (binding.type === 'ACCOUNT' &&
+        target.type === 'SUBJECT' &&
+        binding.id === target.id &&
+        binding.id === authorizationSubjectId(principal)) ||
+      (binding.type === 'PROJECT' && !!projectId && binding.id === projectId) ||
+      (binding.type === 'ENVIRONMENT' &&
+        !!resolvedEnvironment &&
+        binding.id === resolvedEnvironment.id) ||
+      (binding.type === 'RESOURCE' && !!resourceId && binding.id === resourceId);
+    if (!bound) {
+      return deny(
+        'TARGET_SCOPE_MISMATCH',
+        'Service credential is not bound to this exact authorization target.'
+      );
+    }
+    return allow('SERVICE', 'Target-bound service credential has the required exact scope.');
   }
 
   const userId =

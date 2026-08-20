@@ -383,7 +383,7 @@ async function handleRegisterResource(
   });
 
   try {
-    const { resource, guardian } = await context.services.resource.createResource(
+    const { resource, guardian, plaintextApiKey } = await context.services.resource.createResource(
       name,
       createDiscordPrincipal(userId)
     );
@@ -397,7 +397,7 @@ async function handleRegisterResource(
         `**Mode:** ${resource.mode}`,
         '',
         '⚠️ **API Key (save this - it will only be shown once):**',
-        `\`\`\`${resource.apiKey}\`\`\``,
+        `\`\`\`${plaintextApiKey}\`\`\``,
         '',
         `You have been added as the **OWNER** (Guardian ID: \`${guardian.id}\`).`,
         '',

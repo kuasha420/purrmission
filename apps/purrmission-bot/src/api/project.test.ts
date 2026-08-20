@@ -4,7 +4,7 @@ import { createHttpServer } from '../http/server.js';
 import { createServices } from '../domain/services.js';
 import { createInMemoryRepositories } from '../domain/repositories.mock.js';
 
-import { createHash } from 'node:crypto';
+import { computeKeyedDigestRecord } from '../domain/crypto.js';
 
 // Mock Discord Client (minimal)
 import { FastifyInstance } from 'fastify';
@@ -37,12 +37,21 @@ describe('Project API', () => {
     services = createServices({ repositories });
 
     // Setup Auth for test
-    const hashedToken = createHash('sha256').update(validToken).digest('hex');
-    await repositories.auth.createApiToken({
-      token: hashedToken,
-      userId: userId,
+    const digest = computeKeyedDigestRecord(validToken, 'PAWTHY_TOKEN');
+    await repositories.credentials.create({
+      type: 'PAWTHY_TOKEN',
+      subjectId: userId,
       name: 'Test Token',
+      digest: digest.digest,
+      digestKeyId: digest.keyId,
+      prefix: validToken.slice(0, 8),
+      scopes: ['project.view', 'environment.view', 'resource.view', 'request.create'],
+      audience: 'cli',
+      targetType: 'ACCOUNT',
+      targetId: userId,
       expiresAt: new Date(Date.now() + 3600000),
+      revokedAt: null,
+      revokedReason: null,
     });
 
     server = createHttpServer({
@@ -96,6 +105,41 @@ describe('Project API', () => {
     const body = JSON.parse(response.payload);
     assert.strictEqual(body.length, 1);
     assert.strictEqual(body[0].name, 'P1');
+  });
+
+  it('lists, rotates, and revokes Pawthy credentials without exposing digests', async () => {
+    const inventoryResponse = await server.inject({
+      method: 'GET',
+      url: '/api/auth/credentials',
+      headers: { Authorization: `Bearer ${validToken}` },
+    });
+    assert.strictEqual(inventoryResponse.statusCode, 200);
+    assert.strictEqual(inventoryResponse.headers['cache-control'], 'no-store');
+    const inventory = JSON.parse(inventoryResponse.payload);
+    assert.strictEqual(inventory.length, 1);
+    assert.strictEqual('digest' in inventory[0], false);
+
+    const rotateResponse = await server.inject({
+      method: 'POST',
+      url: `/api/auth/credentials/${inventory[0].id}/rotate`,
+      headers: { Authorization: `Bearer ${validToken}` },
+    });
+    assert.strictEqual(rotateResponse.statusCode, 201);
+    assert.strictEqual(rotateResponse.headers['cache-control'], 'no-store');
+    const rotated = JSON.parse(rotateResponse.payload);
+    assert.match(rotated.plaintext, /^paw_/);
+    assert.strictEqual('digest' in rotated.credential, false);
+
+    const revokeResponse = await server.inject({
+      method: 'DELETE',
+      url: `/api/auth/credentials/${rotated.credential.id}`,
+      headers: { Authorization: `Bearer ${rotated.plaintext}` },
+    });
+    assert.strictEqual(revokeResponse.statusCode, 204);
+    assert.strictEqual(
+      await services.auth.validateToken(rotated.plaintext, { audience: 'cli' }),
+      null
+    );
   });
 
   it('should create an environment', async () => {

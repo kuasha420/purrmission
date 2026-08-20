@@ -164,19 +164,20 @@ export function createHttpServer(deps: HttpServerDeps): FastifyInstance {
     const body = parseResult.data;
 
     // Verify API key
-    const resource = await services.resource.verifyApiKey(body.apiKey);
-    if (!resource) {
+    const authentication = await services.resource.verifyApiKey(body.apiKey);
+    if (!authentication) {
       logger.warn('Invalid API key', { resourceId: body.resourceId });
       return reply.status(401).send({
         error: 'Invalid API key',
       });
     }
+    const { resource, principal } = authentication;
 
     // Verify resourceId matches the API key's resource
     if (resource.id !== body.resourceId) {
       logger.warn('Resource ID mismatch', {
         providedResourceId: body.resourceId,
-        apiKeyResourceId: resource.id,
+        apiKeyResourceId: authentication.resource.id,
       });
       return reply.status(401).send({
         error: 'Resource ID does not match API key',
@@ -188,9 +189,10 @@ export function createHttpServer(deps: HttpServerDeps): FastifyInstance {
       resourceId: body.resourceId,
       context: body.context,
       expiresInMs: body.expiresInMs,
-      requesterId: resource.id,
-      requesterType: 'SERVICE',
-      authKind: 'API_KEY',
+      principal,
+      requesterId: principal.subjectId,
+      requesterType: principal.type,
+      authKind: principal.authKind,
       action: 'resource.view',
       targetVersion: resource.version,
       policyVersion: resource.version,
@@ -414,7 +416,11 @@ export function createHttpServer(deps: HttpServerDeps): FastifyInstance {
       throw new AccessDeniedError('Missing Bearer token');
     }
     const token = authHeader.substring(7);
-    const principal = await services.auth.validateToken(token, req.ip);
+    const principal = await services.auth.validateToken(token, {
+      clientIp: req.ip,
+      audience: 'cli',
+      allowedTypes: ['PAWTHY_TOKEN'],
+    });
     if (!principal) {
       throw new AccessDeniedError('Invalid token');
     }
@@ -438,6 +444,42 @@ export function createHttpServer(deps: HttpServerDeps): FastifyInstance {
       throw new ForbiddenError(decision.safeExplanation);
     }
     return principal;
+  };
+
+  const CredentialParamsSchema = z.object({ credentialId: z.string().uuid() }).strict();
+  const ResourceCredentialParamsSchema = z
+    .object({ id: z.string().uuid(), credentialId: z.string().uuid() })
+    .strict();
+  const MintCredentialSchema = z
+    .object({
+      name: z.string().trim().min(1).max(128),
+      expiresInSeconds: z.number().int().min(60).max(31_536_000).optional(),
+    })
+    .strict();
+  const ResourceServiceCapabilitySchema = z.enum([
+    'resource.view',
+    'secret.metadata.read',
+    'secret.value.read',
+    'secret.write',
+    'secret.delete',
+    'totp.metadata.read',
+    'totp.code.read',
+    'request.create',
+    'request.view-own',
+    'request.cancel-own',
+  ]);
+  const MintServiceCredentialSchema = z
+    .object({
+      serviceName: z.string().trim().min(1).max(128),
+      name: z.string().trim().min(1).max(128),
+      scopes: z.array(ResourceServiceCapabilitySchema).min(1).max(10),
+      expiresInSeconds: z.number().int().min(60).max(31_536_000).optional(),
+    })
+    .strict();
+  const withoutDigest = <T extends { digest: string }>(credential: T): Omit<T, 'digest'> => {
+    const safe: Partial<T> = { ...credential };
+    delete safe.digest;
+    return safe as Omit<T, 'digest'>;
   };
 
   // Configure Zod Validator
@@ -485,6 +527,145 @@ export function createHttpServer(deps: HttpServerDeps): FastifyInstance {
     });
     return reply.status(500).send({ error: 'internal_server_error' });
   });
+
+  server.get('/api/auth/credentials', { preHandler: [authenticate] }, async (req, rep) => {
+    const principal = extractPrincipal(req, req.user.id);
+    return rep
+      .header('Cache-Control', 'no-store')
+      .send(await services.auth.listOwnCredentials(principal));
+  });
+
+  server.post(
+    '/api/auth/credentials/:credentialId/rotate',
+    {
+      preHandler: [authenticate],
+      schema: { params: CredentialParamsSchema },
+    },
+    async (req, rep) => {
+      const { credentialId } = req.params as z.infer<typeof CredentialParamsSchema>;
+      const principal = extractPrincipal(req, req.user.id);
+      const rotated = await services.auth.rotateOwnCredential(principal, credentialId);
+      return rep.header('Cache-Control', 'no-store').status(201).send(rotated);
+    }
+  );
+
+  server.delete(
+    '/api/auth/credentials/:credentialId',
+    {
+      preHandler: [authenticate],
+      schema: { params: CredentialParamsSchema },
+    },
+    async (req, rep) => {
+      const { credentialId } = req.params as z.infer<typeof CredentialParamsSchema>;
+      const principal = extractPrincipal(req, req.user.id);
+      await services.auth.revokeOwnCredential(principal, credentialId);
+      return rep.status(204).send();
+    }
+  );
+
+  server.get(
+    '/api/resources/:id/credentials',
+    {
+      preHandler: [authenticate],
+      schema: { params: ResourceParamsSchema },
+    },
+    async (req, rep) => {
+      const { id } = req.params as z.infer<typeof ResourceParamsSchema>;
+      const principal = extractPrincipal(req, req.user.id);
+      const credentials = await services.resource.listApiKeys(id, principal);
+      return rep
+        .header('Cache-Control', 'no-store')
+        .send(credentials.map((credential) => withoutDigest(credential)));
+    }
+  );
+
+  server.post(
+    '/api/resources/:id/credentials',
+    {
+      preHandler: [authenticate],
+      schema: { params: ResourceParamsSchema, body: MintCredentialSchema },
+    },
+    async (req, rep) => {
+      const { id } = req.params as z.infer<typeof ResourceParamsSchema>;
+      const body = req.body as z.infer<typeof MintCredentialSchema>;
+      const principal = extractPrincipal(req, req.user.id);
+      const created = await services.resource.mintApiKey(
+        id,
+        principal,
+        body.name,
+        body.expiresInSeconds ? body.expiresInSeconds * 1000 : undefined
+      );
+      return rep
+        .header('Cache-Control', 'no-store')
+        .status(201)
+        .send({
+          plaintext: created.plaintext,
+          credential: withoutDigest(created.credential),
+        });
+    }
+  );
+
+  server.post(
+    '/api/resources/:id/credentials/:credentialId/rotate',
+    {
+      preHandler: [authenticate],
+      schema: { params: ResourceCredentialParamsSchema },
+    },
+    async (req, rep) => {
+      const { id, credentialId } = req.params as z.infer<typeof ResourceCredentialParamsSchema>;
+      const principal = extractPrincipal(req, req.user.id);
+      const rotated = await services.resource.rotateApiKey(id, credentialId, principal);
+      return rep
+        .header('Cache-Control', 'no-store')
+        .status(201)
+        .send({
+          plaintext: rotated.plaintext,
+          credential: withoutDigest(rotated.credential),
+        });
+    }
+  );
+
+  server.post(
+    '/api/resources/:id/service-credentials',
+    {
+      preHandler: [authenticate],
+      schema: { params: ResourceParamsSchema, body: MintServiceCredentialSchema },
+    },
+    async (req, rep) => {
+      const { id } = req.params as z.infer<typeof ResourceParamsSchema>;
+      const body = req.body as z.infer<typeof MintServiceCredentialSchema>;
+      const principal = extractPrincipal(req, req.user.id);
+      const created = await services.resource.mintServiceCredential(
+        id,
+        principal,
+        body.serviceName,
+        body.name,
+        body.scopes,
+        body.expiresInSeconds ? body.expiresInSeconds * 1000 : undefined
+      );
+      return rep
+        .header('Cache-Control', 'no-store')
+        .status(201)
+        .send({
+          plaintext: created.plaintext,
+          credential: withoutDigest(created.credential),
+        });
+    }
+  );
+
+  server.delete(
+    '/api/resources/:id/credentials/:credentialId',
+    {
+      preHandler: [authenticate],
+      schema: { params: ResourceCredentialParamsSchema },
+    },
+    async (req, rep) => {
+      const { id, credentialId } = req.params as z.infer<typeof ResourceCredentialParamsSchema>;
+      const principal = extractPrincipal(req, req.user.id);
+      await services.resource.revokeApiKey(id, credentialId, principal);
+      return rep.status(204).send();
+    }
+  );
   server.post(
     '/api/projects',
     {
@@ -572,7 +753,7 @@ export function createHttpServer(deps: HttpServerDeps): FastifyInstance {
         },
         principal
       );
-      return rep.status(201).send(env);
+      return rep.header('Cache-Control', 'no-store').status(201).send(env);
     }
   );
 

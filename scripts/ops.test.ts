@@ -413,6 +413,12 @@ describe('Operations Scripts', () => {
                    '2026-07-01T00:00:00Z', '2026-07-01T00:00:00Z');
          INSERT INTO "Resource" ("id", "name", "mode", "apiKey", "totpAccountId")
            VALUES ('resource-1', 'Protected', 'ONE_OF_N', 'key', 'legacy-shared-totp');
+         INSERT INTO "ApiToken" ("id", "token", "userId", "name", "expiresAt")
+           VALUES ('legacy-token', 'plaintext-equivalent-hash', 'legacy-user', 'Legacy token',
+                   '2030-01-01T00:00:00Z');
+         INSERT INTO "AuthSession" ("id", "deviceCode", "userCode", "status", "expiresAt", "updatedAt")
+           VALUES ('legacy-session', 'legacy-device', 'LEGA-CY00', 'PENDING',
+                   '2030-01-01T00:00:00Z', '2026-07-01T00:00:00Z');
          INSERT INTO "Project" ("id", "name", "ownerId", "updatedAt")
            VALUES ('project-1', 'Project', 'canonical-owner', '2026-07-01T00:00:00Z');
          INSERT INTO "Environment" ("id", "name", "slug", "projectId", "updatedAt", "resourceId")
@@ -467,6 +473,21 @@ describe('Operations Scripts', () => {
         .trim()
         .split('\n');
       assert.deepEqual(custodyState, ['1', 'UNLINKED', '0', '0']);
+      const credentialCutover = execFileSync(
+        'sqlite3',
+        [
+          '-noheader',
+          databasePath,
+          `SELECT COUNT(*) FROM pragma_table_info('Resource') WHERE "name" = 'apiKey';
+           SELECT COUNT(*) FROM "sqlite_master" WHERE "type" = 'table' AND "name" = 'ApiToken';
+           SELECT COUNT(*) FROM "AuthSession";
+           SELECT COUNT(*) FROM "Credential";`,
+        ],
+        { encoding: 'utf8' }
+      )
+        .trim()
+        .split('\n');
+      assert.deepEqual(credentialCutover, ['0', '0', '0', '0']);
     });
 
     it('resumes safely after interruption leaves the complete pre-migration stage', async () => {

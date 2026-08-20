@@ -1,6 +1,11 @@
 import { test, describe, beforeEach } from 'node:test';
 import assert from 'node:assert';
-import { KeyManager, computeKeyedDigest, verifyKeyedDigest } from './crypto.js';
+import {
+  KeyManager,
+  computeKeyedDigest,
+  computeKeyedDigestRecord,
+  verifyKeyedDigest,
+} from './crypto.js';
 import { createInMemoryRepositories } from './repositories.mock.js';
 import { createServices } from './services.js';
 import { AuthService, InvalidGrantError, SlowDownError } from './auth.js';
@@ -12,6 +17,8 @@ describe('Credential Lifecycle Hardening', () => {
   beforeEach(() => {
     // Reset process.env for clean isolation
     delete process.env.CREDENTIAL_HMAC_KEYS;
+    delete process.env.CREDENTIAL_HMAC_KEYS_JSON;
+    delete process.env.CREDENTIAL_HMAC_ACTIVE_KEY_ID;
   });
 
   describe('Cryptographic Purpose Separation and Rotation', () => {
@@ -46,6 +53,40 @@ describe('Credential Lifecycle Hardening', () => {
       // Should fail for invalid/unknown keys
       assert.ok(!verifyKeyedDigest(plaintext, 'wrong-digest', purpose));
     });
+
+    test('rekeys a credential after successful validation with a historical stable key ID', async () => {
+      const plaintext = 'paw_historical_token';
+      process.env.CREDENTIAL_HMAC_KEYS_JSON = JSON.stringify({
+        old: 'o'.repeat(32),
+      });
+      process.env.CREDENTIAL_HMAC_ACTIVE_KEY_ID = 'old';
+      const oldDigest = computeKeyedDigestRecord(plaintext, 'PAWTHY_TOKEN');
+      const repos = createInMemoryRepositories();
+      const credential = await repos.credentials.create({
+        type: 'PAWTHY_TOKEN',
+        subjectId: 'user-rotation',
+        name: 'Historical',
+        digest: oldDigest.digest,
+        digestKeyId: oldDigest.keyId,
+        prefix: 'paw_historic',
+        scopes: ['project.view'],
+        audience: 'cli',
+        targetType: 'ACCOUNT',
+        targetId: 'user-rotation',
+        expiresAt: null,
+        revokedAt: null,
+        revokedReason: null,
+      });
+
+      process.env.CREDENTIAL_HMAC_KEYS_JSON = JSON.stringify({
+        current: 'n'.repeat(32),
+        old: 'o'.repeat(32),
+      });
+      process.env.CREDENTIAL_HMAC_ACTIVE_KEY_ID = 'current';
+      const services = createServices({ repositories: repos });
+      assert.ok(await services.auth.validateToken(plaintext));
+      assert.strictEqual((await repos.credentials.findById(credential.id))?.digestKeyId, 'current');
+    });
   });
 
   describe('Resource API Key Dual-Read and Lifecycle', () => {
@@ -57,7 +98,6 @@ describe('Credential Lifecycle Hardening', () => {
       const resource = await repos.resources.create({
         name: 'Production Resource',
         mode: 'ONE_OF_N',
-        apiKey: 'legacy_plain_key',
         version: 'v1',
       });
 
@@ -77,23 +117,39 @@ describe('Credential Lifecycle Hardening', () => {
 
       const { plaintext, credential } = await services.resource.mintApiKey(
         resource.id,
-        ownerId,
+        { type: 'DISCORD_USER', id: `discord:${ownerId}`, subjectId: ownerId, authKind: 'DISCORD' },
         'Prod CLI Key'
       );
 
       assert.ok(plaintext.startsWith('pur_'));
       assert.strictEqual(credential.type, 'RESOURCE_API_KEY');
       assert.strictEqual(credential.subjectId, resource.id);
+      assert.strictEqual(credential.targetType, 'RESOURCE');
+      assert.strictEqual(credential.targetId, resource.id);
 
       // 3. Verify lookup works with the new hardened key
       const foundHardened = await services.resource.verifyApiKey(plaintext);
       assert.ok(foundHardened);
-      assert.strictEqual(foundHardened.id, resource.id);
+      assert.strictEqual(foundHardened.resource.id, resource.id);
+
+      const ownerPrincipal = {
+        type: 'DISCORD_USER' as const,
+        id: `discord:${ownerId}`,
+        subjectId: ownerId,
+        authKind: 'DISCORD' as const,
+      };
+      const rotated = await services.resource.rotateApiKey(
+        resource.id,
+        credential.id,
+        ownerPrincipal
+      );
+      assert.strictEqual(await services.resource.verifyApiKey(plaintext), null);
+      assert.ok(await services.resource.verifyApiKey(rotated.plaintext));
 
       // 4. Revocation should prevent validation
-      await services.resource.revokeApiKey(resource.id, credential.id, ownerId);
+      await services.resource.revokeApiKey(resource.id, rotated.credential.id, ownerPrincipal);
 
-      const foundAfterRevocation = await services.resource.verifyApiKey(plaintext);
+      const foundAfterRevocation = await services.resource.verifyApiKey(rotated.plaintext);
       assert.strictEqual(foundAfterRevocation, null);
     });
   });
@@ -159,11 +215,27 @@ describe('Credential Lifecycle Hardening', () => {
         repos.transaction
       );
 
-      // Mint service credential
-      const { plaintext, credential } = await authService.mintServiceCredential(
+      const resourceOwner = 'resource-owner';
+      const resource = await repos.resources.create({ name: 'Service target', mode: 'ONE_OF_N' });
+      await repos.guardians.add({
+        id: 'service-target-owner',
+        resourceId: resource.id,
+        discordUserId: resourceOwner,
+        role: 'OWNER',
+      });
+      const { plaintext, credential } = await createServices({
+        repositories: repos,
+      }).resource.mintServiceCredential(
+        resource.id,
+        {
+          type: 'DISCORD_USER',
+          id: `discord:${resourceOwner}`,
+          subjectId: resourceOwner,
+          authKind: 'DISCORD',
+        },
         'github-actions-ci',
         'CI Deployment Pipeline',
-        ['project.view', 'environment.view']
+        ['resource.view']
       );
 
       assert.ok(plaintext.startsWith('pur_svc_'));
@@ -174,32 +246,27 @@ describe('Credential Lifecycle Hardening', () => {
       assert.ok(principal);
       assert.strictEqual(principal.type, 'SERVICE');
       assert.strictEqual(principal.authKind, 'SERVICE');
-      assert.deepStrictEqual(principal.scopes, ['project.view', 'environment.view']);
-
-      // Setup context
-      const project = await repos.projects.createProject({
-        name: 'Service Project',
-        ownerId: 'some-user',
-      });
-      const env = await repos.projects.createEnvironment({
-        projectId: project.id,
-        name: 'Staging',
-        slug: 'staging',
+      assert.deepStrictEqual(principal.scopes, ['resource.view']);
+      assert.deepStrictEqual(principal.credentialTarget, {
+        type: 'RESOURCE',
+        id: resource.id,
       });
 
-      // Capability names are not object bindings. #121 must bind the credential to exact targets
-      // before a service principal may authorize either object.
-      const evalView = await hasCapability(repos, principal, 'environment.view', {
-        projectId: project.id,
-        environmentId: env.id,
+      const evalView = await hasCapability(repos, principal, 'resource.view', {
+        resourceId: 'not-the-target',
       });
       assert.strictEqual(evalView.allowed, false);
       assert.strictEqual(evalView.reasonCode, 'TARGET_SCOPE_MISMATCH');
 
+      const boundView = await hasCapability(repos, principal, 'resource.view', {
+        resourceId: resource.id,
+      });
+      assert.strictEqual(boundView.allowed, true);
+      assert.strictEqual(boundView.reasonCode, 'SERVICE');
+
       // Denied scope
-      const evalDelete = await hasCapability(repos, principal, 'environment.delete', {
-        projectId: project.id,
-        environmentId: env.id,
+      const evalDelete = await hasCapability(repos, principal, 'resource.delete', {
+        resourceId: resource.id,
       });
       assert.strictEqual(evalDelete.allowed, false);
       assert.strictEqual(evalDelete.reasonCode, 'INSUFFICIENT_SCOPES');

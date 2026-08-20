@@ -61,7 +61,6 @@ const resource: Resource = {
   id: RESOURCE_ID,
   name: 'Project Resource',
   mode: 'ONE_OF_N',
-  apiKey: null,
   totpAccountId: null,
   totpDelegationEnvelope: null,
   version: 'resource-v1',

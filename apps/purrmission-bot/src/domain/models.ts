@@ -53,12 +53,6 @@ export interface Resource {
   /** Approval mode determining how many guardians need to approve */
   mode: ApprovalMode;
 
-  /**
-   * API key for authenticating external requests.
-   * TODO: In production, this should be hashed. For MVP, stored as plaintext.
-   */
-  apiKey?: string | null;
-
   /** Optional linked TOTP account ID (one-to-one) */
   totpAccountId?: string | null;
 
@@ -512,26 +506,26 @@ export interface AuthSession {
   userCode: string;
   status: AuthSessionStatus;
   userId?: string;
+  approvalAttempts: number;
+  pollAttempts: number;
+  approvedAt: Date | null;
+  consumedAt: Date | null;
   expiresAt: Date;
   createdAt: Date;
   updatedAt: Date;
 }
 
-/**
- * Long-lived API token for CLI access.
- */
-export interface ApiToken {
-  id: string;
-  token: string; // Hashed at rest
-  userId: string;
-  name: string;
-  lastUsedAt: Date | null;
-  expiresAt: Date;
-  createdAt: Date;
-}
-
-export type CreateAuthSessionInput = Omit<AuthSession, 'id' | 'createdAt' | 'updatedAt' | 'userId'>;
-export type CreateApiTokenInput = Omit<ApiToken, 'id' | 'createdAt' | 'lastUsedAt'>;
+export type CreateAuthSessionInput = Omit<
+  AuthSession,
+  | 'id'
+  | 'createdAt'
+  | 'updatedAt'
+  | 'userId'
+  | 'approvalAttempts'
+  | 'pollAttempts'
+  | 'approvedAt'
+  | 'consumedAt'
+>;
 
 // ----------------------------------------------------
 // Project & Environment
@@ -622,9 +616,16 @@ export interface Principal {
   expiresAt?: Date | null;
   createdAt?: Date;
   lastUsedAt?: Date | null;
+  /** Exact object boundary carried by a scoped service credential. */
+  credentialTarget?: CredentialTarget;
 }
 
 export type CredentialType = 'RESOURCE_API_KEY' | 'PAWTHY_TOKEN' | 'SERVICE_CREDENTIAL';
+export type CredentialTargetType = 'ACCOUNT' | 'PROJECT' | 'ENVIRONMENT' | 'RESOURCE';
+export interface CredentialTarget {
+  type: CredentialTargetType;
+  id: string;
+}
 
 export interface Credential {
   id: string;
@@ -632,12 +633,16 @@ export interface Credential {
   subjectId: string;
   name: string;
   digest: string;
+  digestKeyId: string;
   prefix: string;
-  scopes: string; // Comma-separated or JSON list
+  scopes: string[];
   audience: string;
+  targetType: CredentialTargetType;
+  targetId: string;
   createdAt: Date;
   expiresAt: Date | null;
   revokedAt: Date | null;
+  revokedReason: string | null;
   lastUsedAt: Date | null;
   version: string;
 }

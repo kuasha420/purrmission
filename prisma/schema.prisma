@@ -28,7 +28,6 @@ model Resource {
   id        String       @id @default(uuid())
   name      String
   mode      ResourceMode @default(ONE_OF_N)
-  apiKey    String?
   createdAt DateTime     @default(now())
 
   // Optional linked 2FA account (one-to-one)
@@ -45,8 +44,6 @@ model Resource {
 
   // Backlink from Environment (one-to-one)
   environment Environment?
-
-  @@index([apiKey])
 }
 
 /// A text field attached to a resource (e.g., password, API key).
@@ -233,15 +230,15 @@ model AuditLog {
 }
 
 model AuditCheckpoint {
-  id             String   @id
-  previousDigest String?
-  eventDigest    String
-  checkpointHash String
-  integrityKeyId String
-  eventCount     Int
-  throughId      String
+  id               String   @id
+  previousDigest   String?
+  eventDigest      String
+  checkpointHash   String
+  integrityKeyId   String
+  eventCount       Int
+  throughId        String
   throughCreatedAt DateTime
-  createdAt      DateTime
+  createdAt        DateTime
 
   @@index([createdAt])
   @@index([throughCreatedAt])
@@ -280,31 +277,21 @@ enum AuthSessionStatus {
 }
 
 model AuthSession {
-  id         String            @id @default(uuid())
-  deviceCode String            @unique
-  userCode   String            @unique
-  status     AuthSessionStatus // PENDING, APPROVED, EXPIRED, DENIED
-  userId     String? // Linked Discord User ID
-  expiresAt  DateTime
-  createdAt  DateTime          @default(now())
-  updatedAt  DateTime          @updatedAt
+  id               String            @id @default(uuid())
+  deviceCode       String            @unique
+  userCode         String            @unique
+  status           AuthSessionStatus // PENDING, APPROVED, EXPIRED, DENIED, CONSUMED
+  userId           String? // Linked Discord User ID; retained after consumption
+  approvalAttempts Int               @default(0)
+  pollAttempts     Int               @default(0)
+  approvedAt       DateTime?
+  consumedAt       DateTime?
+  expiresAt        DateTime
+  createdAt        DateTime          @default(now())
+  updatedAt        DateTime          @updatedAt
 
   @@index([userId])
   @@index([expiresAt])
-}
-
-model ApiToken {
-  id         String    @id @default(uuid())
-  token      String    @unique // Hashed at rest
-  userId     String // Discord User ID
-  name       String // Device/Session name
-  lastUsedAt DateTime?
-  expiresAt  DateTime // Mandatory expiry
-  createdAt  DateTime  @default(now())
-
-  @@index([userId])
-  @@index([expiresAt])
-  @@index([lastUsedAt])
 }
 
 model Project {
@@ -367,21 +354,27 @@ enum CredentialType {
 }
 
 model Credential {
-  id         String         @id @default(uuid())
-  type       CredentialType
-  subjectId  String
-  name       String
-  digest     String         @unique
-  prefix     String
-  scopes     String
-  audience   String
-  createdAt  DateTime       @default(now())
-  expiresAt  DateTime?
-  revokedAt  DateTime?
-  lastUsedAt DateTime?
-  version    String         @default(uuid())
+  id            String         @id @default(uuid())
+  type          CredentialType
+  subjectId     String
+  name          String
+  digest        String         @unique
+  digestKeyId   String
+  prefix        String
+  scopes        String // Canonical JSON string array
+  audience      String
+  targetType    String
+  targetId      String
+  createdAt     DateTime       @default(now())
+  expiresAt     DateTime?
+  revokedAt     DateTime?
+  revokedReason String?
+  lastUsedAt    DateTime?
+  version       String         @default(uuid())
 
-  @@index([subjectId])
+  @@index([subjectId, type])
+  @@index([targetType, targetId])
+  @@index([revokedAt])
   @@index([digest])
 }
 

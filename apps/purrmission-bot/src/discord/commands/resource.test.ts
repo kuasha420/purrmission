@@ -197,7 +197,6 @@ describe('handleResourceAutocomplete', () => {
       id: resourceId,
       name: 'Protected Resource',
       mode: 'ONE_OF_N',
-      apiKey: 'test-key',
     });
     await repositories.guardians.add({
       id: 'guardian-row',

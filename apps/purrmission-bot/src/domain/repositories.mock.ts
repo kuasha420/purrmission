@@ -15,8 +15,6 @@ import type {
   CreateAuditLogInput,
   AuthSession,
   AuthSessionStatus,
-  ApiToken,
-  CreateApiTokenInput,
   Project,
   Environment,
   CreateProjectInput,
@@ -79,15 +77,6 @@ export class InMemoryResourceRepository implements ResourceRepository {
 
   async findById(id: string): Promise<Resource | null> {
     return this.resources.get(id) ?? null;
-  }
-
-  async findByApiKey(apiKey: string): Promise<Resource | null> {
-    for (const resource of this.resources.values()) {
-      if (resource.apiKey === apiKey) {
-        return resource;
-      }
-    }
-    return null;
   }
 
   async update(
@@ -869,7 +858,6 @@ export class InMemoryOutboxRepository implements OutboxRepository {
  */
 export class InMemoryAuthRepository implements AuthRepository {
   private sessions: Map<string, AuthSession> = new Map();
-  private tokens: Map<string, ApiToken> = new Map();
 
   async createSession(input: {
     deviceCode: string;
@@ -881,6 +869,10 @@ export class InMemoryAuthRepository implements AuthRepository {
       deviceCode: input.deviceCode,
       userCode: input.userCode,
       status: 'PENDING',
+      approvalAttempts: 0,
+      pollAttempts: 0,
+      approvedAt: null,
+      consumedAt: null,
       expiresAt: input.expiresAt,
       createdAt: new Date(),
       updatedAt: new Date(),
@@ -907,11 +899,7 @@ export class InMemoryAuthRepository implements AuthRepository {
     return null;
   }
 
-  async updateSessionStatus(
-    id: string,
-    status: 'APPROVED' | 'DENIED' | 'EXPIRED',
-    userId?: string
-  ): Promise<void> {
+  async updateSessionStatus(id: string, status: AuthSessionStatus, userId?: string): Promise<void> {
     const session = this.sessions.get(id);
     if (session) {
       session.status = status;
@@ -921,6 +909,8 @@ export class InMemoryAuthRepository implements AuthRepository {
       if (userId) {
         session.userId = userId;
       }
+      if (status === 'APPROVED') session.approvedAt = new Date();
+      if (status === 'CONSUMED') session.consumedAt = new Date();
       session.updatedAt = new Date();
     }
   }
@@ -939,38 +929,24 @@ export class InMemoryAuthRepository implements AuthRepository {
     if (userId !== undefined) {
       session.userId = userId;
     }
+    if (toStatus === 'APPROVED') session.approvedAt = new Date();
+    if (toStatus === 'CONSUMED') session.consumedAt = new Date();
     session.updatedAt = new Date();
     return true;
   }
 
-  async createApiToken(input: CreateApiTokenInput): Promise<ApiToken> {
-    const token: ApiToken = {
-      id: crypto.randomUUID(),
-      token: input.token,
-      userId: input.userId,
-      name: input.name,
-      expiresAt: input.expiresAt,
-      lastUsedAt: null,
-      createdAt: new Date(),
-    };
-    this.tokens.set(token.id, token);
-    return token;
-  }
-
-  async findApiToken(token: string): Promise<ApiToken | null> {
-    for (const t of this.tokens.values()) {
-      if (t.token === token) {
-        return t;
-      }
-    }
-    return null;
-  }
-
-  async updateApiTokenLastUsed(id: string): Promise<void> {
-    const token = this.tokens.get(id);
-    if (token) {
-      token.lastUsedAt = new Date();
-    }
+  async incrementSessionAttempts(
+    id: string,
+    kind: 'APPROVAL' | 'POLL',
+    maximum: number
+  ): Promise<boolean> {
+    const session = this.sessions.get(id);
+    if (!session) return false;
+    const field = kind === 'APPROVAL' ? 'approvalAttempts' : 'pollAttempts';
+    if (session[field] >= maximum) return false;
+    session[field] += 1;
+    session.updatedAt = new Date();
+    return true;
   }
 
   async deleteExpiredSessions(): Promise<number> {
@@ -1118,12 +1094,16 @@ export class InMemoryCredentialRepository implements CredentialRepository {
       subjectId: input.subjectId,
       name: input.name,
       digest: input.digest,
+      digestKeyId: input.digestKeyId,
       prefix: input.prefix,
       scopes: input.scopes,
       audience: input.audience,
+      targetType: input.targetType,
+      targetId: input.targetId,
       createdAt: new Date(),
       expiresAt: input.expiresAt,
       revokedAt: input.revokedAt,
+      revokedReason: input.revokedReason,
       lastUsedAt: null,
       version: crypto.randomUUID(),
     };
@@ -1144,20 +1124,36 @@ export class InMemoryCredentialRepository implements CredentialRepository {
     return null;
   }
 
-  async findBySubject(subjectId: string): Promise<Credential[]> {
+  async findBySubject(subjectId: string, type?: Credential['type']): Promise<Credential[]> {
     const result: Credential[] = [];
     for (const cred of this.credentials.values()) {
-      if (cred.subjectId === subjectId) {
+      if (cred.subjectId === subjectId && (!type || cred.type === type)) {
         result.push(cred);
       }
     }
     return result;
   }
 
-  async revoke(id: string): Promise<void> {
+  async findByTarget(targetType: string, targetId: string): Promise<Credential[]> {
+    return Array.from(this.credentials.values()).filter(
+      (credential) => credential.targetType === targetType && credential.targetId === targetId
+    );
+  }
+
+  async updateDigest(id: string, digest: string, digestKeyId: string): Promise<void> {
+    const cred = this.credentials.get(id);
+    if (cred) {
+      cred.digest = digest;
+      cred.digestKeyId = digestKeyId;
+      cred.version = crypto.randomUUID();
+    }
+  }
+
+  async revoke(id: string, reason: string): Promise<void> {
     const cred = this.credentials.get(id);
     if (cred) {
       cred.revokedAt = new Date();
+      cred.revokedReason = reason;
       cred.version = crypto.randomUUID();
     }
   }

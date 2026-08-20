@@ -18,7 +18,6 @@ async function fixture() {
     id: 'resource-alpha',
     name: 'Alpha Production',
     mode: 'ONE_OF_N',
-    apiKey: null,
   });
   const environment = await repositories.projects.createEnvironment({
     projectId: project.id,
@@ -138,7 +137,6 @@ describe('repository-backed metadata persistence', () => {
       id: 'resource-hidden',
       name: 'Hidden Production',
       mode: 'ONE_OF_N',
-      apiKey: null,
     });
     await repositories.projects.createEnvironment({
       projectId: hiddenProject.id,

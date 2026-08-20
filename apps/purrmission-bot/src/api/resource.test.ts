@@ -8,7 +8,7 @@ import type { Services } from '../domain/services.js';
 import type { Repositories } from '../domain/repositories.js';
 import type { Client } from 'discord.js';
 import { createDiscordPrincipal } from '../domain/principal.js';
-import { computeKeyedDigest } from '../domain/crypto.js';
+import { computeKeyedDigestRecord } from '../domain/crypto.js';
 
 // Mock Discord Client (minimal)
 const mockDiscordClient = {
@@ -35,17 +35,35 @@ describe('Resource API', () => {
     services = createServices({ repositories });
 
     // Setup Auth
+    const digest = computeKeyedDigestRecord(validToken, 'PAWTHY_TOKEN');
     await repositories.credentials.create({
       type: 'PAWTHY_TOKEN',
       subjectId: userId,
       name: 'Test Token',
-      digest: computeKeyedDigest(validToken, 'PAWTHY_TOKEN'),
+      digest: digest.digest,
+      digestKeyId: digest.keyId,
       prefix: 'valid',
-      scopes:
-        'resource.view,secret.metadata.read,secret.value.read,secret.write,secret.delete,totp.code.read,totp.recovery.read,totp.link.manage,totp.account.manage',
-      audience: 'api',
+      scopes: [
+        'resource.view',
+        'resource.api-key.list',
+        'resource.api-key.mint',
+        'resource.api-key.rotate',
+        'resource.api-key.revoke',
+        'secret.metadata.read',
+        'secret.value.read',
+        'secret.write',
+        'secret.delete',
+        'totp.code.read',
+        'totp.recovery.read',
+        'totp.link.manage',
+        'totp.account.manage',
+      ],
+      audience: 'cli',
+      targetType: 'ACCOUNT',
+      targetId: userId,
       expiresAt: new Date(Date.now() + 3600000),
       revokedAt: null,
+      revokedReason: null,
     });
 
     // Setup Resource
@@ -54,7 +72,6 @@ describe('Resource API', () => {
       id: resourceId,
       name: 'Test Resource',
       mode: 'ONE_OF_N',
-      apiKey: 'api-key-1',
     });
 
     // Setup Guardian (Owner)
@@ -134,6 +151,101 @@ describe('Resource API', () => {
 
     const check = await services.resource.getField(resourceId, 'DEL_ME');
     assert.strictEqual(check, null);
+  });
+
+  it('manages Resource credentials without exposing stored digests', async () => {
+    const mintedResponse = await server.inject({
+      method: 'POST',
+      url: `/api/resources/${resourceId}/credentials`,
+      headers: { Authorization: `Bearer ${validToken}` },
+      payload: { name: 'Deployment key' },
+    });
+    assert.strictEqual(mintedResponse.statusCode, 201);
+    assert.strictEqual(mintedResponse.headers['cache-control'], 'no-store');
+    const minted = JSON.parse(mintedResponse.payload);
+    assert.match(minted.plaintext, /^pur_/);
+    assert.strictEqual('digest' in minted.credential, false);
+
+    const inventoryResponse = await server.inject({
+      method: 'GET',
+      url: `/api/resources/${resourceId}/credentials`,
+      headers: { Authorization: `Bearer ${validToken}` },
+    });
+    assert.strictEqual(inventoryResponse.statusCode, 200);
+    const inventory = JSON.parse(inventoryResponse.payload);
+    assert.ok(inventory.some(({ id }: { id: string }) => id === minted.credential.id));
+    assert.ok(inventory.every((item: Record<string, unknown>) => !('digest' in item)));
+
+    const serviceResponse = await server.inject({
+      method: 'POST',
+      url: `/api/resources/${resourceId}/service-credentials`,
+      headers: { Authorization: `Bearer ${validToken}` },
+      payload: {
+        serviceName: 'deployment-worker',
+        name: 'Deployment worker',
+        scopes: ['resource.view', 'request.create'],
+      },
+    });
+    assert.strictEqual(serviceResponse.statusCode, 201);
+    assert.strictEqual(serviceResponse.headers['cache-control'], 'no-store');
+    const serviceCredential = JSON.parse(serviceResponse.payload);
+    assert.strictEqual('digest' in serviceCredential.credential, false);
+    const servicePrincipal = await services.auth.validateToken(serviceCredential.plaintext, {
+      audience: 'service',
+    });
+    assert.deepStrictEqual(servicePrincipal?.credentialTarget, {
+      type: 'RESOURCE',
+      id: resourceId,
+    });
+    const genericServiceHttpUse = await server.inject({
+      method: 'GET',
+      url: `/api/resources/${resourceId}/credentials`,
+      headers: { Authorization: `Bearer ${serviceCredential.plaintext}` },
+    });
+    assert.strictEqual(genericServiceHttpUse.statusCode, 401);
+    const serviceRotateResponse = await server.inject({
+      method: 'POST',
+      url: `/api/resources/${resourceId}/credentials/${serviceCredential.credential.id}/rotate`,
+      headers: { Authorization: `Bearer ${validToken}` },
+    });
+    assert.strictEqual(serviceRotateResponse.statusCode, 201);
+    const rotatedService = JSON.parse(serviceRotateResponse.payload);
+    assert.match(rotatedService.plaintext, /^pur_svc_/);
+    assert.strictEqual(
+      await services.auth.validateToken(serviceCredential.plaintext, { audience: 'service' }),
+      null
+    );
+    assert.ok(await services.auth.validateToken(rotatedService.plaintext, { audience: 'service' }));
+    const serviceRevokeResponse = await server.inject({
+      method: 'DELETE',
+      url: `/api/resources/${resourceId}/credentials/${rotatedService.credential.id}`,
+      headers: { Authorization: `Bearer ${validToken}` },
+    });
+    assert.strictEqual(serviceRevokeResponse.statusCode, 204);
+    assert.strictEqual(
+      await services.auth.validateToken(rotatedService.plaintext, { audience: 'service' }),
+      null
+    );
+
+    const rotatedResponse = await server.inject({
+      method: 'POST',
+      url: `/api/resources/${resourceId}/credentials/${minted.credential.id}/rotate`,
+      headers: { Authorization: `Bearer ${validToken}` },
+    });
+    assert.strictEqual(rotatedResponse.statusCode, 201);
+    assert.strictEqual(rotatedResponse.headers['cache-control'], 'no-store');
+    const rotated = JSON.parse(rotatedResponse.payload);
+    assert.strictEqual('digest' in rotated.credential, false);
+    assert.strictEqual(await services.resource.verifyApiKey(minted.plaintext), null);
+    assert.ok(await services.resource.verifyApiKey(rotated.plaintext));
+
+    const revokeResponse = await server.inject({
+      method: 'DELETE',
+      url: `/api/resources/${resourceId}/credentials/${rotated.credential.id}`,
+      headers: { Authorization: `Bearer ${validToken}` },
+    });
+    assert.strictEqual(revokeResponse.statusCode, 204);
+    assert.strictEqual(await services.resource.verifyApiKey(rotated.plaintext), null);
   });
 
   it('creates and consumes custody-bound link consent', async () => {
@@ -222,7 +334,6 @@ describe('Resource API', () => {
       id: otherResourceId,
       name: 'Other Resource',
       mode: 'ONE_OF_N',
-      apiKey: 'api-key-2',
     });
 
     const listRes = await server.inject({
@@ -244,11 +355,13 @@ describe('Resource API', () => {
       discordUserId: guardianId,
       role: 'GUARDIAN',
     });
+    const guardianDigest = computeKeyedDigestRecord(guardianToken, 'PAWTHY_TOKEN');
     await repositories.credentials.create({
       type: 'PAWTHY_TOKEN',
       subjectId: guardianId,
       name: 'Guardian negative-path token',
-      digest: computeKeyedDigest(guardianToken, 'PAWTHY_TOKEN'),
+      digest: guardianDigest.digest,
+      digestKeyId: guardianDigest.keyId,
       prefix: guardianToken.slice(0, 8),
       scopes: [
         'secret.metadata.read',
@@ -256,10 +369,13 @@ describe('Resource API', () => {
         'secret.write',
         'secret.delete',
         'totp.link.manage',
-      ].join(','),
+      ],
       audience: 'cli',
+      targetType: 'ACCOUNT',
+      targetId: guardianId,
       expiresAt: new Date(Date.now() + 3600000),
       revokedAt: null,
+      revokedReason: null,
     });
     await services.resource.createField(
       resourceId,

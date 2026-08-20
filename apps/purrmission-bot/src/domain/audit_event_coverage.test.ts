@@ -45,7 +45,12 @@ describe('required current-surface audit coverage', () => {
       () =>
         new ProjectService(
           repositories.projects,
-          { createResource: async () => ({ resource: { id: 'resource-1' } }) },
+          {
+            createResource: async () => ({
+              resource: { id: 'resource-1' },
+              plaintextApiKey: 'one-time-key',
+            }),
+          },
           undefined as never,
           repositories.transaction
         ),

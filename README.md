@@ -92,6 +92,12 @@ codex "Show which instruction files are active for this repo."
                                          └──────────────────────┘
 ```
 
+Resource API keys and Pawthy tokens are displayed only once. Purrmission stores a
+purpose-separated keyed digest, stable credential metadata, exact target binding, audience, and
+scopes; it never stores the plaintext credential. Configure `CREDENTIAL_HMAC_KEYS_JSON` and
+`CREDENTIAL_HMAC_ACTIVE_KEY_ID` in production. Keep prior keys in the JSON key ring during
+rotation so a successful use can re-key the credential to the active key.
+
 ### Key Concepts
 
 | Concept         | Description                                          |
