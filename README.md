@@ -170,9 +170,9 @@ Purrmission exposes seven top-level Discord slash commands:
 
 ### `/auth`
 
-| Action            | Command                      |
-| ----------------- | ---------------------------- |
-| Approve CLI Login | `/auth login code:XXXX-XXXX` |
+| Action            | Command                                |
+| ----------------- | -------------------------------------- |
+| Approve CLI Login | `/auth login code:XXXX-XXXX-XXXX-XXXX` |
 
 ### `/project`
 
