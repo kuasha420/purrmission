@@ -1,6 +1,6 @@
 # Purrmission RBAC and Observability Knowledgebase
 
-- Status: **Prerequisite remediation active — Waves 1-2 Verified; Wave 3 active (dashboard readiness remains No-go)**
+- Status: **Prerequisite remediation active — Waves 1-3 Verified; Wave 4 ready (dashboard readiness remains No-go)**
 - Preparation issue: [#107](https://github.com/kuasha420/purrmission/issues/107) (complete)
 - Prerequisite epic: [#116](https://github.com/kuasha420/purrmission/issues/116) (open and active)
 - Execution graph:
@@ -11,8 +11,8 @@
 - Baseline audited revision: `e4269cea4d6f` (`master`, 2026-07-26)
 - Current remediation checkpoint: #117, #118, and #119 are Verified and closed. #119 completed
   through PR #147 at merge `b4139782c61021fa6ec8ec3d6a4b8a952602b8de`; clean-master build,
-  lint, full tests, and fresh/populated/interrupted migration rehearsals pass. #120 is verified and
-  closed; #121 is claimed and implementing the credential lifecycle.
+  lint, full tests, and fresh/populated/interrupted migration rehearsals pass. #120 and #121 are
+  verified and closed; #122 is the next Ready node.
 - Last progress update: 2026-08-21
 - Applies to: Discord commands, the Fastify API, Pawthy, and the future
   `apps/purrmission-web`
@@ -24,8 +24,9 @@
 | 1    | #117      | Verified and closed at `a0144d46`; common and representative migration gates pass        |
 | 2    | #118      | Verified and closed at `4420664f`; common and populated/interrupted migration gates pass |
 | 2    | #119      | Verified and closed at `b4139782`; exact metadata/version and migration gates pass       |
-| 3    | #120/#121 | #120 verified and closed; #121 claimed and active                                        |
-| 4-9  | #122-#130 | Blocked by the execution graph                                                           |
+| 3    | #120/#121 | Verified and closed via PRs #150 and #151                                                |
+| 4    | #122      | Ready; Approval Request V2 is the next implementation lane                               |
+| 5-9  | #123-#130 | Blocked by the execution graph                                                           |
 
 Sections 3-5 remain the point-in-time audit record for `e4269cea4d6f`; they are not silently
 rewritten as remediation lands. The ledger above and the execution graph are the live progress
