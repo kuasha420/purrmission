@@ -17,7 +17,7 @@ export class KeyManager {
         throw new Error('CREDENTIAL_HMAC_KEYS_JSON must be an object keyed by stable key ID.');
       }
       masterKeys = Object.entries(parsed).map(([id, secret]) => {
-        if (!id || typeof secret !== 'string' || secret.length < 32) {
+        if (!id || typeof secret !== 'string' || Buffer.byteLength(secret, 'utf8') < 32) {
           throw new Error(
             'Credential HMAC key IDs must be non-empty and secrets at least 32 bytes.'
           );

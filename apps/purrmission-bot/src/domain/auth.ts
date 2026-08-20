@@ -380,6 +380,7 @@ export class AuthService {
     if (
       credential &&
       credential.type === matchedPurpose &&
+      credential.digestKeyId === matchedKeyId &&
       !credential.revokedAt &&
       (!credential.expiresAt || credential.expiresAt > new Date()) &&
       (!options.audience || credential.audience === options.audience) &&

@@ -54,6 +54,16 @@ describe('Credential Lifecycle Hardening', () => {
       assert.ok(!verifyKeyedDigest(plaintext, 'wrong-digest', purpose));
     });
 
+    test('should enforce the configured key minimum in bytes', () => {
+      process.env.CREDENTIAL_HMAC_KEYS_JSON = JSON.stringify({ short: 'é'.repeat(15) });
+      process.env.CREDENTIAL_HMAC_ACTIVE_KEY_ID = 'short';
+      assert.throws(() => KeyManager.getActiveKey('PAWTHY_TOKEN'), /at least 32 bytes/);
+
+      process.env.CREDENTIAL_HMAC_KEYS_JSON = JSON.stringify({ exact: 'é'.repeat(16) });
+      process.env.CREDENTIAL_HMAC_ACTIVE_KEY_ID = 'exact';
+      assert.strictEqual(KeyManager.getActiveKey('PAWTHY_TOKEN').length, 64);
+    });
+
     test('rekeys a credential after successful validation with a historical stable key ID', async () => {
       const plaintext = 'paw_historical_token';
       process.env.CREDENTIAL_HMAC_KEYS_JSON = JSON.stringify({
@@ -86,6 +96,32 @@ describe('Credential Lifecycle Hardening', () => {
       const services = createServices({ repositories: repos });
       assert.ok(await services.auth.validateToken(plaintext));
       assert.strictEqual((await repos.credentials.findById(credential.id))?.digestKeyId, 'current');
+    });
+
+    test('rejects a Pawthy credential whose stored key ID contradicts its digest', async () => {
+      process.env.CREDENTIAL_HMAC_KEYS_JSON = JSON.stringify({ current: 'k'.repeat(32) });
+      process.env.CREDENTIAL_HMAC_ACTIVE_KEY_ID = 'current';
+      const plaintext = 'paw_corrupt_key_metadata';
+      const digest = computeKeyedDigestRecord(plaintext, 'PAWTHY_TOKEN');
+      const repos = createInMemoryRepositories();
+      await repos.credentials.create({
+        type: 'PAWTHY_TOKEN',
+        subjectId: 'corrupt-user',
+        name: 'Corrupt metadata',
+        digest: digest.digest,
+        digestKeyId: 'different-key',
+        prefix: 'paw_corrupt',
+        scopes: ['project.view'],
+        audience: 'cli',
+        targetType: 'ACCOUNT',
+        targetId: 'corrupt-user',
+        expiresAt: null,
+        revokedAt: null,
+        revokedReason: null,
+      });
+
+      const services = createServices({ repositories: repos });
+      assert.strictEqual(await services.auth.validateToken(plaintext), null);
     });
   });
 
@@ -190,6 +226,37 @@ describe('Credential Lifecycle Hardening', () => {
 
       assert.strictEqual(await services.resource.verifyApiKey(valid.plaintext, caller), null);
       assert.ok(await services.resource.verifyApiKey(valid.plaintext, '198.51.100.122'));
+    });
+
+    test('rejects a Resource credential whose stored key ID contradicts its digest', async () => {
+      process.env.CREDENTIAL_HMAC_KEYS_JSON = JSON.stringify({ current: 'r'.repeat(32) });
+      process.env.CREDENTIAL_HMAC_ACTIVE_KEY_ID = 'current';
+      const plaintext = 'pur_corrupt_key_metadata';
+      const digest = computeKeyedDigestRecord(plaintext, 'RESOURCE_API_KEY');
+      const repos = createInMemoryRepositories();
+      const resource = await repos.resources.create({
+        name: 'Corrupt Resource Credential',
+        mode: 'ONE_OF_N',
+        version: 'v1',
+      });
+      await repos.credentials.create({
+        type: 'RESOURCE_API_KEY',
+        subjectId: resource.id,
+        name: 'Corrupt metadata',
+        digest: digest.digest,
+        digestKeyId: 'different-key',
+        prefix: 'pur_corrupt',
+        scopes: ['request.create'],
+        audience: 'api',
+        targetType: 'RESOURCE',
+        targetId: resource.id,
+        expiresAt: null,
+        revokedAt: null,
+        revokedReason: null,
+      });
+
+      const services = createServices({ repositories: repos });
+      assert.strictEqual(await services.resource.verifyApiKey(plaintext), null);
     });
   });
 

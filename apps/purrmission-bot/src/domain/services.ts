@@ -1151,6 +1151,7 @@ export class ResourceService {
     if (
       credential &&
       credential.type === 'RESOURCE_API_KEY' &&
+      credential.digestKeyId === matchedKeyId &&
       credential.audience === 'api' &&
       credential.targetType === 'RESOURCE' &&
       credential.targetId === credential.subjectId &&
