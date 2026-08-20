@@ -3,6 +3,8 @@
 ## Prerequisites
 
 - Node.js v24.10.1+
+- NVM installed for the deployment account at `$HOME/.nvm` (the workflow installs and selects the
+  artifact-pinned `.nvmrc` runtime before backup verification)
 - PNPM (v9+) via Corepack
 - PM2 installed globally on the server
 
@@ -15,11 +17,16 @@
      - `DISCORD_BOT_TOKEN` - Your Discord bot token
      - `DISCORD_CLIENT_ID` - Your Discord application client ID
      - `DISCORD_GUILD_ID` - Guild ID for development (commands deploy here)
-     - `DATABASE_URL` - Database connection URL (e.g., `file:./data/prod.db`)
+     - `DATABASE_URL` - Database connection URL (e.g., `file:../data/prod.db`, resolved from `prisma/`)
      - `ENCRYPTION_KEY` - **Required** - 32-byte hex string (64 hexadecimal characters) for encrypting TOTP secrets and resource fields at rest
+     - `BACKUP_OFFSITE_DIR` - absolute path to an access-controlled filesystem mounted separately from the deployment disk
+     - `BACKUP_ACTIVE_KEY_ID` and `BACKUP_ENCRYPTION_KEYS_JSON` - dedicated active backup key and rotatable historical key ring; never reuse `ENCRYPTION_KEY` or audit/outbox integrity keys
+     - `BACKUP_RETENTION_DAYS`, `BACKUP_MIN_RECOVERY_COPIES`, and `BACKUP_MAX_DATABASE_BYTES` - explicit recovery retention and package bounds
    - Generate an encryption key with: `node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"`
    - _Note_: If `ecosystem.config.cjs` sets `cwd: "./"`, the `.env` must be in the root.
-   - **Security**: Keep your `ENCRYPTION_KEY` secure and backed up. Without it, encrypted data cannot be recovered.
+
+- **Security**: Keep your `ENCRYPTION_KEY` secure and backed up. Without it, encrypted data cannot be recovered.
+- Follow the [verified backup and restore runbook](docs/operations/verified-backup-restore.md) to provision the offsite mount, custody backup keys, and rehearse recovery before migration-heavy rollouts.
 
 ## Data Persistence
 
@@ -45,7 +52,7 @@ The following are **never deleted** during deployment:
 Store your SQLite database in the `data/` directory:
 
 ```env
-DATABASE_URL="file:./data/prod.db"
+DATABASE_URL="file:../data/prod.db"
 ```
 
 This provides a clear separation between code artifacts (which get flushed) and persistent state (which survives).
@@ -117,7 +124,7 @@ pnpm prod:ops:rotate-keys -- --from-key $ENCRYPTION_KEY_OLD --to-key $ENCRYPTION
 4. Restart the bot.
 
 > [!IMPORTANT]
-> **Database Backups**: The rotation script automatically creates a timestamped backup in `backups/` before performing any writes (unless in `--dry-run` mode).
+> **Verified offsite backup**: Before a non-dry rotation writes anything, the script creates an authenticated encrypted package in `BACKUP_OFFSITE_DIR`, downloads it, and proves an isolated restore. All backup environment prerequisites above must be configured. A dry run does not create a package. Follow the [verified backup and restore runbook](docs/operations/verified-backup-restore.md) to select and recover a package.
 
 ## Audit Logs
 
