@@ -20,6 +20,7 @@ const LIMITER_CATEGORIES = new Set([
   'approve-session',
   'token-poll',
   'credential-validation-failure-check',
+  'resource-credential-validation-failure-check',
   'get-2fa',
 ]);
 

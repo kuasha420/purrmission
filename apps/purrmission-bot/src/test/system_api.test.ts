@@ -213,8 +213,13 @@ describe('System API E2E Tests', () => {
 
     it('should return 401 when resourceId does not match API key resource', async () => {
       mockVerifyApiKey.fn = async () => ({
-        id: 'res-correct',
-        name: 'Correct Resource',
+        resource: { id: 'res-correct', name: 'Correct Resource', version: 'v1' },
+        principal: {
+          type: 'RESOURCE_API_KEY',
+          id: 'credential-1',
+          subjectId: 'res-correct',
+          authKind: 'API_KEY',
+        },
       });
 
       const response = await server.inject({
@@ -234,8 +239,17 @@ describe('System API E2E Tests', () => {
       const mockResource = {
         id: 'res-1',
         name: 'Test Resource',
+        version: 'v1',
       };
-      mockVerifyApiKey.fn = async () => mockResource;
+      mockVerifyApiKey.fn = async () => ({
+        resource: mockResource,
+        principal: {
+          type: 'RESOURCE_API_KEY',
+          id: 'credential-1',
+          subjectId: 'res-1',
+          authKind: 'API_KEY',
+        },
+      });
       mockCreateApprovalRequest.fn = async () => ({
         success: true,
         request: {

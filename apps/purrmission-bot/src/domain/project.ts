@@ -20,7 +20,7 @@ export class ProjectService {
         name: string,
         principal: Principal,
         tx?: Prisma.TransactionClient
-      ) => Promise<{ resource: { id: string } }>;
+      ) => Promise<{ resource: { id: string }; plaintextApiKey: string }>;
     },
     private readonly audit: AuditService,
     private readonly transaction: <T>(
@@ -96,7 +96,7 @@ export class ProjectService {
   async createEnvironment(
     input: CreateEnvironmentInput,
     principal: Principal
-  ): Promise<Environment> {
+  ): Promise<Environment & { resourceApiKey: string }> {
     // 1. Get Project to find owner
     const project = await this.getProject(input.projectId);
     if (!project) throw new ResourceNotFoundError('Project not found');
@@ -107,7 +107,11 @@ export class ProjectService {
     return this.runTransaction(async (tx) => {
       // 2. Create Resource for this environment inside the transaction
       const resourceName = `${project.name}:${input.name}`; // e.g., web-app:dev
-      const { resource } = await this.resourceService.createResource(resourceName, principal, tx);
+      const { resource, plaintextApiKey } = await this.resourceService.createResource(
+        resourceName,
+        principal,
+        tx
+      );
 
       // 3. Create Environment linked to Resource inside the transaction
       const environment = await this.projectRepo.createEnvironment(
@@ -141,7 +145,7 @@ export class ProjectService {
         },
         tx
       );
-      return environment;
+      return { ...environment, resourceApiKey: plaintextApiKey };
     });
   }
 

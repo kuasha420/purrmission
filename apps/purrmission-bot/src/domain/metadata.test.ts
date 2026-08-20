@@ -49,7 +49,6 @@ describe('Metadata Projections, Visibility Discovery and Version Rotations', () 
         id: 'res-id',
         name: 'database-creds',
         mode: 'ONE_OF_N',
-        apiKey: 'key',
       });
 
       await repos.resourceFields.create({
@@ -124,7 +123,6 @@ describe('Metadata Projections, Visibility Discovery and Version Rotations', () 
         id: 'res-id',
         name: 'database-creds',
         mode: 'ONE_OF_N',
-        apiKey: 'key',
       });
       const initialVersion = res.version;
       assert.ok(initialVersion);
@@ -159,7 +157,6 @@ describe('Metadata Projections, Visibility Discovery and Version Rotations', () 
         id: 'res-id',
         name: 'database-creds',
         mode: 'ONE_OF_N',
-        apiKey: 'key',
       });
       const v1 = res.version;
 
@@ -217,7 +214,6 @@ describe('Metadata Projections, Visibility Discovery and Version Rotations', () 
         id: 'res-id',
         name: 'resource-linked',
         mode: 'ONE_OF_N',
-        apiKey: 'key',
       });
       assert.ok(res.version);
 

@@ -19,9 +19,10 @@ export const authCommand = new SlashCommandBuilder()
       .addStringOption((option) =>
         option
           .setName('code')
-          .setDescription('The 9-character code from the CLI (e.g., ABCD-1234)')
+          .setDescription('The 19-character code from the CLI (e.g., ABCD-1234-EF56-7890)')
           .setRequired(true)
-          .setMaxLength(9)
+          .setMinLength(19)
+          .setMaxLength(19)
       )
   );
 

@@ -11,8 +11,8 @@
 - Baseline audited revision: `e4269cea4d6f` (`master`, 2026-07-26)
 - Current remediation checkpoint: #117, #118, and #119 are Verified and closed. #119 completed
   through PR #147 at merge `b4139782c61021fa6ec8ec3d6a4b8a952602b8de`; clean-master build,
-  lint, full tests, and fresh/populated/interrupted migration rehearsals pass. #120 is claimed and
-  implementing TOTP custody/consent; #121 is Ready and unassigned.
+  lint, full tests, and fresh/populated/interrupted migration rehearsals pass. #120 is verified and
+  closed; #121 is claimed and implementing the credential lifecycle.
 - Last progress update: 2026-08-21
 - Applies to: Discord commands, the Fastify API, Pawthy, and the future
   `apps/purrmission-web`
@@ -24,7 +24,7 @@
 | 1    | #117      | Verified and closed at `a0144d46`; common and representative migration gates pass        |
 | 2    | #118      | Verified and closed at `4420664f`; common and populated/interrupted migration gates pass |
 | 2    | #119      | Verified and closed at `b4139782`; exact metadata/version and migration gates pass       |
-| 3    | #120/#121 | #120 claimed and active; #121 Ready and unassigned                                       |
+| 3    | #120/#121 | #120 verified and closed; #121 claimed and active                                        |
 | 4-9  | #122-#130 | Blocked by the execution graph                                                           |
 
 Sections 3-5 remain the point-in-time audit record for `e4269cea4d6f`; they are not silently
@@ -359,21 +359,22 @@ storage and become ineffective only through lookup-time expiry.
 
 ### 4.6 Current credential lifecycle
 
-- CLI device flow uses a random UUID device code and an eight-hex-character user code (32 bits),
-  with a 30-minute lifetime and no HTTP or `/auth login` attempt throttling
-  (`domain/auth.ts:47-82`, `discord/commands/auth.ts:12-92`).
-- Device exchange marks the session consumed and then creates a token in separate operations.
-  Concurrent exchanges or a token-write failure can produce inconsistent state
-  (`domain/auth.ts:106-149`).
-- The repository clears the session's `userId` when changing it to `CONSUMED` because status
-  updates without a user ID write `null`, weakening forensic linkage
-  (`domain/repositories.ts:901-909`).
-- Pawthy bearer tokens are random `paw_` credentials hashed with SHA-256, bound to a Discord user
-  ID, and valid for 90 days. They have no scope, refresh, inventory API, or revocation API
-  (`domain/auth.ts:34-40,130-172`).
-- Resource API keys are stored and looked up as plaintext. They have no credential record, unique
-  constraint, expiry, rotation, or revocation lifecycle (`prisma/schema.prisma:27-46`,
-  `domain/repositories.ts:217-221`).
+- CLI device flow uses a 256-bit random device code and 64-bit human code with a ten-minute
+  lifetime, transport throttling, persisted approval/poll attempt ceilings, and conditional status
+  transitions.
+- Approval and exchange run inside the repository unit of work. Exactly one
+  `APPROVED -> CONSUMED` transition and Credential insert may commit, and the linked Discord user is
+  retained for attribution.
+- Pawthy, Resource, and service credentials are canonical `Credential` rows with stable IDs,
+  purpose-separated keyed HMAC digests and stable key IDs, JSON scopes, audiences, immutable exact
+  targets, expiry/revocation metadata, and last-use timestamps. Successful validation with a
+  historical key transparently re-keys the digest to the active key.
+- Resource/environment creation mints the initial Resource credential in the same transaction.
+  Plaintext is returned once with `Cache-Control: no-store`; inventories omit digests. Eligible
+  Owners and Pawthy subjects can list, rotate, and revoke credentials through audited use cases.
+- The credential migration deliberately invalidates legacy plaintext Resource keys, `ApiToken`
+  rows, provisional credentials, and pending device sessions rather than copying ambiguous or
+  plaintext authority into the canonical model.
 - There is no Discord web OAuth, cookie/session, CSRF, or web-origin implementation today. Current
   configuration has a Discord client ID but no client secret, callback URL, web origin, or web
   session settings (`config/env.ts:38-59`).

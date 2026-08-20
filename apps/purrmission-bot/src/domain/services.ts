@@ -42,7 +42,12 @@ import {
 } from './policy.js';
 import { createDiscordPrincipal, validatePrincipal } from './principal.js';
 import { generateTOTPCode } from './totp.js';
-import { computeKeyedDigest, deterministicUUID } from './crypto.js';
+import {
+  computeAllKeyedDigestCandidates,
+  computeKeyedDigestRecord,
+  deterministicUUID,
+  KeyManager,
+} from './crypto.js';
 import { DomainPorts } from './ports.js';
 import { resolveTargetVersions } from './target_versions.js';
 import { createRepositoryMetadataQueryService } from './metadata_persistence.js';
@@ -56,6 +61,7 @@ import {
   parseTOTPDelegationPolicy,
   validateTOTPLinkEnvelope,
 } from './totp_custody.js';
+import { rateLimiter } from '../infra/rateLimit.js';
 
 /**
  * Service dependencies.
@@ -824,7 +830,12 @@ export class ResourceService {
     name: string,
     principal: Principal,
     tx?: Prisma.TransactionClient
-  ): Promise<{ resource: Resource; guardian: Guardian }> {
+  ): Promise<{
+    resource: Resource;
+    guardian: Guardian;
+    plaintextApiKey: string;
+    credential: Credential;
+  }> {
     if (!tx) {
       return this.runTransaction((transaction) =>
         this.createResource(name, principal, transaction)
@@ -833,8 +844,8 @@ export class ResourceService {
     const { repositories } = this.deps;
     const ownerDiscordId = principal.subjectId;
 
-    // Generate a random API key
-    const apiKey = crypto.randomBytes(32).toString('hex');
+    const plaintextApiKey = 'pur_' + crypto.randomBytes(32).toString('base64url');
+    const digestRecord = computeKeyedDigestRecord(plaintextApiKey, 'RESOURCE_API_KEY');
 
     // Create the resource
     const resource = await repositories.resources.create(
@@ -842,7 +853,6 @@ export class ResourceService {
         id: crypto.randomUUID(),
         name,
         mode: 'ONE_OF_N',
-        apiKey,
       },
       tx
     );
@@ -854,6 +864,25 @@ export class ResourceService {
         resourceId: resource.id,
         discordUserId: ownerDiscordId,
         role: 'OWNER',
+      },
+      tx
+    );
+
+    const credential = await repositories.credentials.create(
+      {
+        type: 'RESOURCE_API_KEY',
+        subjectId: resource.id,
+        name: 'Initial resource API key',
+        digest: digestRecord.digest,
+        digestKeyId: digestRecord.keyId,
+        prefix: plaintextApiKey.substring(0, 12),
+        scopes: ['resource.view', 'request.create'],
+        audience: 'api',
+        targetType: 'RESOURCE',
+        targetId: resource.id,
+        expiresAt: null,
+        revokedAt: null,
+        revokedReason: null,
       },
       tx
     );
@@ -887,7 +916,7 @@ export class ResourceService {
       ownerId: ownerDiscordId,
     });
 
-    return { resource, guardian };
+    return { resource, guardian, plaintextApiKey, credential };
   }
 
   /**
@@ -1082,43 +1111,108 @@ export class ResourceService {
   /**
    * Verify an API key and return the resource.
    */
-  async verifyApiKey(apiKey: string): Promise<Resource | null> {
+  async verifyApiKey(
+    apiKey: string,
+    clientIp?: string
+  ): Promise<{ resource: Resource; principal: Principal } | null> {
     const { repositories } = this.deps;
+    const limiterKey = clientIp ? `resource-credential-validation-failure-check:${clientIp}` : null;
 
-    // 1. Try new digested credentials lookup
-    const digest = computeKeyedDigest(apiKey, 'RESOURCE_API_KEY');
-    const credential = await repositories.credentials.findByDigest(digest);
-
-    if (
-      credential &&
-      credential.type === 'RESOURCE_API_KEY' &&
-      !credential.revokedAt &&
-      (!credential.expiresAt || credential.expiresAt > new Date())
-    ) {
-      // Update last used time
-      await repositories.credentials.updateLastUsed(credential.id);
-      const resource = await repositories.resources.findById(credential.subjectId);
+    if (limiterKey && rateLimiter.isLimited(limiterKey)) {
       await this.audit.log({
         eventFamily: 'AUTHENTICATION',
         eventType: 'CREDENTIAL_USE',
         surface: 'DOMAIN',
         operation: 'resource.api-key.validate',
-        outcomeCode: resource ? 'SUCCESS' : 'DENIED',
-        decisionCode: resource ? 'ALLOW' : 'DENY',
-        reasonCode: resource ? 'AUTHENTICATED_SUBJECT' : 'INVALID_AUTH',
-        authoritySources: resource ? ['SCOPED_CREDENTIAL'] : [],
+        outcomeCode: 'DENIED',
+        decisionCode: 'DENY',
+        reasonCode: 'INVALID_AUTH',
+        authoritySources: [],
         targetType: 'CREDENTIAL',
-        targetId: credential.id,
-        actorType: 'RESOURCE_API_KEY',
-        principalId: credential.id,
-        actorId: credential.subjectId,
-        authKind: 'API_KEY',
-        resourceId: resource?.id ?? credential.subjectId,
-        payload: {},
+        actorType: 'SERVICE',
+        principalId: 'anonymous:resource-api-key',
+        authKind: 'SERVICE',
+        payload: { throttled: true },
       });
-      return resource;
+      return null;
     }
 
+    // 1. Try new digested credentials lookup
+    let credential: Credential | null = null;
+    let matchedKeyId: string | null = null;
+    for (const candidate of computeAllKeyedDigestCandidates(apiKey, 'RESOURCE_API_KEY')) {
+      credential = await repositories.credentials.findByDigest(candidate.digest);
+      if (credential) {
+        matchedKeyId = candidate.keyId;
+        break;
+      }
+    }
+
+    if (
+      credential &&
+      credential.type === 'RESOURCE_API_KEY' &&
+      credential.digestKeyId === matchedKeyId &&
+      credential.audience === 'api' &&
+      credential.targetType === 'RESOURCE' &&
+      credential.targetId === credential.subjectId &&
+      credential.scopes.includes('request.create') &&
+      !credential.revokedAt &&
+      (!credential.expiresAt || credential.expiresAt > new Date())
+    ) {
+      const resource = await repositories.resources.findById(credential.targetId);
+      if (!resource) return null;
+      const acceptedCredential = credential;
+      const principal: Principal = {
+        type: 'RESOURCE_API_KEY',
+        id: credential.id,
+        subjectId: resource.id,
+        authKind: 'API_KEY',
+        scopes: credential.scopes,
+        audience: credential.audience,
+        credentialTarget: { type: 'RESOURCE', id: resource.id },
+        expiresAt: credential.expiresAt,
+        createdAt: credential.createdAt,
+        lastUsedAt: new Date(),
+      };
+      await this.runTransaction(async (tx) => {
+        if (matchedKeyId !== KeyManager.getActiveKeyId('RESOURCE_API_KEY')) {
+          const active = computeKeyedDigestRecord(apiKey, 'RESOURCE_API_KEY');
+          await repositories.credentials.updateDigest(
+            acceptedCredential.id,
+            active.digest,
+            active.keyId,
+            tx
+          );
+        }
+        await repositories.credentials.updateLastUsed(acceptedCredential.id, tx);
+        await this.audit.log(
+          {
+            eventFamily: 'AUTHENTICATION',
+            eventType: 'CREDENTIAL_USE',
+            surface: 'DOMAIN',
+            operation: 'resource.api-key.validate',
+            outcomeCode: resource ? 'SUCCESS' : 'DENIED',
+            decisionCode: resource ? 'ALLOW' : 'DENY',
+            reasonCode: resource ? 'AUTHENTICATED_SUBJECT' : 'INVALID_AUTH',
+            authoritySources: resource ? ['SCOPED_CREDENTIAL'] : [],
+            targetType: 'CREDENTIAL',
+            targetId: credential.id,
+            actorType: 'RESOURCE_API_KEY',
+            principalId: credential.id,
+            actorId: credential.subjectId,
+            authKind: 'API_KEY',
+            resourceId: resource?.id ?? credential.subjectId,
+            payload: {},
+          },
+          tx
+        );
+      });
+      return { resource, principal };
+    }
+
+    if (limiterKey) {
+      rateLimiter.check(limiterKey);
+    }
     await this.audit.log({
       eventFamily: 'AUTHENTICATION',
       eventType: 'CREDENTIAL_USE',
@@ -1143,16 +1237,19 @@ export class ResourceService {
    */
   async mintApiKey(
     resourceId: string,
-    actorId: string,
+    principal: Principal,
     name: string,
     expiresInMs?: number
   ): Promise<{ plaintext: string; credential: Credential }> {
     const { repositories } = this.deps;
 
     // Verify Resource Authority (actor must be resource owner)
-    const hasOwnerAccess = await isEffectiveOwner(repositories, resourceId, actorId);
+    const decision = await this.evaluateCapability(principal, 'resource.api-key.mint', {
+      resourceId,
+    });
+    const hasOwnerAccess = decision.allowed && decision.decisionCode === 'ALLOW';
     if (!hasOwnerAccess) {
-      throw new Error('Only the resource owner can mint API keys.');
+      throw new ForbiddenError('Only the Resource Owner can mint API keys.');
     }
 
     const resource = await repositories.resources.findById(resourceId);
@@ -1160,8 +1257,8 @@ export class ResourceService {
       throw new ResourceNotFoundError(`Resource not found: ${resourceId}`);
     }
 
-    const plaintext = 'pur_' + crypto.randomBytes(32).toString('hex');
-    const digest = computeKeyedDigest(plaintext, 'RESOURCE_API_KEY');
+    const plaintext = 'pur_' + crypto.randomBytes(32).toString('base64url');
+    const digest = computeKeyedDigestRecord(plaintext, 'RESOURCE_API_KEY');
     const prefix = plaintext.substring(0, 12);
 
     const expiresAt = expiresInMs ? new Date(Date.now() + expiresInMs) : null;
@@ -1175,12 +1272,16 @@ export class ResourceService {
             type: 'RESOURCE_API_KEY',
             subjectId: resourceId,
             name,
-            digest,
+            digest: digest.digest,
+            digestKeyId: digest.keyId,
             prefix,
-            scopes: 'resource.view,request.create', // Default scopes for resource API keys
+            scopes: ['resource.view', 'request.create'],
             audience: 'api',
+            targetType: 'RESOURCE',
+            targetId: resourceId,
             expiresAt,
             revokedAt: null,
+            revokedReason: null,
           },
           tx
         );
@@ -1201,10 +1302,10 @@ export class ResourceService {
             authoritySources: ['RESOURCE_OWNER'],
             targetType: 'CREDENTIAL',
             targetId: credential.id,
-            actorType: 'DISCORD_USER',
-            principalId: `discord:${actorId}`,
-            actorId,
-            authKind: 'DISCORD',
+            actorType: principal.type,
+            principalId: principal.id,
+            actorId: principal.subjectId,
+            authKind: principal.authKind,
             resourceId,
             payload: { credentialId: credential.id },
           },
@@ -1223,26 +1324,173 @@ export class ResourceService {
     return { plaintext, credential };
   }
 
+  async mintServiceCredential(
+    resourceId: string,
+    principal: Principal,
+    serviceName: string,
+    name: string,
+    scopes: Capability[],
+    expiresInMs?: number
+  ): Promise<{ plaintext: string; credential: Credential }> {
+    const decision = await this.evaluateCapability(principal, 'resource.api-key.mint', {
+      resourceId,
+    });
+    if (!decision.allowed || decision.decisionCode !== 'ALLOW') {
+      throw new ForbiddenError('Only the Resource Owner can mint service credentials.');
+    }
+    if (!(await this.deps.repositories.resources.findById(resourceId))) {
+      throw new ResourceNotFoundError(`Resource not found: ${resourceId}`);
+    }
+    const plaintext = 'pur_svc_' + crypto.randomBytes(32).toString('base64url');
+    const digest = computeKeyedDigestRecord(plaintext, 'SERVICE_CREDENTIAL');
+    const expiresAt = expiresInMs ? new Date(Date.now() + expiresInMs) : null;
+    return this.runTransaction(async (tx) => {
+      const credential = await this.deps.repositories.credentials.create(
+        {
+          type: 'SERVICE_CREDENTIAL',
+          subjectId: serviceName,
+          name,
+          digest: digest.digest,
+          digestKeyId: digest.keyId,
+          prefix: plaintext.substring(0, 16),
+          scopes,
+          audience: 'service',
+          targetType: 'RESOURCE',
+          targetId: resourceId,
+          expiresAt,
+          revokedAt: null,
+          revokedReason: null,
+        },
+        tx
+      );
+      await this.audit.log(
+        {
+          eventFamily: 'AUTHENTICATION',
+          eventType: 'SERVICE_CREDENTIAL_MINT',
+          surface: 'DOMAIN',
+          operation: 'resource.service-credential.mint',
+          outcomeCode: 'SUCCESS',
+          capability: 'resource.api-key.mint',
+          decisionCode: 'ALLOW',
+          reasonCode: 'OWNER',
+          authoritySources: decision.authoritySources,
+          targetType: 'CREDENTIAL',
+          targetId: credential.id,
+          actorType: principal.type,
+          principalId: principal.id,
+          actorId: principal.subjectId,
+          authKind: principal.authKind,
+          resourceId,
+          payload: { credentialId: credential.id },
+        },
+        tx
+      );
+      return { plaintext, credential };
+    });
+  }
+
+  async rotateApiKey(
+    resourceId: string,
+    credentialId: string,
+    principal: Principal
+  ): Promise<{ plaintext: string; credential: Credential }> {
+    const { repositories } = this.deps;
+    const decision = await this.evaluateCapability(principal, 'resource.api-key.rotate', {
+      resourceId,
+    });
+    if (!decision.allowed || decision.decisionCode !== 'ALLOW') {
+      throw new ForbiddenError('Only the Resource Owner can rotate API keys.');
+    }
+    return this.runTransaction(async (tx) => {
+      const current = await repositories.credentials.findById(credentialId, tx);
+      if (
+        !current ||
+        (current.type !== 'RESOURCE_API_KEY' && current.type !== 'SERVICE_CREDENTIAL') ||
+        current.targetType !== 'RESOURCE' ||
+        current.targetId !== resourceId ||
+        current.revokedAt
+      ) {
+        throw new ForbiddenError('Credential is not eligible for rotation.');
+      }
+      const purpose =
+        current.type === 'SERVICE_CREDENTIAL' ? 'SERVICE_CREDENTIAL' : 'RESOURCE_API_KEY';
+      const plaintext =
+        (current.type === 'SERVICE_CREDENTIAL' ? 'pur_svc_' : 'pur_') +
+        crypto.randomBytes(32).toString('base64url');
+      const digest = computeKeyedDigestRecord(plaintext, purpose);
+      const credential = await repositories.credentials.create(
+        {
+          type: current.type,
+          subjectId: current.subjectId,
+          name: current.name,
+          digest: digest.digest,
+          digestKeyId: digest.keyId,
+          prefix: plaintext.substring(0, current.type === 'SERVICE_CREDENTIAL' ? 16 : 12),
+          scopes: current.scopes,
+          audience: current.audience,
+          targetType: current.targetType,
+          targetId: current.targetId,
+          expiresAt: current.expiresAt,
+          revokedAt: null,
+          revokedReason: null,
+        },
+        tx
+      );
+      await repositories.credentials.revoke(current.id, 'rotated', tx);
+      await repositories.resources.update(resourceId, { version: crypto.randomUUID() }, tx);
+      await this.audit.log(
+        {
+          eventFamily: 'AUTHENTICATION',
+          eventType: 'CREDENTIAL_ROTATE',
+          surface: 'DOMAIN',
+          operation: 'resource.api-key.rotate',
+          outcomeCode: 'SUCCESS',
+          capability: 'resource.api-key.rotate',
+          decisionCode: 'ALLOW',
+          reasonCode: 'OWNER',
+          authoritySources: ['RESOURCE_OWNER'],
+          targetType: 'CREDENTIAL',
+          targetId: credential.id,
+          actorType: principal.type,
+          principalId: principal.id,
+          actorId: principal.subjectId,
+          authKind: principal.authKind,
+          resourceId,
+          payload: { credentialId: credential.id },
+        },
+        tx
+      );
+      return { plaintext, credential };
+    });
+  }
+
   /**
    * Revoke an API key.
    */
-  async revokeApiKey(resourceId: string, credentialId: string, actorId: string): Promise<void> {
+  async revokeApiKey(
+    resourceId: string,
+    credentialId: string,
+    principal: Principal
+  ): Promise<void> {
     const { repositories } = this.deps;
 
     // Verify Resource Authority (actor must be resource owner)
-    const hasOwnerAccess = await isEffectiveOwner(repositories, resourceId, actorId);
+    const decision = await this.evaluateCapability(principal, 'resource.api-key.revoke', {
+      resourceId,
+    });
+    const hasOwnerAccess = decision.allowed && decision.decisionCode === 'ALLOW';
     if (!hasOwnerAccess) {
-      throw new Error('Only the resource owner can revoke API keys.');
+      throw new ForbiddenError('Only the Resource Owner can revoke credentials.');
     }
 
     const credential = await repositories.credentials.findById(credentialId);
-    if (!credential || credential.subjectId !== resourceId) {
-      throw new Error('Credential not found or mismatch.');
+    if (!credential || credential.targetType !== 'RESOURCE' || credential.targetId !== resourceId) {
+      throw new ForbiddenError('Credential is not bound to this Resource.');
     }
 
     try {
       await this.runTransaction(async (tx) => {
-        await repositories.credentials.revoke(credentialId, tx);
+        await repositories.credentials.revoke(credentialId, 'owner-revoked', tx);
 
         // Update resource version
         await repositories.resources.update(resourceId, { version: crypto.randomUUID() }, tx);
@@ -1250,7 +1498,8 @@ export class ResourceService {
         await this.audit.log(
           {
             eventFamily: 'AUTHENTICATION',
-            eventType: 'API_KEY_REVOKE',
+            eventType:
+              credential.type === 'SERVICE_CREDENTIAL' ? 'CREDENTIAL_REVOKE' : 'API_KEY_REVOKE',
             surface: 'DOMAIN',
             operation: 'resource.api-key.revoke',
             outcomeCode: 'SUCCESS',
@@ -1260,10 +1509,10 @@ export class ResourceService {
             authoritySources: ['RESOURCE_OWNER'],
             targetType: 'CREDENTIAL',
             targetId: credentialId,
-            actorType: 'DISCORD_USER',
-            principalId: `discord:${actorId}`,
-            actorId,
-            authKind: 'DISCORD',
+            actorType: principal.type,
+            principalId: principal.id,
+            actorId: principal.subjectId,
+            authKind: principal.authKind,
             resourceId,
             payload: { credentialId },
           },
@@ -1283,20 +1532,17 @@ export class ResourceService {
   /**
    * List API keys/credentials for a resource.
    */
-  async listApiKeys(resourceId: string, actorId: string): Promise<Credential[]> {
+  async listApiKeys(resourceId: string, principal: Principal): Promise<Credential[]> {
     const { repositories } = this.deps;
 
-    const decision = await this.evaluateCapability(
-      createDiscordPrincipal(actorId),
-      'resource.api-key.list',
-      { resourceId }
-    );
+    const decision = await this.evaluateCapability(principal, 'resource.api-key.list', {
+      resourceId,
+    });
     if (!decision.allowed) {
       throw new Error('Access denied. Only the resource owner may list API keys.');
     }
 
-    const creds = await repositories.credentials.findBySubject(resourceId);
-    return creds.filter((c) => c.type === 'RESOURCE_API_KEY');
+    return repositories.credentials.findByTarget('RESOURCE', resourceId);
   }
 
   /**

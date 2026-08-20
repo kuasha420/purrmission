@@ -1,313 +1,93 @@
-import { test, describe, beforeEach, mock, type Mock } from 'node:test';
-import assert from 'node:assert';
-import { AuthService, ExpiredTokenError, AccessDeniedError } from './auth.js';
-import { AuthRepository } from './repositories.js';
-import { AuthSession, ApiToken } from './models.js';
-import { createHash } from 'node:crypto';
-import type { AuditService } from './audit.js';
+import { describe, test } from 'node:test';
+import assert from 'node:assert/strict';
+import { createInMemoryRepositories } from './repositories.mock.js';
+import { createServices } from './services.js';
+import { AccessDeniedError, InvalidGrantError } from './auth.js';
 
-type MockedAuthRepository = {
-  createSession: Mock<AuthRepository['createSession']>;
-  findSessionByDeviceCode: Mock<AuthRepository['findSessionByDeviceCode']>;
-  findSessionByUserCode: Mock<AuthRepository['findSessionByUserCode']>;
-  updateSessionStatus: Mock<AuthRepository['updateSessionStatus']>;
-  transitionSessionStatus: Mock<AuthRepository['transitionSessionStatus']>;
-  createApiToken: Mock<AuthRepository['createApiToken']>;
-  findApiToken: Mock<AuthRepository['findApiToken']>;
-  updateApiTokenLastUsed: Mock<AuthRepository['updateApiTokenLastUsed']>;
-  deleteExpiredSessions: Mock<AuthRepository['deleteExpiredSessions']>;
-};
+describe('AuthService credential lifecycle', () => {
+  test('creates an unpredictable, bounded device flow', async () => {
+    const services = createServices({ repositories: createInMemoryRepositories() });
+    const flow = await services.auth.initiateDeviceFlow();
+    assert.match(flow.deviceCode, /^[A-Za-z0-9_-]{40,}$/);
+    assert.match(flow.userCode, /^[A-F0-9]{4}(?:-[A-F0-9]{4}){3}$/);
+    assert.equal(flow.expiresIn, 600);
+  });
 
-describe('AuthService', () => {
-  let authService: AuthService;
-  let mockRepo: MockedAuthRepository;
+  test('atomically approves and exchanges a session exactly once', async () => {
+    const repositories = createInMemoryRepositories();
+    const services = createServices({ repositories });
+    const flow = await services.auth.initiateDeviceFlow();
+    assert.equal(await services.auth.approveSession(flow.userCode, 'user-1'), true);
+    const exchange = await services.auth.exchangeCodeForToken(flow.deviceCode);
+    assert.ok(exchange);
+    assert.match(exchange.token, /^paw_/);
+    assert.equal(exchange.apiToken.subjectId, 'user-1');
+    assert.deepEqual(exchange.apiToken.scopes, [
+      'project.view',
+      'environment.view',
+      'resource.view',
+      'request.create',
+    ]);
+    assert.deepEqual(
+      { type: exchange.apiToken.targetType, id: exchange.apiToken.targetId },
+      { type: 'ACCOUNT', id: 'user-1' }
+    );
+    await assert.rejects(services.auth.exchangeCodeForToken(flow.deviceCode), InvalidGrantError);
+    assert.equal((await repositories.credentials.findBySubject('user-1')).length, 1);
+  });
 
-  beforeEach(() => {
-    // Initialize with mocks. Note: We use type assertions because we are mocking the interface.
-    mockRepo = {
-      createSession: mock.fn<AuthRepository['createSession']>(),
-      findSessionByDeviceCode: mock.fn<AuthRepository['findSessionByDeviceCode']>(),
-      findSessionByUserCode: mock.fn<AuthRepository['findSessionByUserCode']>(),
-      updateSessionStatus: mock.fn<AuthRepository['updateSessionStatus']>(),
-      transitionSessionStatus: mock.fn<AuthRepository['transitionSessionStatus']>(async () => true),
-      createApiToken: mock.fn<AuthRepository['createApiToken']>(),
-      findApiToken: mock.fn<AuthRepository['findApiToken']>(),
-      updateApiTokenLastUsed: mock.fn<AuthRepository['updateApiTokenLastUsed']>(),
-      deleteExpiredSessions: mock.fn<AuthRepository['deleteExpiredSessions']>(),
-    };
-    authService = new AuthService(
-      mockRepo as unknown as AuthRepository,
-      undefined,
-      {
-        log: mock.fn(async () => undefined),
-      } as unknown as AuditService,
-      async (callback) => callback({} as import('@prisma/client').Prisma.TransactionClient)
+  test('validates only matching audience and scope without storing plaintext', async () => {
+    const repositories = createInMemoryRepositories();
+    const services = createServices({ repositories });
+    const flow = await services.auth.initiateDeviceFlow();
+    await services.auth.approveSession(flow.userCode, 'user-2');
+    const exchange = await services.auth.exchangeCodeForToken(flow.deviceCode);
+    assert.ok(exchange);
+    const principal = await services.auth.validateToken(exchange.token, {
+      audience: 'cli',
+      requiredScopes: ['project.view'],
+    });
+    assert.equal(principal?.subjectId, 'user-2');
+    assert.equal(principal?.credentialTarget?.type, 'ACCOUNT');
+    assert.notEqual(exchange.apiToken.digest, exchange.token);
+    assert.equal(await services.auth.validateToken(exchange.token, { audience: 'service' }), null);
+    assert.equal(
+      await services.auth.validateToken(exchange.token, { requiredScopes: ['project.delete'] }),
+      null
     );
   });
 
-  describe('initiateDeviceFlow', () => {
-    test('should generate device code and user code', async () => {
-      // Mock implementation to return a valid AuthSession
-      mockRepo.createSession.mock.mockImplementation(async (input) => ({
-        id: 'session-id-1',
-        status: 'PENDING',
-        createdAt: new Date(),
-        updatedAt: new Date(),
-        ...input,
-      }));
-
-      const result = await authService.initiateDeviceFlow();
-
-      assert.ok(result.deviceCode);
-      assert.ok(result.userCode);
-      assert.match(result.userCode, /^[A-Z0-9]{4}-[A-Z0-9]{4}$/);
-      assert.strictEqual(result.verificationUri, '/auth login');
-      assert.strictEqual(result.expiresIn, 1800);
-
-      assert.strictEqual(mockRepo.createSession.mock.callCount(), 1);
-    });
+  test('denied sessions never mint credentials', async () => {
+    const repositories = createInMemoryRepositories();
+    const services = createServices({ repositories });
+    const flow = await services.auth.initiateDeviceFlow();
+    const session = await repositories.auth.findSessionByDeviceCode(flow.deviceCode);
+    assert.ok(session);
+    await repositories.auth.updateSessionStatus(session.id, 'DENIED');
+    await assert.rejects(services.auth.exchangeCodeForToken(flow.deviceCode), AccessDeniedError);
+    assert.equal((await repositories.credentials.findBySubject('user-unknown')).length, 0);
   });
 
-  describe('approveSession', () => {
-    test('should approve a pending session', async () => {
-      const validSession: AuthSession = {
-        id: 'session-1',
-        deviceCode: 'device-1',
-        userCode: 'ABCD-1234',
-        status: 'PENDING',
-        expiresAt: new Date(Date.now() + 10000),
-        createdAt: new Date(),
-        updatedAt: new Date(),
-      };
+  test('lists redacted metadata and atomically rotates and revokes own credentials', async () => {
+    const repositories = createInMemoryRepositories();
+    const services = createServices({ repositories });
+    const flow = await services.auth.initiateDeviceFlow();
+    await services.auth.approveSession(flow.userCode, 'user-3');
+    const exchange = await services.auth.exchangeCodeForToken(flow.deviceCode);
+    assert.ok(exchange);
+    const principal = await services.auth.validateToken(exchange.token);
+    assert.ok(principal);
 
-      mockRepo.findSessionByUserCode = mock.fn(async () => validSession);
-      mockRepo.updateSessionStatus = mock.fn(async () => undefined);
+    const inventory = await services.auth.listOwnCredentials(principal);
+    assert.equal(inventory.length, 1);
+    assert.equal('digest' in inventory[0], false);
+    const rotated = await services.auth.rotateOwnCredential(principal, exchange.apiToken.id);
+    assert.equal('digest' in rotated.credential, false);
+    assert.equal(await services.auth.validateToken(exchange.token), null);
+    const rotatedPrincipal = await services.auth.validateToken(rotated.plaintext);
+    assert.ok(rotatedPrincipal);
 
-      const success = await authService.approveSession('ABCD-1234', 'user-123');
-
-      assert.strictEqual(success, true);
-      assert.strictEqual(mockRepo.updateSessionStatus.mock.callCount(), 1);
-      assert.deepStrictEqual(mockRepo.updateSessionStatus.mock.calls[0].arguments, [
-        'session-1',
-        'APPROVED',
-        'user-123',
-        {},
-      ]);
-    });
-
-    test('should return false if session not found', async () => {
-      mockRepo.findSessionByUserCode = mock.fn(async () => null);
-      const success = await authService.approveSession('INVALID', 'user-123');
-      assert.strictEqual(success, false);
-    });
-
-    test('should expire session if expired during approval', async () => {
-      const expiredSession: AuthSession = {
-        id: 'session-1',
-        deviceCode: 'device-1',
-        userCode: 'ABCD-1234',
-        status: 'PENDING',
-        expiresAt: new Date(Date.now() - 1000),
-        createdAt: new Date(),
-        updatedAt: new Date(),
-      };
-
-      mockRepo.findSessionByUserCode = mock.fn(async () => expiredSession);
-      // Re-mock updateSessionStatus to trace calls
-      mockRepo.updateSessionStatus = mock.fn(async () => undefined);
-
-      const success = await authService.approveSession('ABCD-1234', 'user-123');
-
-      assert.strictEqual(success, false);
-      assert.strictEqual(mockRepo.updateSessionStatus.mock.callCount(), 1);
-      assert.deepStrictEqual(mockRepo.updateSessionStatus.mock.calls[0].arguments, [
-        'session-1',
-        'EXPIRED',
-        undefined,
-        {},
-      ]);
-    });
-  });
-
-  describe('exchangeCodeForToken', () => {
-    test('should return null and throw valid errors for pending sessions', async () => {
-      const pendingSession: AuthSession = {
-        id: 'session-1',
-        deviceCode: 'device-1',
-        userCode: 'ABCD-1234',
-        status: 'PENDING',
-        expiresAt: new Date(Date.now() + 10000),
-        createdAt: new Date(),
-        updatedAt: new Date(),
-      };
-      mockRepo.findSessionByDeviceCode = mock.fn(async () => pendingSession);
-
-      const result = await authService.exchangeCodeForToken('device-1');
-      assert.strictEqual(result, null);
-    });
-
-    test('should throw ExpiredTokenError for pending expired session', async () => {
-      const expiredSession: AuthSession = {
-        id: 'session-1',
-        deviceCode: 'device-1',
-        userCode: 'ABCD-1234',
-        status: 'PENDING',
-        expiresAt: new Date(Date.now() - 1000),
-        createdAt: new Date(),
-        updatedAt: new Date(),
-      };
-      mockRepo.findSessionByDeviceCode = mock.fn(async () => expiredSession);
-      mockRepo.updateSessionStatus = mock.fn(async () => undefined);
-
-      await assert.rejects(() => authService.exchangeCodeForToken('device-1'), ExpiredTokenError);
-      assert.strictEqual(mockRepo.updateSessionStatus.mock.calls[0].arguments[1], 'EXPIRED');
-    });
-
-    test('should issue token for approved session and mark session consumed', async () => {
-      const approvedSession: AuthSession = {
-        id: 'session-1',
-        deviceCode: 'device-1',
-        userCode: 'ABCD-1234',
-        status: 'APPROVED',
-        userId: 'user-123',
-        expiresAt: new Date(Date.now() + 10000),
-        createdAt: new Date(),
-        updatedAt: new Date(),
-      };
-      mockRepo.findSessionByDeviceCode = mock.fn(async () => approvedSession);
-      mockRepo.updateSessionStatus = mock.fn(async () => undefined);
-
-      mockRepo.createApiToken.mock.mockImplementation(async (input) => ({
-        id: 'token-1',
-        ...input,
-        createdAt: new Date(),
-        lastUsedAt: null,
-      }));
-
-      const result = await authService.exchangeCodeForToken('device-1');
-
-      assert.ok(result);
-      assert.ok(result?.token.startsWith('paw_')); // Returns plaintext
-
-      // Check hashing in repo
-      const createCall = mockRepo.createApiToken.mock.calls[0].arguments[0];
-      assert.notStrictEqual(createCall.token, result?.token); // Stored token should be hash, result is plain
-
-      // Should mark session as CONSUMED
-      assert.deepStrictEqual(mockRepo.transitionSessionStatus.mock.calls[0].arguments, [
-        'session-1',
-        'APPROVED',
-        'CONSUMED',
-        undefined,
-        {},
-      ]);
-    });
-
-    test('should throw ExpiredTokenError if session expired after approval', async () => {
-      const expiredSession: AuthSession = {
-        id: 'session-1',
-        deviceCode: 'device-1',
-        userCode: 'ABCD-1234',
-        status: 'APPROVED',
-        userId: 'user-123',
-        expiresAt: new Date(Date.now() - 1000), // Expired
-        createdAt: new Date(),
-        updatedAt: new Date(),
-      };
-      mockRepo.findSessionByDeviceCode = mock.fn(async () => expiredSession);
-      mockRepo.updateSessionStatus = mock.fn(async () => undefined);
-
-      await assert.rejects(authService.exchangeCodeForToken('device-1'), ExpiredTokenError);
-      assert.strictEqual(mockRepo.updateSessionStatus.mock.calls[0].arguments[1], 'EXPIRED');
-    });
-
-    test('should throw AccessDeniedError if session is DENIED', async () => {
-      const deniedSession: AuthSession = {
-        id: 'session-1',
-        deviceCode: 'device-1',
-        userCode: 'ABCD-1234',
-        status: 'DENIED',
-        userId: 'user-123',
-        expiresAt: new Date(Date.now() + 10000),
-        createdAt: new Date(),
-        updatedAt: new Date(),
-      };
-      mockRepo.findSessionByDeviceCode = mock.fn(async () => deniedSession);
-
-      await assert.rejects(authService.exchangeCodeForToken('device-1'), AccessDeniedError);
-    });
-
-    test('should throw AccessDeniedError if APPROVED session lacks userId', async () => {
-      const noUserSession: AuthSession = {
-        id: 'session-1',
-        deviceCode: 'device-1',
-        userCode: 'ABCD-1234',
-        status: 'APPROVED',
-        userId: undefined,
-        expiresAt: new Date(Date.now() + 10000),
-        createdAt: new Date(),
-        updatedAt: new Date(),
-      };
-      mockRepo.findSessionByDeviceCode = mock.fn(async () => noUserSession);
-
-      await assert.rejects(authService.exchangeCodeForToken('device-1'), AccessDeniedError);
-    });
-  });
-
-  describe('validateToken', () => {
-    test('should validate correct token', async () => {
-      const plainToken = 'paw_123456';
-      const hashedToken = createHash('sha256').update(plainToken).digest('hex');
-
-      const apiToken: ApiToken = {
-        id: 'token-1',
-        token: hashedToken,
-        userId: 'user-123',
-        name: 'Test',
-        expiresAt: new Date(Date.now() + 10000),
-        lastUsedAt: null,
-        createdAt: new Date(),
-      };
-
-      mockRepo.findApiToken = mock.fn(async () => apiToken);
-      mockRepo.updateApiTokenLastUsed = mock.fn(async () => undefined);
-
-      const result = await authService.validateToken(plainToken);
-
-      assert.ok(result);
-      assert.strictEqual(result.id, apiToken.id);
-      assert.strictEqual(result.subjectId, apiToken.userId);
-      assert.notStrictEqual(result.id, result.subjectId);
-      assert.strictEqual(result.type, 'PAWTHY_TOKEN');
-      assert.strictEqual(mockRepo.findApiToken.mock.calls[0].arguments[0], hashedToken);
-    });
-
-    test('should return null for expired token', async () => {
-      const plainToken = 'paw_123456';
-      const apiToken: ApiToken = {
-        id: 'token-1',
-        token: 'hashed',
-        userId: 'user-123',
-        name: 'Test',
-        expiresAt: new Date(Date.now() - 1000), // Expired
-        lastUsedAt: null,
-        createdAt: new Date(),
-      };
-      mockRepo.findApiToken = mock.fn(async () => apiToken);
-
-      const result = await authService.validateToken(plainToken);
-      assert.strictEqual(result, null);
-    });
-  });
-
-  describe('cleanupExpiredSessions', () => {
-    test('should call repository to delete expired sessions', async () => {
-      mockRepo.deleteExpiredSessions = mock.fn(async () => 5);
-
-      const result = await authService.cleanupExpiredSessions();
-
-      assert.strictEqual(result, 5);
-      assert.strictEqual(mockRepo.deleteExpiredSessions.mock.calls.length, 1);
-    });
+    await services.auth.revokeOwnCredential(rotatedPrincipal, rotated.credential.id);
+    assert.equal(await services.auth.validateToken(rotated.plaintext), null);
   });
 });

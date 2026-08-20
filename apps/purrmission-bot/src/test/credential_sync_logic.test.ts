@@ -38,6 +38,7 @@ import {
   ApprovalRequestMetadataProjection,
 } from '../domain/models.js';
 import { randomUUID } from 'crypto';
+import { InMemoryCredentialRepository } from '../domain/repositories.mock.js';
 
 // --- In-Memory Repository Implementations ---
 
@@ -124,7 +125,6 @@ class MemResourceRepo implements ResourceRepository {
       id: input.id ?? randomUUID(),
       name: input.name,
       mode: input.mode,
-      apiKey: input.apiKey,
       version: input.version ?? randomUUID(),
       totpLinkVersion: input.totpLinkVersion ?? randomUUID(),
       createdAt: new Date(),
@@ -136,9 +136,6 @@ class MemResourceRepo implements ResourceRepository {
     return this.resources.find((r) => r.id === id) || null;
   }
   async update(_id: string, _data: Partial<Resource>, _tx?: any): Promise<Resource> {
-    throw new Error('Not implemented');
-  }
-  async findByApiKey(_apiKey: string): Promise<Resource | null> {
     throw new Error('Not implemented');
   }
   async findManyByIds(ids: string[], query?: string): Promise<Resource[]> {
@@ -463,7 +460,7 @@ describe('Credential Sync Logic Smoke Test', () => {
     totp: totpRepo,
     audit: auditRepo,
     outbox: outboxRepo,
-    credentials: {} as Repositories['credentials'],
+    credentials: new InMemoryCredentialRepository(),
     approvalGrants: {} as Repositories['approvalGrants'],
     callbackDestinations: {} as Repositories['callbackDestinations'],
   };

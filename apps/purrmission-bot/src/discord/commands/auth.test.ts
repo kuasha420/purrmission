@@ -1,8 +1,21 @@
-import { test, describe, mock } from 'node:test';
 import assert from 'node:assert';
-import { handleAuthLogin } from './auth.js';
+import { describe, mock, test } from 'node:test';
 import type { ChatInputCommandInteraction } from 'discord.js';
+import { authCommand, handleAuthLogin } from './auth.js';
 import type { CommandContext } from './context.js';
+
+describe('/auth command definition', () => {
+  test('accepts the full 64-bit device-flow user code', () => {
+    const definition = authCommand.toJSON();
+    const login = definition.options?.find((option) => option.name === 'login');
+    assert.ok(login && 'options' in login);
+    const code = login.options?.find((option) => option.name === 'code');
+
+    assert.ok(code && 'max_length' in code && 'min_length' in code);
+    assert.strictEqual(code.min_length, 19);
+    assert.strictEqual(code.max_length, 19);
+  });
+});
 
 describe('Discord Command: handleAuthLogin', () => {
   test('should reply with success when session is approved', async () => {
@@ -10,7 +23,7 @@ describe('Discord Command: handleAuthLogin', () => {
     const mockApproveSession = mock.fn(async () => true);
     const interaction = {
       options: {
-        getString: mock.fn(() => 'ABCD-1234'),
+        getString: mock.fn(() => 'ABCD-1234-EF56-7890'),
       },
       user: {
         id: 'user-123',
@@ -32,7 +45,10 @@ describe('Discord Command: handleAuthLogin', () => {
     );
 
     assert.strictEqual(mockApproveSession.mock.callCount(), 1);
-    assert.deepStrictEqual(mockApproveSession.mock.calls[0].arguments, ['ABCD-1234', 'user-123']);
+    assert.deepStrictEqual(mockApproveSession.mock.calls[0].arguments, [
+      'ABCD-1234-EF56-7890',
+      'user-123',
+    ]);
 
     assert.strictEqual(mockReply.mock.callCount(), 1);
     const replyArg = mockReply.mock.calls[0].arguments[0];

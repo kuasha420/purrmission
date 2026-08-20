@@ -37,6 +37,7 @@ describe('ProjectService', () => {
 
     createResourceMock = mock.fn<ResourceServiceDependency['createResource']>(async () => ({
       resource: { id: 'res-1' },
+      plaintextApiKey: 'one-time-key',
     }));
     resourceService = {
       createResource: createResourceMock,
@@ -138,7 +139,7 @@ describe('ProjectService', () => {
       createDiscordPrincipal(project.ownerId)
     );
 
-    assert.deepStrictEqual(result, created);
+    assert.deepStrictEqual(result, { ...created, resourceApiKey: 'one-time-key' });
     assert.strictEqual(projectRepo.createEnvironment.mock.callCount(), 1);
   });
 });
