@@ -152,6 +152,45 @@ describe('Credential Lifecycle Hardening', () => {
       const foundAfterRevocation = await services.resource.verifyApiKey(rotated.plaintext);
       assert.strictEqual(foundAfterRevocation, null);
     });
+
+    test('should throttle repeated Resource credential failures by caller', async () => {
+      const repos = createInMemoryRepositories();
+      const services = createServices({ repositories: repos });
+      const resource = await repos.resources.create({
+        name: 'Rate-limited Resource',
+        mode: 'ONE_OF_N',
+        version: 'v1',
+      });
+      const ownerId = 'rate-limit-owner';
+      const ownerPrincipal = {
+        type: 'DISCORD_USER' as const,
+        id: `discord:${ownerId}`,
+        subjectId: ownerId,
+        authKind: 'DISCORD' as const,
+      };
+      await repos.guardians.add({
+        id: 'rate-limit-owner-assignment',
+        resourceId: resource.id,
+        discordUserId: ownerId,
+        role: 'OWNER',
+      });
+      const valid = await services.resource.mintApiKey(
+        resource.id,
+        ownerPrincipal,
+        'rate-limit-proof'
+      );
+      const caller = '198.51.100.121';
+
+      for (let attempt = 0; attempt < 10; attempt += 1) {
+        assert.strictEqual(
+          await services.resource.verifyApiKey(`invalid-${attempt}`, caller),
+          null
+        );
+      }
+
+      assert.strictEqual(await services.resource.verifyApiKey(valid.plaintext, caller), null);
+      assert.ok(await services.resource.verifyApiKey(valid.plaintext, '198.51.100.122'));
+    });
   });
 
   describe('Atomic OAuth Token Exchange and Rate Limiting', () => {

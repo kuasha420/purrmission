@@ -164,7 +164,7 @@ export function createHttpServer(deps: HttpServerDeps): FastifyInstance {
     const body = parseResult.data;
 
     // Verify API key
-    const authentication = await services.resource.verifyApiKey(body.apiKey);
+    const authentication = await services.resource.verifyApiKey(body.apiKey, request.ip);
     if (!authentication) {
       logger.warn('Invalid API key', { resourceId: body.resourceId });
       return reply.status(401).send({

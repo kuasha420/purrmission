@@ -61,6 +61,7 @@ import {
   parseTOTPDelegationPolicy,
   validateTOTPLinkEnvelope,
 } from './totp_custody.js';
+import { rateLimiter } from '../infra/rateLimit.js';
 
 /**
  * Service dependencies.
@@ -1110,8 +1111,31 @@ export class ResourceService {
   /**
    * Verify an API key and return the resource.
    */
-  async verifyApiKey(apiKey: string): Promise<{ resource: Resource; principal: Principal } | null> {
+  async verifyApiKey(
+    apiKey: string,
+    clientIp?: string
+  ): Promise<{ resource: Resource; principal: Principal } | null> {
     const { repositories } = this.deps;
+    const limiterKey = clientIp ? `resource-credential-validation-failure-check:${clientIp}` : null;
+
+    if (limiterKey && rateLimiter.isLimited(limiterKey)) {
+      await this.audit.log({
+        eventFamily: 'AUTHENTICATION',
+        eventType: 'CREDENTIAL_USE',
+        surface: 'DOMAIN',
+        operation: 'resource.api-key.validate',
+        outcomeCode: 'DENIED',
+        decisionCode: 'DENY',
+        reasonCode: 'INVALID_AUTH',
+        authoritySources: [],
+        targetType: 'CREDENTIAL',
+        actorType: 'SERVICE',
+        principalId: 'anonymous:resource-api-key',
+        authKind: 'SERVICE',
+        payload: { throttled: true },
+      });
+      return null;
+    }
 
     // 1. Try new digested credentials lookup
     let credential: Credential | null = null;
@@ -1185,6 +1209,9 @@ export class ResourceService {
       return { resource, principal };
     }
 
+    if (limiterKey) {
+      rateLimiter.check(limiterKey);
+    }
     await this.audit.log({
       eventFamily: 'AUTHENTICATION',
       eventType: 'CREDENTIAL_USE',
