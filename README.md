@@ -2,12 +2,12 @@
 
 # 🐱 Purrmission <img src="assets/logo-square.png" align="right" width="120" />
 
-> **Discord-based multi-user approval gate** – Secure credential sync for teams, shared 2FA management, and approval workflows.
+> **Discord-based multi-user approval gate** – Secure credential sync, consent-bound TOTP access, and approval workflows.
 
 ## Key Features
 
 - **Credential Sync (Pawthy CLI)**: Securely sync environment variables between local dev and central store
-- **Shared 2FA / TOTP**: Centralized vault of 2FA secrets for team accounts (GitHub, AWS, etc.)
+- **Consent-bound 2FA / TOTP**: Personal custody with explicit, versioned Resource links
 - **Approval Chains**: Guardian-based approval for protected resource access
 - **Discord Integration**: Get codes and approve requests directly in DMs
 - **HTTP API**: RESTful endpoints for external service integrations
@@ -110,7 +110,7 @@ Purrmission exposes seven top-level Discord slash commands:
 
 | Top-level Command | Purpose                                                    |
 | ----------------- | ---------------------------------------------------------- |
-| `/2fa`            | Manage personal and shared TOTP accounts                   |
+| `/2fa`            | Manage personal-custody TOTP accounts                      |
 | `/resource`       | Register resources, manage fields, and manage linked 2FA   |
 | `/guardian`       | Add, remove, and list resource guardians                   |
 | `/purrmission`    | Main application subcommands (`/purrmission guardian ...`) |
@@ -123,28 +123,28 @@ Purrmission exposes seven top-level Discord slash commands:
 | Action        | Command                                      |
 | ------------- | -------------------------------------------- |
 | Add Account   | `/2fa add account:"..." mode:uri`            |
-| List Accounts | `/2fa list [shared:true]`                    |
+| List Accounts | `/2fa list`                                  |
 | Get Code      | `/2fa get account:"..."`                     |
 | Update Key    | `/2fa update account:"..." backup_key:"..."` |
 
 ### `/resource`
 
-| Action              | Command                                                        |
-| ------------------- | -------------------------------------------------------------- |
-| Register Resource   | `/resource register name:"..."`                                |
-| List Resources      | `/resource list`                                               |
-| Add Field           | `/resource fields add resource-id:<id> name:"..." value:"..."` |
-| List Fields         | `/resource fields list resource-id:<id>`                       |
-| Get Field           | `/resource fields get resource-id:<id> name:"..."`             |
-| Remove Field        | `/resource fields remove resource-id:<id> name:"..."`          |
-| Link Resource 2FA   | `/resource 2fa link resource-id:<id> account:"..."`            |
-| Unlink Resource 2FA | `/resource 2fa unlink resource-id:<id>`                        |
-| Get Resource 2FA    | `/resource 2fa get resource-id:<id>`                           |
+| Action              | Command                                                            |
+| ------------------- | ------------------------------------------------------------------ |
+| Register Resource   | `/resource register name:"..."`                                    |
+| List Resources      | `/resource list`                                                   |
+| Add Field           | `/resource fields add resource-id:<id> name:"..." value:"..."`     |
+| List Fields         | `/resource fields list resource-id:<id>`                           |
+| Get Field           | `/resource fields get resource-id:<id> name:"..."`                 |
+| Remove Field        | `/resource fields remove resource-id:<id> name:"..."`              |
+| Link Resource 2FA   | `/resource 2fa link resource-id:<id> account:<id> consent-id:<id>` |
+| Unlink Resource 2FA | `/resource 2fa unlink resource-id:<id>`                            |
+| Get Resource 2FA    | `/resource 2fa get resource-id:<id>`                               |
 
-> **Prerequisite hardening:** New Resource↔TOTP links and delegated TOTP reveals currently fail
-> closed. They remain disabled until #120 supplies authenticated, seed-version-bound custody
-> consent and #122 supplies request-bound conditional grant issuance. An `APPROVED` request records
-> a decision only; it is not reveal authority.
+> **Prerequisite hardening:** Resource↔TOTP links require authenticated, seed-version-bound,
+> one-time custody consent. Delegation consent grants no reveal authority; delegated reveal remains
+> disabled until #122 supplies request-bound conditional grant issuance. `APPROVED` is decision
+> state only.
 
 ### `/guardian`
 

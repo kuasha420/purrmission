@@ -73,7 +73,7 @@ function installFinalAuditTable(db: DatabaseSync): void {
 describe('legacy AuditLog populated upgrade', () => {
   it('backfills every persisted metadata target and request/grant binding', () => {
     const db = new DatabaseSync(':memory:');
-    applyMigrations(db, (migration) => migration !== '20260820010000_metadata_target_versions');
+    applyMigrations(db, (migration) => migration < '20260820010000_metadata_target_versions');
     db.exec(`
       INSERT INTO "Project" ("id", "name", "ownerId", "policyVersion", "createdAt", "updatedAt")
       VALUES ('project-v', 'Versioned', 'owner', 'old-project-version', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP);

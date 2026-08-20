@@ -63,7 +63,7 @@ import type {
 export interface ResourceRepository {
   create(resource: CreateResourceInput, tx?: Prisma.TransactionClient): Promise<Resource>;
 
-  findById(id: string): Promise<Resource | null>;
+  findById(id: string, tx?: Prisma.TransactionClient): Promise<Resource | null>;
 
   findByApiKey(apiKey: string): Promise<Resource | null>;
 
@@ -79,7 +79,7 @@ export interface ResourceRepository {
   ): Promise<Resource>;
 
   findManyByIds(ids: string[], query?: string): Promise<Resource[]>;
-  findMetadataById(id: string): Promise<ResourceMetadata | null>;
+  findMetadataById(id: string, tx?: Prisma.TransactionClient): Promise<ResourceMetadata | null>;
   findMetadataManyByIds(ids: string[]): Promise<ResourceMetadata[]>;
 }
 
@@ -224,18 +224,25 @@ export interface TOTPRepository {
     tx?: Prisma.TransactionClient
   ): Promise<TOTPAccount>;
   update(account: TOTPAccount, tx?: Prisma.TransactionClient): Promise<TOTPAccount>;
+  updateBackupKey(
+    id: string,
+    backupKey: string,
+    tx?: Prisma.TransactionClient
+  ): Promise<TOTPAccountMetadata>;
   deleteById(id: string, tx?: Prisma.TransactionClient): Promise<void>;
   findById(id: string): Promise<TOTPAccount | null>;
-  findByOwnerDiscordUserId(ownerDiscordUserId: string): Promise<TOTPAccount[]>;
-  findByOwnerAndName(ownerDiscordUserId: string, accountName: string): Promise<TOTPAccount | null>;
-  findMetadataById(id: string): Promise<TOTPAccountMetadata | null>;
+  findMetadataById(id: string, tx?: Prisma.TransactionClient): Promise<TOTPAccountMetadata | null>;
+  findMetadataByOwnerAndName(
+    ownerDiscordUserId: string,
+    accountName: string
+  ): Promise<TOTPAccountMetadata | null>;
   findMetadataByOwnerDiscordUserId(ownerDiscordUserId: string): Promise<TOTPAccountMetadata[]>;
 
   createLinkConsent(
     input: Omit<TOTPLinkConsent, 'id' | 'createdAt' | 'usedAt'>,
     tx?: Prisma.TransactionClient
   ): Promise<TOTPLinkConsent>;
-  findLinkConsentById(id: string): Promise<TOTPLinkConsent | null>;
+  findLinkConsentById(id: string, tx?: Prisma.TransactionClient): Promise<TOTPLinkConsent | null>;
   useLinkConsent(id: string, tx?: Prisma.TransactionClient): Promise<boolean>;
 
   createDelegationConsent(
@@ -243,12 +250,22 @@ export interface TOTPRepository {
     tx?: Prisma.TransactionClient
   ): Promise<TOTPDelegationConsent>;
   findDelegationConsentById(id: string): Promise<TOTPDelegationConsent | null>;
-  findActiveDelegationConsent(
-    resourceId: string,
-    requesterId: string,
-    operation: string
-  ): Promise<TOTPDelegationConsent | null>;
-  useDelegationConsent(id: string, tx?: Prisma.TransactionClient): Promise<boolean>;
+  consumeDelegationConsent(
+    expected: Pick<
+      TOTPDelegationConsent,
+      | 'id'
+      | 'resourceId'
+      | 'totpAccountId'
+      | 'operation'
+      | 'requesterId'
+      | 'ownerDiscordUserId'
+      | 'authFamily'
+      | 'audience'
+      | 'accountVersion'
+      | 'linkVersion'
+    > & { grantExpiresAt: Date },
+    tx?: Prisma.TransactionClient
+  ): Promise<boolean>;
 }
 
 /**
@@ -322,8 +339,8 @@ export class PrismaResourceRepository implements ResourceRepository {
     return this.mapPrismaToDomain(created);
   }
 
-  async findById(id: string): Promise<Resource | null> {
-    const row = await this.prisma.resource.findUnique({
+  async findById(id: string, tx?: Prisma.TransactionClient): Promise<Resource | null> {
+    const row = await (tx ?? this.prisma).resource.findUnique({
       where: { id },
     });
     return row ? this.mapPrismaToDomain(row) : null;
@@ -374,8 +391,11 @@ export class PrismaResourceRepository implements ResourceRepository {
     return rows.map((row) => this.mapPrismaToDomain(row));
   }
 
-  async findMetadataById(id: string): Promise<ResourceMetadata | null> {
-    return this.prisma.resource.findUnique({
+  async findMetadataById(
+    id: string,
+    tx?: Prisma.TransactionClient
+  ): Promise<ResourceMetadata | null> {
+    return (tx ?? this.prisma).resource.findUnique({
       where: { id },
       select: {
         id: true,
@@ -554,6 +574,28 @@ export class PrismaTOTPRepository implements TOTPRepository {
     return this.mapPrismaToDomain(updated);
   }
 
+  async updateBackupKey(
+    id: string,
+    backupKey: string,
+    tx?: Prisma.TransactionClient
+  ): Promise<TOTPAccountMetadata> {
+    const client = tx || this.prisma;
+    const updated = await client.tOTPAccount.update({
+      where: { id },
+      data: { backupKey: encryptValue(backupKey), version: randomUUID() },
+      select: {
+        id: true,
+        ownerDiscordUserId: true,
+        accountName: true,
+        issuer: true,
+        version: true,
+        createdAt: true,
+        updatedAt: true,
+      },
+    });
+    return updated;
+  }
+
   async deleteById(id: string, tx?: Prisma.TransactionClient): Promise<void> {
     const client = tx || this.prisma;
     // Find linked resource first
@@ -587,33 +629,11 @@ export class PrismaTOTPRepository implements TOTPRepository {
     return row ? this.mapPrismaToDomain(row) : null;
   }
 
-  async findByOwnerDiscordUserId(ownerDiscordUserId: string): Promise<TOTPAccount[]> {
-    const rows = await this.prisma.tOTPAccount.findMany({
-      where: { ownerDiscordUserId },
-      orderBy: { accountName: 'asc' },
-    });
-
-    return rows.map((row) => this.mapPrismaToDomain(row));
-  }
-
-  async findByOwnerAndName(
-    ownerDiscordUserId: string,
-    accountName: string
-  ): Promise<TOTPAccount | null> {
-    const row = await this.prisma.tOTPAccount.findUnique({
-      where: {
-        ownerDiscordUserId_accountName: {
-          ownerDiscordUserId,
-          accountName,
-        },
-      },
-    });
-
-    return row ? this.mapPrismaToDomain(row) : null;
-  }
-
-  async findMetadataById(id: string): Promise<TOTPAccountMetadata | null> {
-    return this.prisma.tOTPAccount.findUnique({
+  async findMetadataById(
+    id: string,
+    tx?: Prisma.TransactionClient
+  ): Promise<TOTPAccountMetadata | null> {
+    return (tx ?? this.prisma).tOTPAccount.findUnique({
       where: { id },
       select: {
         id: true,
@@ -646,6 +666,24 @@ export class PrismaTOTPRepository implements TOTPRepository {
     return rows;
   }
 
+  async findMetadataByOwnerAndName(
+    ownerDiscordUserId: string,
+    accountName: string
+  ): Promise<TOTPAccountMetadata | null> {
+    return this.prisma.tOTPAccount.findUnique({
+      where: { ownerDiscordUserId_accountName: { ownerDiscordUserId, accountName } },
+      select: {
+        id: true,
+        ownerDiscordUserId: true,
+        accountName: true,
+        issuer: true,
+        version: true,
+        createdAt: true,
+        updatedAt: true,
+      },
+    });
+  }
+
   async createLinkConsent(
     input: Omit<TOTPLinkConsent, 'id' | 'createdAt' | 'usedAt'>,
     tx?: Prisma.TransactionClient
@@ -656,6 +694,9 @@ export class PrismaTOTPRepository implements TOTPRepository {
         accountId: input.accountId,
         resourceId: input.resourceId,
         ownerDiscordUserId: input.ownerDiscordUserId,
+        initiatingResourceOwnerId: input.initiatingResourceOwnerId,
+        accountVersion: input.accountVersion,
+        linkPolicyVersion: input.linkPolicyVersion,
         delegationPolicy: input.delegationPolicy as any,
         expiresAt: input.expiresAt,
       },
@@ -665,6 +706,9 @@ export class PrismaTOTPRepository implements TOTPRepository {
       accountId: created.accountId,
       resourceId: created.resourceId,
       ownerDiscordUserId: created.ownerDiscordUserId,
+      initiatingResourceOwnerId: created.initiatingResourceOwnerId,
+      accountVersion: created.accountVersion,
+      linkPolicyVersion: created.linkPolicyVersion,
       delegationPolicy: created.delegationPolicy as any,
       expiresAt: created.expiresAt,
       usedAt: created.usedAt,
@@ -672,8 +716,11 @@ export class PrismaTOTPRepository implements TOTPRepository {
     };
   }
 
-  async findLinkConsentById(id: string): Promise<TOTPLinkConsent | null> {
-    const found = await this.prisma.tOTPLinkConsent.findUnique({
+  async findLinkConsentById(
+    id: string,
+    tx?: Prisma.TransactionClient
+  ): Promise<TOTPLinkConsent | null> {
+    const found = await (tx ?? this.prisma).tOTPLinkConsent.findUnique({
       where: { id },
     });
     if (!found) return null;
@@ -682,6 +729,9 @@ export class PrismaTOTPRepository implements TOTPRepository {
       accountId: found.accountId,
       resourceId: found.resourceId,
       ownerDiscordUserId: found.ownerDiscordUserId,
+      initiatingResourceOwnerId: found.initiatingResourceOwnerId,
+      accountVersion: found.accountVersion,
+      linkPolicyVersion: found.linkPolicyVersion,
       delegationPolicy: found.delegationPolicy as any,
       expiresAt: found.expiresAt,
       usedAt: found.usedAt,
@@ -709,9 +759,12 @@ export class PrismaTOTPRepository implements TOTPRepository {
         totpAccountId: input.totpAccountId,
         operation: input.operation,
         requesterId: input.requesterId,
+        ownerDiscordUserId: input.ownerDiscordUserId,
         authFamily: input.authFamily,
+        audience: input.audience,
         accountVersion: input.accountVersion,
         linkVersion: input.linkVersion,
+        maxGrantExpiresAt: input.maxGrantExpiresAt,
         expiresAt: input.expiresAt,
       },
     });
@@ -721,9 +774,12 @@ export class PrismaTOTPRepository implements TOTPRepository {
       totpAccountId: created.totpAccountId,
       operation: created.operation,
       requesterId: created.requesterId,
+      ownerDiscordUserId: created.ownerDiscordUserId,
       authFamily: created.authFamily,
+      audience: created.audience,
       accountVersion: created.accountVersion,
       linkVersion: created.linkVersion,
+      maxGrantExpiresAt: created.maxGrantExpiresAt,
       expiresAt: created.expiresAt,
       usedAt: created.usedAt,
       createdAt: created.createdAt,
@@ -741,54 +797,39 @@ export class PrismaTOTPRepository implements TOTPRepository {
       totpAccountId: found.totpAccountId,
       operation: found.operation,
       requesterId: found.requesterId,
+      ownerDiscordUserId: found.ownerDiscordUserId,
       authFamily: found.authFamily,
+      audience: found.audience,
       accountVersion: found.accountVersion,
       linkVersion: found.linkVersion,
+      maxGrantExpiresAt: found.maxGrantExpiresAt,
       expiresAt: found.expiresAt,
       usedAt: found.usedAt,
       createdAt: found.createdAt,
     };
   }
 
-  async findActiveDelegationConsent(
-    resourceId: string,
-    requesterId: string,
-    operation: string
-  ): Promise<TOTPDelegationConsent | null> {
-    const now = new Date();
-    const found = await this.prisma.tOTPDelegationConsent.findFirst({
-      where: {
-        resourceId,
-        requesterId,
-        operation,
-        usedAt: null,
-        expiresAt: { gt: now },
-      },
-      orderBy: {
-        createdAt: 'desc',
-      },
-    });
-    return found
-      ? {
-          id: found.id,
-          resourceId: found.resourceId,
-          totpAccountId: found.totpAccountId,
-          operation: found.operation,
-          requesterId: found.requesterId,
-          authFamily: found.authFamily,
-          accountVersion: found.accountVersion,
-          linkVersion: found.linkVersion,
-          expiresAt: found.expiresAt,
-          usedAt: found.usedAt,
-          createdAt: found.createdAt,
-        }
-      : null;
-  }
-
-  async useDelegationConsent(id: string, tx?: Prisma.TransactionClient): Promise<boolean> {
+  async consumeDelegationConsent(
+    expected: Parameters<TOTPRepository['consumeDelegationConsent']>[0],
+    tx?: Prisma.TransactionClient
+  ): Promise<boolean> {
     const client = tx || this.prisma;
     const result = await client.tOTPDelegationConsent.updateMany({
-      where: { id, usedAt: null, expiresAt: { gt: new Date() } },
+      where: {
+        id: expected.id,
+        resourceId: expected.resourceId,
+        totpAccountId: expected.totpAccountId,
+        operation: expected.operation,
+        requesterId: expected.requesterId,
+        ownerDiscordUserId: expected.ownerDiscordUserId,
+        authFamily: expected.authFamily,
+        audience: expected.audience,
+        accountVersion: expected.accountVersion,
+        linkVersion: expected.linkVersion,
+        usedAt: null,
+        expiresAt: { gt: new Date() },
+        maxGrantExpiresAt: { gte: expected.grantExpiresAt },
+      },
       data: { usedAt: new Date() },
     });
     return result.count === 1;
@@ -800,9 +841,12 @@ export class PrismaTOTPRepository implements TOTPRepository {
     totpAccountId: string;
     operation: string;
     requesterId: string;
+    ownerDiscordUserId: string;
     authFamily: string;
+    audience: string;
     accountVersion: string;
     linkVersion: string;
+    maxGrantExpiresAt: Date;
     expiresAt: Date;
     usedAt: Date | null;
     createdAt: Date;

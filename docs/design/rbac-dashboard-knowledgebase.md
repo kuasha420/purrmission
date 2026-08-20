@@ -11,9 +11,9 @@
 - Baseline audited revision: `e4269cea4d6f` (`master`, 2026-07-26)
 - Current remediation checkpoint: #117, #118, and #119 are Verified and closed. #119 completed
   through PR #147 at merge `b4139782c61021fa6ec8ec3d6a4b8a952602b8de`; clean-master build,
-  lint, full tests, and fresh/populated/interrupted migration rehearsals pass. Wave 3 nodes #120
-  and #121 are unblocked and assigned for implementation.
-- Last progress update: 2026-08-20
+  lint, full tests, and fresh/populated/interrupted migration rehearsals pass. #120 is claimed and
+  implementing TOTP custody/consent; #121 is Ready and unassigned.
+- Last progress update: 2026-08-21
 - Applies to: Discord commands, the Fastify API, Pawthy, and the future
   `apps/purrmission-web`
 
@@ -24,18 +24,18 @@
 | 1    | #117      | Verified and closed at `a0144d46`; common and representative migration gates pass        |
 | 2    | #118      | Verified and closed at `4420664f`; common and populated/interrupted migration gates pass |
 | 2    | #119      | Verified and closed at `b4139782`; exact metadata/version and migration gates pass       |
-| 3    | #120/#121 | Unblocked and assigned; TOTP custody and credential lifecycle implementation active      |
+| 3    | #120/#121 | #120 claimed and active; #121 Ready and unassigned                                       |
 | 4-9  | #122-#130 | Blocked by the execution graph                                                           |
 
 Sections 3-5 remain the point-in-time audit record for `e4269cea4d6f`; they are not silently
 rewritten as remediation lands. The ledger above and the execution graph are the live progress
 record until #126 performs a fresh holistic reassessment and updates this knowledgebase after Go.
 
-The temporary #117 stabilization state is deliberately fail-closed: approval decisions do not
-mint provisional grants, and incomplete TOTP link/delegation consent creation and delegated
-non-owner reveal remain unavailable until #120/#122 deliver their owned contracts. Direct Resource
-Owner TOTP reveal and authorized unlink remain available. This operational restriction is not a
-change to the target policy below.
+The temporary stabilization remains deliberately fail-closed: approval decisions do not mint
+provisional grants and delegated non-owner TOTP reveal remains unavailable until #122 consumes
+#120's exact delegation-consent contract during matching grant issuance. #120's branch enables
+custody-bound linking and delegation-consent input only; neither record grants reveal authority.
+Direct Resource Owner TOTP reveal and authorized unlink remain available.
 
 ## 1. Purpose and normative language
 

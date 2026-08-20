@@ -407,8 +407,12 @@ describe('Operations Scripts', () => {
       applyMigrationsBeforeGuardianInvariant(databasePath, true);
       applySql(
         databasePath,
-        `INSERT INTO "Resource" ("id", "name", "mode", "apiKey")
-           VALUES ('resource-1', 'Protected', 'ONE_OF_N', 'key');
+        `INSERT INTO "TOTPAccount"
+           ("id", "ownerDiscordUserId", "accountName", "secret", "shared", "createdAt", "updatedAt")
+           VALUES ('legacy-shared-totp', 'seed-owner', 'Legacy shared', 'encrypted-seed', 1,
+                   '2026-07-01T00:00:00Z', '2026-07-01T00:00:00Z');
+         INSERT INTO "Resource" ("id", "name", "mode", "apiKey", "totpAccountId")
+           VALUES ('resource-1', 'Protected', 'ONE_OF_N', 'key', 'legacy-shared-totp');
          INSERT INTO "Project" ("id", "name", "ownerId", "updatedAt")
            VALUES ('project-1', 'Project', 'canonical-owner', '2026-07-01T00:00:00Z');
          INSERT INTO "Environment" ("id", "name", "slug", "projectId", "updatedAt", "resourceId")
@@ -448,6 +452,21 @@ describe('Operations Scripts', () => {
         'legacy-policy-project-1',
         'legacy-resource-resource-1',
       ]);
+      const custodyState = execFileSync(
+        'sqlite3',
+        [
+          '-noheader',
+          databasePath,
+          `SELECT COUNT(*) FROM "TOTPAccount" WHERE "id" = 'legacy-shared-totp';
+           SELECT COALESCE("totpAccountId", 'UNLINKED') FROM "Resource" WHERE "id" = 'resource-1';
+           SELECT COUNT(*) FROM "TOTPLinkConsent";
+           SELECT COUNT(*) FROM "TOTPDelegationConsent";`,
+        ],
+        { encoding: 'utf8' }
+      )
+        .trim()
+        .split('\n');
+      assert.deepEqual(custodyState, ['1', 'UNLINKED', '0', '0']);
     });
 
     it('resumes safely after interruption leaves the complete pre-migration stage', async () => {

@@ -150,31 +150,37 @@ model TOTPAccount {
 }
 
 model TOTPLinkConsent {
-  id                 String    @id @default(uuid())
-  accountId          String
-  resourceId         String
-  ownerDiscordUserId String
-  delegationPolicy   Json
-  expiresAt          DateTime
-  usedAt             DateTime?
-  createdAt          DateTime  @default(now())
+  id                        String    @id @default(uuid())
+  accountId                 String
+  resourceId                String
+  ownerDiscordUserId        String
+  initiatingResourceOwnerId String
+  accountVersion            String
+  linkPolicyVersion         String
+  delegationPolicy          Json
+  expiresAt                 DateTime
+  usedAt                    DateTime?
+  createdAt                 DateTime  @default(now())
 
   @@index([accountId])
   @@index([resourceId])
 }
 
 model TOTPDelegationConsent {
-  id             String    @id @default(uuid())
-  resourceId     String
-  totpAccountId  String
-  operation      String
-  requesterId    String
-  authFamily     String
-  accountVersion String
-  linkVersion    String
-  expiresAt      DateTime
-  usedAt         DateTime?
-  createdAt      DateTime  @default(now())
+  id                 String    @id @default(uuid())
+  resourceId         String
+  totpAccountId      String
+  operation          String
+  requesterId        String
+  ownerDiscordUserId String
+  authFamily         String
+  audience           String
+  accountVersion     String
+  linkVersion        String
+  maxGrantExpiresAt  DateTime
+  expiresAt          DateTime
+  usedAt             DateTime?
+  createdAt          DateTime  @default(now())
 
   @@index([resourceId])
   @@index([totpAccountId])

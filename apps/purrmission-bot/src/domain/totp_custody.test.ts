@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import crypto from 'node:crypto';
 import { beforeEach, describe, it } from 'node:test';
 import { AccessDeniedError } from './auth.js';
 import { AuditService } from './audit.js';
@@ -7,6 +8,7 @@ import { createDiscordPrincipal } from './principal.js';
 import { ProjectService } from './project.js';
 import { createInMemoryRepositories } from './repositories.mock.js';
 import { ApprovalService, ResourceService, type ServiceDependencies } from './services.js';
+import { parseTOTPDelegationPolicy } from './totp_custody.js';
 
 describe('TOTP custody boundaries', () => {
   let repos: ReturnType<typeof createInMemoryRepositories>;
@@ -20,6 +22,24 @@ describe('TOTP custody boundaries', () => {
     deps.approval = new ApprovalService(deps);
     resourceService = new ResourceService(deps);
     projectService = new ProjectService(repos.projects, resourceService, audit, repos.transaction);
+  });
+
+  it('defaults malformed, incomplete, and unrecognized delegation policy to deny', () => {
+    for (const policy of [
+      null,
+      {},
+      { allowDelegation: true },
+      {
+        allowDelegation: true,
+        allowedOperations: ['totp.code.read'],
+        allowedAuthFamilies: ['DISCORD'],
+        allowedAudiences: ['discord'],
+        maxGrantTtlSeconds: 60,
+        futureAuthority: true,
+      },
+    ]) {
+      assert.equal(parseTOTPDelegationPolicy(policy).allowDelegation, false);
+    }
   });
 
   async function createOwnedResource(ownerId: string): Promise<string> {
@@ -45,61 +65,265 @@ describe('TOTP custody boundaries', () => {
       backupKey: 'RECOVERY',
     });
     assert.equal(
-      (await repos.totp.findByOwnerAndName('seed-owner', account.accountName))?.id,
+      (await repos.totp.findMetadataByOwnerAndName('seed-owner', account.accountName))?.id,
       account.id
     );
-    assert.equal(await repos.totp.findByOwnerAndName('stranger', account.accountName), null);
-    assert.equal(await resourceService.revealTOTPRecoveryKey(account.id, 'seed-owner'), 'RECOVERY');
+    assert.equal(
+      await repos.totp.findMetadataByOwnerAndName('stranger', account.accountName),
+      null
+    );
+    assert.equal(
+      await resourceService.revealTOTPRecoveryKey(account.id, createDiscordPrincipal('seed-owner')),
+      'RECOVERY'
+    );
     await assert.rejects(
-      resourceService.revealTOTPRecoveryKey(account.id, 'stranger'),
+      resourceService.revealTOTPRecoveryKey(account.id, createDiscordPrincipal('stranger')),
       /Only the personal owner/
     );
   });
 
-  it('fails closed for link-consent creation and linking until seed-version custody binding lands', async () => {
+  it('links cross-owner custody only with an exact one-time seed-version consent', async () => {
     const resourceId = await createOwnedResource('resource-owner');
     const account = await repos.totp.create({
       ownerDiscordUserId: 'seed-owner',
       accountName: 'Seed',
       secret: 'JBSWY3DPEHPK3PXP',
     });
-    const oldConsent = await repos.totp.createLinkConsent({
-      accountId: account.id,
+    const consent = await resourceService.createTOTPLinkConsent(
+      account.id,
       resourceId,
-      ownerDiscordUserId: 'seed-owner',
-      delegationPolicy: {},
-      expiresAt: new Date(Date.now() + 60_000),
-    });
-    await repos.totp.update({ ...account, secret: 'KRSXG5DSNFXGOIDB' });
-
-    await assert.rejects(
-      resourceService.createTOTPLinkConsent(account.id, resourceId, 'seed-owner', {}),
-      /#120/
+      createDiscordPrincipal('seed-owner'),
+      'resource-owner',
+      {}
     );
+    await resourceService.linkTOTPAccount(
+      resourceId,
+      account.id,
+      createDiscordPrincipal('resource-owner'),
+      consent.id
+    );
+    assert.ok((await repos.totp.findLinkConsentById(consent.id))?.usedAt);
+    assert.equal((await repos.resources.findById(resourceId))?.totpAccountId, account.id);
     await assert.rejects(
       resourceService.linkTOTPAccount(
         resourceId,
         account.id,
         createDiscordPrincipal('resource-owner'),
-        oldConsent.id
-      ),
-      /#120/
+        consent.id
+      )
     );
-    assert.equal((await repos.totp.findLinkConsentById(oldConsent.id))?.usedAt, null);
-    assert.equal((await repos.resources.findById(resourceId))?.totpAccountId, undefined);
   });
 
-  it('denies unauthenticated delegation-consent creation', async () => {
+  it('refuses link consent for a caller-supplied non-owner initiator', async () => {
+    const resourceId = await createOwnedResource('resource-owner');
+    const account = await repos.totp.create({
+      ownerDiscordUserId: 'seed-owner',
+      accountName: 'Bound initiator',
+      secret: 'JBSWY3DPEHPK3PXP',
+    });
+
+    await assert.rejects(
+      resourceService.createTOTPLinkConsent(
+        account.id,
+        resourceId,
+        createDiscordPrincipal('seed-owner'),
+        'not-the-resource-owner',
+        {}
+      ),
+      /must name a current Resource or Project owner/
+    );
+  });
+
+  it('denies forged delegation-consent creation', async () => {
     await assert.rejects(
       resourceService.createTOTPDelegationConsent(
-        'resource-id',
-        'account-id',
-        'forged-requester',
-        'totp.code.read',
-        'forged-auth-family'
+        {
+          resourceId: 'resource-id',
+          requesterId: 'forged-requester',
+          operation: 'totp.code.read',
+          authFamily: 'DISCORD',
+          audience: 'discord',
+        },
+        createDiscordPrincipal('stranger')
       ),
-      /authenticated custody/
+      /No linked TOTP account/
     );
+  });
+
+  it('invalidates an unused link consent when the seed rotates', async () => {
+    const resourceId = await createOwnedResource('resource-owner');
+    const account = await repos.totp.create({
+      ownerDiscordUserId: 'seed-owner',
+      accountName: 'Rotating',
+      secret: 'JBSWY3DPEHPK3PXP',
+    });
+    const consent = await resourceService.createTOTPLinkConsent(
+      account.id,
+      resourceId,
+      createDiscordPrincipal('seed-owner'),
+      'resource-owner',
+      {}
+    );
+    await repos.totp.update({ ...account, secret: 'KRSXG5DSNFXGOIDB' });
+    await assert.rejects(
+      resourceService.linkTOTPAccount(
+        resourceId,
+        account.id,
+        createDiscordPrincipal('resource-owner'),
+        consent.id
+      ),
+      /stale, used, or does not match/
+    );
+    assert.equal((await repos.totp.findLinkConsentById(consent.id))?.usedAt, null);
+  });
+
+  it('allows exactly one concurrent link-consent claimant', async () => {
+    const resourceId = await createOwnedResource('resource-owner');
+    const account = await repos.totp.create({
+      ownerDiscordUserId: 'seed-owner',
+      accountName: 'One winner',
+      secret: 'JBSWY3DPEHPK3PXP',
+    });
+    const consent = await resourceService.createTOTPLinkConsent(
+      account.id,
+      resourceId,
+      createDiscordPrincipal('seed-owner'),
+      'resource-owner',
+      {}
+    );
+    const attempts = await Promise.allSettled([
+      resourceService.linkTOTPAccount(
+        resourceId,
+        account.id,
+        createDiscordPrincipal('resource-owner'),
+        consent.id
+      ),
+      resourceService.linkTOTPAccount(
+        resourceId,
+        account.id,
+        createDiscordPrincipal('resource-owner'),
+        consent.id
+      ),
+    ]);
+    assert.equal(attempts.filter(({ status }) => status === 'fulfilled').length, 1);
+    assert.equal(attempts.filter(({ status }) => status === 'rejected').length, 1);
+  });
+
+  it('creates exact short-lived delegation consent only under an allowlisted link policy', async () => {
+    const resourceId = await createOwnedResource('resource-owner');
+    const account = await repos.totp.create({
+      ownerDiscordUserId: 'seed-owner',
+      accountName: 'Delegable',
+      secret: 'JBSWY3DPEHPK3PXP',
+    });
+    const consent = await resourceService.createTOTPLinkConsent(
+      account.id,
+      resourceId,
+      createDiscordPrincipal('seed-owner'),
+      'resource-owner',
+      {
+        allowDelegation: true,
+        allowedOperations: ['totp.code.read'],
+        allowedAuthFamilies: ['DISCORD'],
+        allowedAudiences: ['discord-dashboard'],
+        maxGrantTtlSeconds: 120,
+      }
+    );
+    await resourceService.linkTOTPAccount(
+      resourceId,
+      account.id,
+      createDiscordPrincipal('resource-owner'),
+      consent.id
+    );
+    const delegated = await resourceService.createTOTPDelegationConsent(
+      {
+        resourceId,
+        requesterId: 'requester',
+        operation: 'totp.code.read',
+        authFamily: 'DISCORD',
+        audience: 'discord-dashboard',
+      },
+      createDiscordPrincipal('seed-owner')
+    );
+    assert.equal(delegated.ownerDiscordUserId, 'seed-owner');
+    assert.equal(delegated.audience, 'discord-dashboard');
+    assert.ok(delegated.maxGrantExpiresAt <= delegated.expiresAt);
+    assert.ok(delegated.maxGrantExpiresAt.getTime() - delegated.createdAt.getTime() <= 120_000);
+    await assert.rejects(
+      resourceService.createTOTPDelegationConsent(
+        {
+          resourceId,
+          requesterId: 'requester',
+          operation: 'totp.code.read',
+          authFamily: 'DISCORD',
+          audience: 'wrong-audience',
+        },
+        createDiscordPrincipal('seed-owner')
+      ),
+      /does not permit/
+    );
+    const claims = await Promise.all([
+      repos.totp.consumeDelegationConsent({
+        ...delegated,
+        grantExpiresAt: delegated.maxGrantExpiresAt,
+      }),
+      repos.totp.consumeDelegationConsent({
+        ...delegated,
+        grantExpiresAt: delegated.maxGrantExpiresAt,
+      }),
+    ]);
+    assert.deepEqual(claims.sort(), [false, true]);
+  });
+
+  it('gives Writer, Reader, Guardian, and Requester no direct code or link authority', async () => {
+    const resourceId = await createOwnedResource('resource-owner');
+    const environment = await repos.projects.findEnvironmentByResourceId(resourceId);
+    assert.ok(environment);
+    await repos.projects.addMember({
+      projectId: environment.projectId,
+      userId: 'writer',
+      role: 'WRITER',
+      addedBy: 'resource-owner',
+    });
+    await repos.projects.addMember({
+      projectId: environment.projectId,
+      userId: 'reader',
+      role: 'READER',
+      addedBy: 'resource-owner',
+    });
+    await repos.guardians.add({ resourceId, discordUserId: 'guardian', role: 'GUARDIAN' });
+    const account = await repos.totp.create({
+      ownerDiscordUserId: 'seed-owner',
+      accountName: 'Restricted',
+      secret: 'JBSWY3DPEHPK3PXP',
+    });
+    const linkConsent = await resourceService.createTOTPLinkConsent(
+      account.id,
+      resourceId,
+      createDiscordPrincipal('seed-owner'),
+      'resource-owner',
+      {}
+    );
+    await resourceService.linkTOTPAccount(
+      resourceId,
+      account.id,
+      createDiscordPrincipal('resource-owner'),
+      linkConsent.id
+    );
+    for (const subject of ['writer', 'reader', 'guardian', 'requester']) {
+      await assert.rejects(
+        resourceService.revealTOTPCode(resourceId, createDiscordPrincipal(subject)),
+        /deferred until request-bound/
+      );
+      await assert.rejects(
+        resourceService.linkTOTPAccount(
+          resourceId,
+          account.id,
+          createDiscordPrincipal(subject),
+          crypto.randomUUID()
+        )
+      );
+    }
   });
 
   it('allows a direct Resource owner to reveal an already-linked TOTP code', async () => {
@@ -110,9 +334,53 @@ describe('TOTP custody boundaries', () => {
       accountName: 'Existing linked seed',
       secret: 'JBSWY3DPEHPK3PXP',
     });
-    await repos.resources.update(resourceId, { totpAccountId: account.id, version: 'link-v1' });
+    const consent = await resourceService.createTOTPLinkConsent(
+      account.id,
+      resourceId,
+      createDiscordPrincipal(ownerId),
+      ownerId,
+      {}
+    );
+    await resourceService.linkTOTPAccount(
+      resourceId,
+      account.id,
+      createDiscordPrincipal(ownerId),
+      consent.id
+    );
 
-    assert.match(await resourceService.revealTOTPCode(resourceId, ownerId), /^\d{6}$/);
+    assert.match(
+      await resourceService.revealTOTPCode(resourceId, createDiscordPrincipal(ownerId)),
+      /^\d{6}$/
+    );
+  });
+
+  it('rejects a direct owner reveal after the consent-bound account version rotates', async () => {
+    const ownerId = 'resource-owner';
+    const resourceId = await createOwnedResource(ownerId);
+    const account = await repos.totp.create({
+      ownerDiscordUserId: ownerId,
+      accountName: 'Rotated linked seed',
+      secret: 'JBSWY3DPEHPK3PXP',
+    });
+    const consent = await resourceService.createTOTPLinkConsent(
+      account.id,
+      resourceId,
+      createDiscordPrincipal(ownerId),
+      ownerId,
+      {}
+    );
+    await resourceService.linkTOTPAccount(
+      resourceId,
+      account.id,
+      createDiscordPrincipal(ownerId),
+      consent.id
+    );
+    await repos.totp.update({ ...account, secret: 'KRSXG5DSNFXGOIDB' });
+
+    await assert.rejects(
+      resourceService.revealTOTPCode(resourceId, createDiscordPrincipal(ownerId)),
+      /link consent is stale or malformed/
+    );
   });
 
   it('rejects delegated reveal unconditionally even when generic grant and consent records exist', async () => {
@@ -122,10 +390,21 @@ describe('TOTP custody boundaries', () => {
       accountName: 'Existing linked seed',
       secret: 'JBSWY3DPEHPK3PXP',
     });
-    const resource = await repos.resources.update(resourceId, {
-      totpAccountId: account.id,
-      version: 'link-v1',
-    });
+    const linkConsent = await resourceService.createTOTPLinkConsent(
+      account.id,
+      resourceId,
+      createDiscordPrincipal('seed-owner'),
+      'resource-owner',
+      {}
+    );
+    await resourceService.linkTOTPAccount(
+      resourceId,
+      account.id,
+      createDiscordPrincipal('resource-owner'),
+      linkConsent.id
+    );
+    const resource = await repos.resources.findById(resourceId);
+    assert.ok(resource);
     const grant = await repos.approvalGrants.create({
       requestId: 'unrelated-request-a',
       resourceId,
@@ -144,9 +423,12 @@ describe('TOTP custody boundaries', () => {
       totpAccountId: account.id,
       operation: 'totp.code.read',
       requesterId: 'requester',
+      ownerDiscordUserId: 'seed-owner',
       authFamily: 'DISCORD',
+      audience: 'discord',
       accountVersion: account.version,
-      linkVersion: resource.version,
+      linkVersion: resource.totpLinkVersion,
+      maxGrantExpiresAt: new Date(Date.now() + 60_000),
       expiresAt: new Date(Date.now() + 60_000),
     });
 
@@ -173,7 +455,7 @@ describe('TOTP custody boundaries', () => {
       secret: 'JBSWY3DPEHPK3PXP',
     });
     await repos.resources.update(resourceId, { totpAccountId: account.id, version: 'link-v1' });
-    await resourceService.unlinkTOTPAccount(resourceId, ownerId);
+    await resourceService.unlinkTOTPAccount(resourceId, createDiscordPrincipal(ownerId));
     assert.equal((await repos.resources.findById(resourceId))?.totpAccountId, undefined);
   });
 

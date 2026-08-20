@@ -1,7 +1,7 @@
 import type { ChatInputCommandInteraction } from 'discord.js';
 import type { CommandContext } from '../../context.js';
-import { resolveUserAccessibleAccount } from '../helpers.js';
 import { createDiscordPrincipal } from '../../../../domain/principal.js';
+import { AccessDeniedError, ForbiddenError } from '../../../../domain/auth.js';
 
 export async function handleUpdate2FA(
   interaction: ChatInputCommandInteraction,
@@ -10,33 +10,23 @@ export async function handleUpdate2FA(
   const accountName = interaction.options.getString('account', true);
   const backupKey = interaction.options.getString('backup_key', true);
   const requesterId = interaction.user.id;
-  const { totp: totpRepository } = context.repositories;
-
-  const account = await resolveUserAccessibleAccount(totpRepository, requesterId, accountName);
-
-  if (!account) {
+  let account;
+  try {
+    account = await context.services.resource.updateTOTPBackupKey(
+      accountName,
+      backupKey,
+      createDiscordPrincipal(requesterId, interaction.id)
+    );
+  } catch (error) {
+    if (!(error instanceof AccessDeniedError || error instanceof ForbiddenError)) {
+      throw error;
+    }
     await interaction.reply({
-      content: '❌ Account not found.',
+      content: '❌ Account not found or not owned by you.',
       ephemeral: true,
     });
     return;
   }
-
-  if (account.ownerDiscordUserId !== requesterId) {
-    await interaction.reply({
-      content:
-        '❌ You are not the owner of this 2FA account. Only the owner can update the backup key.',
-      ephemeral: true,
-    });
-    return;
-  }
-
-  account.backupKey = backupKey;
-
-  await context.services.resource.updateTOTPAccount(
-    account,
-    createDiscordPrincipal(requesterId, interaction.id)
-  );
 
   await interaction.reply({
     content: [

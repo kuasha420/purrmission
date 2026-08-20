@@ -382,6 +382,30 @@ export function createHttpServer(deps: HttpServerDeps): FastifyInstance {
     totpAccountId: z.string().uuid(),
     consentId: z.string().uuid(),
   });
+  const TOTPLinkConsentSchema = z
+    .object({
+      resourceId: z.string().uuid(),
+      initiatingResourceOwnerId: z.string().min(1).max(128),
+      delegationPolicy: z
+        .object({
+          allowDelegation: z.boolean().optional(),
+          allowedOperations: z.array(z.literal('totp.code.read')).max(1).optional(),
+          allowedAuthFamilies: z.array(z.string().min(1).max(128)).max(8).optional(),
+          allowedAudiences: z.array(z.string().min(1).max(128)).max(8).optional(),
+          maxGrantTtlSeconds: z.number().int().min(1).max(300).optional(),
+        })
+        .strict()
+        .default({}),
+    })
+    .strict();
+  const TOTPDelegationConsentSchema = z
+    .object({
+      requesterId: z.string().min(1).max(128),
+      operation: z.literal('totp.code.read'),
+      authFamily: z.string().min(1).max(128),
+      audience: z.string().min(1).max(128),
+    })
+    .strict();
 
   // Authentication Hook
   async function authenticate(req: FastifyRequest, _rep: FastifyReply) {
@@ -674,6 +698,49 @@ export function createHttpServer(deps: HttpServerDeps): FastifyInstance {
     }
   );
 
+  server.post<{
+    Params: z.infer<typeof ResourceParamsSchema>;
+    Body: z.infer<typeof TOTPLinkConsentSchema>;
+  }>(
+    '/api/totp/:id/link-consents',
+    {
+      preHandler: [authenticate],
+      schema: { params: ResourceParamsSchema, body: TOTPLinkConsentSchema },
+    },
+    async (req, rep) => {
+      const principal = extractPrincipal(req, req.user.id);
+      const consent = await services.resource.createTOTPLinkConsent(
+        req.params.id,
+        req.body.resourceId,
+        principal,
+        req.body.initiatingResourceOwnerId,
+        req.body.delegationPolicy
+      );
+      rep.header('Cache-Control', 'no-store');
+      return rep.status(201).send(consent);
+    }
+  );
+
+  server.post<{
+    Params: z.infer<typeof ResourceParamsSchema>;
+    Body: z.infer<typeof TOTPDelegationConsentSchema>;
+  }>(
+    '/api/resources/:id/2fa/delegation-consents',
+    {
+      preHandler: [authenticate],
+      schema: { params: ResourceParamsSchema, body: TOTPDelegationConsentSchema },
+    },
+    async (req, rep) => {
+      const principal = extractPrincipal(req, req.user.id);
+      const consent = await services.resource.createTOTPDelegationConsent(
+        { resourceId: req.params.id, ...req.body },
+        principal
+      );
+      rep.header('Cache-Control', 'no-store');
+      return rep.status(201).send(consent);
+    }
+  );
+
   server.get<{ Params: z.infer<typeof FieldParamsSchema> }>(
     '/api/resources/:id/fields/:name',
     {
@@ -777,6 +844,20 @@ export function createHttpServer(deps: HttpServerDeps): FastifyInstance {
   );
 
   server.post<{ Params: z.infer<typeof ResourceParamsSchema> }>(
+    '/api/totp/:id/code',
+    {
+      preHandler: [authenticate],
+      schema: { params: ResourceParamsSchema },
+    },
+    async (req, rep) => {
+      const principal = extractPrincipal(req, req.user.id);
+      const code = await services.resource.revealPersonalTOTPCode(req.params.id, principal);
+      rep.header('Cache-Control', 'no-store');
+      return { code };
+    }
+  );
+
+  server.post<{ Params: z.infer<typeof ResourceParamsSchema> }>(
     '/api/totp/:id/recovery',
     {
       preHandler: [authenticate],
@@ -786,9 +867,8 @@ export function createHttpServer(deps: HttpServerDeps): FastifyInstance {
     },
     async (req, rep) => {
       const { id } = req.params; // TOTP Account ID
-      const userId = req.user.id;
-
-      const recoveryKey = await services.resource.revealTOTPRecoveryKey(id, userId);
+      const principal = extractPrincipal(req, req.user.id);
+      const recoveryKey = await services.resource.revealTOTPRecoveryKey(id, principal);
       rep.header('Cache-Control', 'no-store');
       return { recoveryKey };
     }

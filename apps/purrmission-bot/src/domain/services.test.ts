@@ -211,8 +211,13 @@ describe('ResourceService', () => {
   describe('linkTOTPAccount', () => {
     it('fails closed before reading or mutating repositories', async () => {
       await assert.rejects(
-        resourceService.linkTOTPAccount(resourceId, 'totp-1', ownerId, 'consent-1'),
-        /deferred.*#120/i
+        resourceService.linkTOTPAccount(
+          resourceId,
+          'totp-1',
+          createDiscordPrincipal(ownerId),
+          'consent-1'
+        ),
+        /Only Resource Owner can manage TOTP link/i
       );
     });
   });

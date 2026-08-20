@@ -66,7 +66,10 @@ type SafeAuditPayload = Partial<
     | 'backupKeyConfigured'
     | 'fieldName'
     | 'reason'
-    | 'priorDigest',
+    | 'priorDigest'
+    | 'delegationEnabled'
+    | 'authFamily'
+    | 'audience',
     SafePayloadValue
   >
 >;
@@ -103,10 +106,13 @@ export const AUDIT_EVENT_CATALOG = {
   SECRET_REVEAL: 'SECRET_LIFECYCLE',
   SECRET_REVEAL_DENIED: 'AUTHORIZATION',
   TOTP_LINK: 'TOTP_LIFECYCLE',
+  TOTP_LINK_CONSENT_CREATE: 'TOTP_LIFECYCLE',
+  TOTP_DELEGATION_CONSENT_CREATE: 'TOTP_LIFECYCLE',
   TOTP_UNLINK: 'TOTP_LIFECYCLE',
   TOTP_ACCOUNT_CREATE: 'TOTP_LIFECYCLE',
   TOTP_ACCOUNT_UPDATE: 'TOTP_LIFECYCLE',
   TOTP_CODE_REVEAL: 'TOTP_LIFECYCLE',
+  TOTP_PERSONAL_CODE_REVEAL: 'TOTP_LIFECYCLE',
   TOTP_RECOVERY_REVEAL: 'TOTP_LIFECYCLE',
   TOTP_ACCESS_THROTTLED: 'AUTHORIZATION',
   TOTP_REVEAL_DENIED: 'AUTHORIZATION',
@@ -160,10 +166,13 @@ const PAYLOAD_FIELDS_BY_EVENT = {
   SECRET_REVEAL: keys('fieldName', 'projection'),
   SECRET_REVEAL_DENIED: keys('fieldName', 'reason'),
   TOTP_LINK: keys('totpAccountId', 'consentId'),
+  TOTP_LINK_CONSENT_CREATE: keys('delegationEnabled'),
+  TOTP_DELEGATION_CONSENT_CREATE: keys('action', 'authFamily', 'audience'),
   TOTP_UNLINK: keys('totpAccountId'),
   TOTP_ACCOUNT_CREATE: keys('accountName', 'issuerPresent'),
   TOTP_ACCOUNT_UPDATE: keys('accountName', 'backupKeyConfigured'),
   TOTP_CODE_REVEAL: keys('totpAccountId'),
+  TOTP_PERSONAL_CODE_REVEAL: keys('totpAccountId'),
   TOTP_RECOVERY_REVEAL: keys('totpAccountId'),
   TOTP_ACCESS_THROTTLED: keys('accountName', 'reason'),
   TOTP_REVEAL_DENIED: keys('reason'),

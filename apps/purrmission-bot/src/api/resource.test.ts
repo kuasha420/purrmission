@@ -42,7 +42,7 @@ describe('Resource API', () => {
       digest: computeKeyedDigest(validToken, 'PAWTHY_TOKEN'),
       prefix: 'valid',
       scopes:
-        'resource.view,secret.metadata.read,secret.value.read,secret.write,secret.delete,totp.code.read,totp.link.manage',
+        'resource.view,secret.metadata.read,secret.value.read,secret.write,secret.delete,totp.code.read,totp.recovery.read,totp.link.manage,totp.account.manage',
       audience: 'api',
       expiresAt: new Date(Date.now() + 3600000),
       revokedAt: null,
@@ -136,7 +136,7 @@ describe('Resource API', () => {
     assert.strictEqual(check, null);
   });
 
-  it('should fail closed for provisional 2FA linking', async () => {
+  it('creates and consumes custody-bound link consent', async () => {
     // Create TOTP Account
     const account = await repositories.totp.create({
       ownerDiscordUserId: userId,
@@ -144,13 +144,15 @@ describe('Resource API', () => {
       secret: 'JBSWY3DPEHPK3PXP', // Valid base32
     });
 
-    const consent = await repositories.totp.createLinkConsent({
-      accountId: account.id,
-      resourceId,
-      ownerDiscordUserId: userId,
-      delegationPolicy: {},
-      expiresAt: new Date(Date.now() + 60_000),
+    const consentRes = await server.inject({
+      method: 'POST',
+      url: `/api/totp/${account.id}/link-consents`,
+      headers: { Authorization: `Bearer ${validToken}` },
+      payload: { resourceId, initiatingResourceOwnerId: userId, delegationPolicy: {} },
     });
+    assert.strictEqual(consentRes.statusCode, 201);
+    assert.equal(consentRes.headers['cache-control'], 'no-store');
+    const consent = consentRes.json();
 
     // Link
     const linkRes = await server.inject({
@@ -159,9 +161,35 @@ describe('Resource API', () => {
       headers: { Authorization: `Bearer ${validToken}` },
       payload: { totpAccountId: account.id, consentId: consent.id },
     });
-    assert.strictEqual(linkRes.statusCode, 403);
-    assert.equal((await repositories.totp.findLinkConsentById(consent.id))?.usedAt, null);
-    assert.equal((await repositories.resources.findById(resourceId))?.totpAccountId, undefined);
+    assert.strictEqual(linkRes.statusCode, 200);
+    assert.ok((await repositories.totp.findLinkConsentById(consent.id))?.usedAt);
+    assert.equal((await repositories.resources.findById(resourceId))?.totpAccountId, account.id);
+    const codeRes = await server.inject({
+      method: 'POST',
+      url: `/api/resources/${resourceId}/2fa/code`,
+      headers: { Authorization: `Bearer ${validToken}` },
+    });
+    assert.equal(codeRes.statusCode, 200);
+    assert.equal(codeRes.headers['cache-control'], 'no-store');
+    assert.match(codeRes.json().code, /^\d{6}$/);
+  });
+
+  it('reveals personal code and recovery only through no-store POST routes', async () => {
+    const account = await repositories.totp.create({
+      ownerDiscordUserId: userId,
+      accountName: 'Personal',
+      secret: 'JBSWY3DPEHPK3PXP',
+      backupKey: 'RECOVERY-ONLY-OWNER',
+    });
+    for (const suffix of ['code', 'recovery']) {
+      const response = await server.inject({
+        method: 'POST',
+        url: `/api/totp/${account.id}/${suffix}`,
+        headers: { Authorization: `Bearer ${validToken}` },
+      });
+      assert.equal(response.statusCode, 200);
+      assert.equal(response.headers['cache-control'], 'no-store');
+    }
   });
 
   it('should unlink 2FA', async () => {
@@ -184,8 +212,7 @@ describe('Resource API', () => {
     });
     assert.strictEqual(unlinkRes.statusCode, 204);
 
-    const check = await services.resource.getLinkedTOTPAccount(resourceId);
-    assert.strictEqual(check, null);
+    assert.strictEqual(await services.resource.hasLinkedTOTP(resourceId), false);
   });
 
   it('should deny access if the authenticated user has no Resource role', async () => {

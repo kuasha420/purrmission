@@ -2,7 +2,8 @@
 
 Purrmission is a Discord-based approval gate system. The **2FA / TOTP** module allows users to store TOTP secrets (like those for GitHub, AWS, Google) directly in Purrmission and retrieve time-based codes via Discord commands.
 
-This is particularly useful for **shared accounts** (e.g., `opensource@purrfecthq.com`), where multiple team members need access to the same 2FA codes without sharing a single physical device or passing QR codes around insecurely.
+Each account remains in the authenticated creator's personal custody. Team use is represented by
+an explicit Resource link and narrowly bound consent, never by a global visibility flag.
 
 WebAuthn/passkey support is not a TOTP variant and is not implemented in this
 module yet. The current design track for that work lives in
@@ -18,7 +19,6 @@ A `TOTPAccount` represents a stored 2FA credential.
 - **Owner**: The Discord user who created the account.
 - **Account Name**: A user-defined label (e.g., "GitHub", "AWS-Root").
 - **Secret**: The Base32 secret key used to generate codes. Stored encrypted at rest.
-- **Shared**: A boolean flag. If `true`, this account is visible to other users (current MVP: visible to everyone; future: ACLs).
 - **Backup Key**: An optional recovery code stored with the account (added via `update` command).
 
 ## Usage Examples
@@ -33,12 +33,12 @@ Most services provide an `otpauth://` URI when setting up 2FA. You can copy this
 
 When `mode:uri` is selected, submit the `otpauth://...` value through the Discord modal prompt.
 
-### 2. Add a Shared Account (Secret Mode)
+### 2. Add an Account (Secret Mode)
 
-If you only have the Base32 secret (e.g., `JBSWY3DPEHPK3PXP`), you can use secret mode. Use `shared:True` to make it accessible to the team.
+If you only have the Base32 secret (e.g., `JBSWY3DPEHPK3PXP`), use secret mode.
 
 ```
-/2fa add account:"Team AWS" mode:secret secret:JBSWY3DPEHPK3PXP shared:true
+/2fa add account:"Team AWS" mode:secret secret:JBSWY3DPEHPK3PXP
 ```
 
 ### 3. Retrieve a Code
@@ -67,17 +67,26 @@ See all accounts you have access to.
 
 ```
 /2fa list
-# Optional: include shared accounts
-/2fa list shared:true
 ```
 
 ## Related Resource Commands
 
 Resources can also reference stored 2FA accounts:
 
-- `/resource 2fa link resource-id:<id> account:"..."`
+- `/resource 2fa link resource-id:<id> account:<id> consent-id:<id>`
 - `/resource 2fa unlink resource-id:<id>`
 - `/resource 2fa get resource-id:<id>`
+
+Before linking, the authenticated account owner creates the one-time consent through
+`POST /api/totp/:accountId/link-consents`, naming the Resource, the initiating Resource Owner, and
+an optional fail-closed delegation policy. The returned consent ID is authority-bearing metadata:
+do not log or persist it in client storage. Code and recovery responses use POST and
+`Cache-Control: no-store`.
+
+The #120 migration intentionally unlinks every pre-consent Resource association and discards old
+incomplete consent rows. TOTP accounts and encrypted custody material remain intact, but operators
+must obtain a new account-owner consent before relinking. Complete the #105 offsite backup/restore
+rehearsal before applying this migration to production.
 
 ## WebAuthn and Passkey Roadmap
 
@@ -95,13 +104,15 @@ approvals, audit logs, and short-lived approval leases.
 ## Security Notes
 
 > [!WARNING]
-> **Shared 2FA Status**: TOTP support is useful today, but shared 2FA remains a
-> sensitive operational workflow. Treat shared credentials as high-value secrets.
+> **Delegated 2FA Status**: TOTP support is useful today, but delegated use is a
+> sensitive workflow. A link or consent record alone never authorizes code reveal.
 
 - **Encryption**: TOTP secrets and backup keys are encrypted at rest with the
   repository's AES-256-GCM encryption helper.
 - **Delivery**: Codes are delivered via Direct Message (DM). Ensure your Discord account is secure.
-- **Access Control**: Currently, `shared:True` accounts are visible to **all** users who can use the bot. Granular ACLs are coming soon.
+- **Access Control**: Account metadata is personal-custody scoped. Resource linking requires a
+  one-time consent bound to the account version, Resource, initiating owner, and link policy.
+- **Recovery**: Backup/recovery material is personal-owner-only and cannot be delegated.
 - **Passkeys**: WebAuthn/passkey credentials must not be treated as
   server-generated codes. See the design doc before adding implementation.
 

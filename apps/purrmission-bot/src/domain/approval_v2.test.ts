@@ -4,6 +4,7 @@ import { AccessDeniedError } from './auth.js';
 import { createDiscordPrincipal } from './principal.js';
 import { createInMemoryRepositories } from './repositories.mock.js';
 import { createServices } from './services.js';
+import { createTOTPLinkEnvelope, parseTOTPDelegationPolicy } from './totp_custody.js';
 
 describe('Approval decisions and provisional authority fail closed', () => {
   let repos: ReturnType<typeof createInMemoryRepositories>;
@@ -112,9 +113,19 @@ describe('Approval decisions and provisional authority fail closed', () => {
       accountName: 'Account B',
       secret: 'JBSWY3DPEHPK3PXP',
     });
+    const linkPolicyVersion = 'link-v1';
     const resource = await repos.resources.update('res-1', {
       totpAccountId: account.id,
-      version: 'link-v1',
+      totpLinkVersion: linkPolicyVersion,
+      totpDelegationEnvelope: createTOTPLinkEnvelope({
+        consentId: 'link-consent-b',
+        resourceId: 'res-1',
+        initiatingResourceOwnerId: 'resource-owner',
+        accountOwnerDiscordUserId: account.ownerDiscordUserId,
+        accountVersion: account.version,
+        linkPolicyVersion,
+        delegationPolicy: parseTOTPDelegationPolicy({}),
+      }),
     });
     const grantA = await repos.approvalGrants.create({
       requestId: 'request-a',
@@ -134,9 +145,12 @@ describe('Approval decisions and provisional authority fail closed', () => {
       totpAccountId: account.id,
       operation: 'totp.code.read',
       requesterId: 'user-1',
+      ownerDiscordUserId: 'seed-owner',
       authFamily: 'DISCORD',
+      audience: 'discord',
       accountVersion: account.version,
-      linkVersion: resource.version,
+      linkVersion: resource.totpLinkVersion,
+      maxGrantExpiresAt: new Date(Date.now() + 60_000),
       expiresAt: new Date(Date.now() + 60_000),
     });
 

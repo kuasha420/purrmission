@@ -18,6 +18,7 @@ import type { CommandContext } from './context.js';
 import type { TOTPAccount } from '../../domain/models.js';
 import type { TOTPRepository } from '../../domain/repositories.js';
 import type { AuditService } from '../../domain/audit.js';
+import { AccessDeniedError } from '../../domain/auth.js';
 import { rateLimiter } from '../../infra/rateLimit.js';
 
 interface ReplyOptions {
@@ -52,7 +53,9 @@ describe('twoFa command module', () => {
     create: ReturnType<typeof mock.fn>;
     findByOwnerDiscordUserId: ReturnType<typeof mock.fn>;
     findMetadataByOwnerDiscordUserId: ReturnType<typeof mock.fn>;
+    findMetadataByOwnerAndName: ReturnType<typeof mock.fn>;
     findByOwnerAndName: ReturnType<typeof mock.fn>;
+    updateBackupKey: ReturnType<typeof mock.fn>;
     update: ReturnType<typeof mock.fn>;
   };
   let mockAuditService: {
@@ -85,7 +88,9 @@ describe('twoFa command module', () => {
       ),
       findByOwnerDiscordUserId: mock.fn(async (_userId: string) => []),
       findMetadataByOwnerDiscordUserId: mock.fn(async (_userId: string) => []),
+      findMetadataByOwnerAndName: mock.fn(async (_userId: string, _name: string) => null),
       findByOwnerAndName: mock.fn(async (_userId: string, _name: string) => null),
+      updateBackupKey: mock.fn(async (_id: string, _backupKey: string) => null),
       update: mock.fn(async (account: TOTPAccount) => account),
     };
 
@@ -106,6 +111,20 @@ describe('twoFa command module', () => {
           updateTOTPAccount: mock.fn(async (account: TOTPAccount) =>
             mockTotpRepository.update(account)
           ),
+          updateTOTPBackupKey: mock.fn(async (accountName: string, backupKey: string) => {
+            const account = await mockTotpRepository.findByOwnerAndName('user-123', accountName);
+            if (!account) throw new AccessDeniedError('not found');
+            await mockTotpRepository.updateBackupKey(account.id, backupKey);
+            return account;
+          }),
+          revealTOTPRecoveryKey: mock.fn(async (accountId: string) => {
+            const account = await mockTotpRepository.findByOwnerAndName('user-123', 'Google');
+            if (!account || account.id !== accountId || !account.backupKey) {
+              throw new Error('No recovery key/backup key configured for this account.');
+            }
+            return account.backupKey;
+          }),
+          revealPersonalTOTPCode: mock.fn(async () => '123456'),
         },
       } as unknown as CommandContext['services'],
     };
@@ -385,6 +404,7 @@ describe('twoFa command module', () => {
         updatedAt: new Date(),
       };
       mockTotpRepository.findByOwnerAndName = mock.fn(async () => fakeAccount);
+      mockTotpRepository.findMetadataByOwnerAndName = mock.fn(async () => fakeAccount);
 
       await handleGet2FA(
         mockInteraction as unknown as Parameters<typeof handleGet2FA>[0],
@@ -414,6 +434,7 @@ describe('twoFa command module', () => {
         updatedAt: new Date(),
       };
       mockTotpRepository.findByOwnerAndName = mock.fn(async () => fakeAccount);
+      mockTotpRepository.findMetadataByOwnerAndName = mock.fn(async () => fakeAccount);
 
       await handleGet2FA(
         mockInteraction as unknown as Parameters<typeof handleGet2FA>[0],
@@ -446,6 +467,7 @@ describe('twoFa command module', () => {
         updatedAt: new Date(),
       };
       mockTotpRepository.findByOwnerAndName = mock.fn(async () => fakeAccount);
+      mockTotpRepository.findMetadataByOwnerAndName = mock.fn(async () => fakeAccount);
 
       await handleGet2FA(
         mockInteraction as unknown as Parameters<typeof handleGet2FA>[0],
@@ -467,7 +489,7 @@ describe('twoFa command module', () => {
         mockInteraction as unknown as Parameters<typeof handleUpdate2FA>[0],
         mockContext
       );
-      assert.equal(replyCalls[0].content, '❌ Account not found.');
+      assert.match(replyCalls[0].content, /not found or not owned/);
     });
 
     it('should return error if requester is not owner', async () => {
@@ -507,9 +529,29 @@ describe('twoFa command module', () => {
         mockInteraction as unknown as Parameters<typeof handleUpdate2FA>[0],
         mockContext
       );
-      assert.equal(mockTotpRepository.update.mock.callCount(), 1);
-      assert.equal(fakeAccount.backupKey, 'NEW-KEY-123');
+      assert.equal(mockTotpRepository.updateBackupKey.mock.callCount(), 1);
       assert.match(replyCalls[0].content, /Backup key updated successfully/);
+    });
+
+    it('should propagate unexpected update failures', async () => {
+      mockInteraction.options.getString = mock.fn((name: string) => {
+        if (name === 'account') return 'MyAccount';
+        if (name === 'backup_key') return 'NEW-KEY';
+        return null;
+      });
+      const operationalFailure = new Error('database unavailable');
+      mockContext.services.resource.updateTOTPBackupKey = mock.fn(async () => {
+        throw operationalFailure;
+      });
+
+      await assert.rejects(
+        handleUpdate2FA(
+          mockInteraction as unknown as Parameters<typeof handleUpdate2FA>[0],
+          mockContext
+        ),
+        operationalFailure
+      );
+      assert.equal(replyCalls.length, 0);
     });
   });
 

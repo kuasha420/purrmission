@@ -1,8 +1,8 @@
 import type { ChatInputCommandInteraction } from 'discord.js';
 import type { CommandContext } from '../../context.js';
-import { generateTOTPCode } from '../../../../domain/totp.js';
+import { createDiscordPrincipal } from '../../../../domain/principal.js';
 import { rateLimiter } from '../../../../infra/rateLimit.js';
-import { resolveUserAccessibleAccount, sendDmOrFallback } from '../helpers.js';
+import { sendDmOrFallback } from '../helpers.js';
 
 export async function handleGet2FA(
   interaction: ChatInputCommandInteraction,
@@ -44,7 +44,7 @@ export async function handleGet2FA(
   }
 
   // Resolve account: personal first, then shared
-  const account = await resolveUserAccessibleAccount(totpRepository, requesterId, accountName);
+  const account = await totpRepository.findMetadataByOwnerAndName(requesterId, accountName);
 
   if (!account) {
     await interaction.reply({
@@ -55,40 +55,29 @@ export async function handleGet2FA(
   }
 
   if (getBackup) {
-    if (!account.backupKey) {
-      await interaction.reply({
-        content: `❌ No backup key found for **${account.accountName}**. You can add one with \`/2fa update\`.`,
-        ephemeral: true,
-      });
-      return;
+    let recoveryKey: string;
+    try {
+      recoveryKey = await context.services.resource.revealTOTPRecoveryKey(
+        account.id,
+        createDiscordPrincipal(requesterId)
+      );
+    } catch (error) {
+      if (error instanceof Error && error.message.includes('No recovery key')) {
+        await interaction.reply({
+          content: `❌ No backup key found for **${account.accountName}**. You can add one with \`/2fa update\`.`,
+          ephemeral: true,
+        });
+        return;
+      }
+      throw error;
     }
-
-    await context.services.audit.log({
-      eventFamily: 'TOTP_LIFECYCLE',
-      eventType: 'TOTP_RECOVERY_REVEAL',
-      surface: 'DISCORD',
-      operation: 'totp.recovery.reveal',
-      outcomeCode: 'SUCCESS',
-      capability: 'totp.recovery.read',
-      decisionCode: 'ALLOW',
-      reasonCode: 'AUTHENTICATED_SUBJECT',
-      authoritySources: ['AUTHENTICATED_SUBJECT'],
-      targetType: 'TOTP_ACCOUNT',
-      targetId: account.id,
-      actorType: 'DISCORD_USER',
-      principalId: `discord-interaction:${interaction.id}`,
-      actorId: requesterId,
-      authKind: 'DISCORD',
-      correlationId: interaction.id,
-      payload: { totpAccountId: account.id },
-    });
 
     await sendDmOrFallback(
       interaction,
       [
         `🔐 Your backup key for **${account.accountName}**:`,
         '',
-        `\`${account.backupKey}\``,
+        `\`${recoveryKey}\``,
         '',
         '_Keep this key safe and do not share it._',
       ],
@@ -99,27 +88,10 @@ export async function handleGet2FA(
   }
 
   // Generate TOTP code
-  const code = generateTOTPCode(account);
-
-  await context.services.audit.log({
-    eventFamily: 'TOTP_LIFECYCLE',
-    eventType: 'TOTP_CODE_REVEAL',
-    surface: 'DISCORD',
-    operation: 'totp.code.reveal',
-    outcomeCode: 'SUCCESS',
-    capability: 'totp.code.read',
-    decisionCode: 'ALLOW',
-    reasonCode: 'AUTHENTICATED_SUBJECT',
-    authoritySources: ['AUTHENTICATED_SUBJECT'],
-    targetType: 'TOTP_ACCOUNT',
-    targetId: account.id,
-    actorType: 'DISCORD_USER',
-    principalId: `discord-interaction:${interaction.id}`,
-    actorId: requesterId,
-    authKind: 'DISCORD',
-    correlationId: interaction.id,
-    payload: { totpAccountId: account.id },
-  });
+  const code = await context.services.resource.revealPersonalTOTPCode(
+    account.id,
+    createDiscordPrincipal(requesterId)
+  );
 
   await sendDmOrFallback(
     interaction,
