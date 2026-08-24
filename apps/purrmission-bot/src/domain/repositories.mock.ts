@@ -207,6 +207,19 @@ export class InMemoryApprovalRequestRepository implements ApprovalRequestReposit
   private requests: Map<string, ApprovalRequest> = new Map();
 
   async create(input: CreateApprovalRequestInput): Promise<ApprovalRequest> {
+    if (input.idempotencyKey) {
+      for (const existing of this.requests.values()) {
+        if (
+          existing.requesterId === input.requesterId &&
+          existing.idempotencyKey === input.idempotencyKey
+        ) {
+          throw new DuplicateError(
+            `Unique constraint violation: (requesterId, idempotencyKey) already exists: (${input.requesterId}, ${input.idempotencyKey})`
+          );
+        }
+      }
+    }
+
     const request: ApprovalRequest = {
       ...input,
       id: input.id ?? crypto.randomUUID(),
@@ -299,12 +312,12 @@ export class InMemoryApprovalRequestRepository implements ApprovalRequestReposit
     requesterId: string,
     idempotencyKey: string
   ): Promise<ApprovalRequest | null> {
-    for (const req of this.requests.values()) {
-      if (req.requesterId === requesterId && req.idempotencyKey === idempotencyKey) {
-        return req;
-      }
-    }
-    return null;
+    const matches = Array.from(this.requests.values()).filter(
+      (req) => req.requesterId === requesterId && req.idempotencyKey === idempotencyKey
+    );
+    if (matches.length === 0) return null;
+    matches.sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
+    return matches[0];
   }
 
   async findPendingByResourceId(resourceId: string): Promise<ApprovalRequest[]> {
@@ -435,6 +448,8 @@ export class InMemoryApprovalRequestRepository implements ApprovalRequestReposit
     resourceId: string,
     requesterId: string,
     action: string,
+    authFamily: string,
+    audience: string,
     canonicalKeyDigest: string | null,
     targetKey: string | null
   ): Promise<ApprovalRequest | null> {
@@ -445,6 +460,8 @@ export class InMemoryApprovalRequestRepository implements ApprovalRequestReposit
           request.resourceId !== resourceId ||
           request.requesterId !== requesterId ||
           request.action !== action ||
+          request.authFamily !== authFamily ||
+          request.audience !== audience ||
           request.status !== 'PENDING' ||
           request.expiresAt <= now
         ) {

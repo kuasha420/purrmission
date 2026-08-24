@@ -116,11 +116,11 @@ model ApprovalRequest {
 
   resource Resource @relation(fields: [resourceId], references: [id], onDelete: Cascade)
 
+  @@unique([requesterId, idempotencyKey])
   @@index([resourceId])
   @@index([status])
   @@index([requesterId])
   @@index([expiresAt])
-  @@index([idempotencyKey])
   @@index([canonicalKeyDigest])
   @@index([targetType, targetId])
 }

@@ -80,11 +80,11 @@ FROM "ApprovalRequest";
 DROP TABLE "ApprovalRequest";
 ALTER TABLE "new_ApprovalRequest" RENAME TO "ApprovalRequest";
 
+CREATE UNIQUE INDEX "ApprovalRequest_requesterId_idempotencyKey_key" ON "ApprovalRequest"("requesterId", "idempotencyKey");
 CREATE INDEX "ApprovalRequest_resourceId_idx" ON "ApprovalRequest"("resourceId");
 CREATE INDEX "ApprovalRequest_status_idx" ON "ApprovalRequest"("status");
 CREATE INDEX "ApprovalRequest_requesterId_idx" ON "ApprovalRequest"("requesterId");
 CREATE INDEX "ApprovalRequest_expiresAt_idx" ON "ApprovalRequest"("expiresAt");
-CREATE INDEX "ApprovalRequest_idempotencyKey_idx" ON "ApprovalRequest"("idempotencyKey");
 CREATE INDEX "ApprovalRequest_canonicalKeyDigest_idx" ON "ApprovalRequest"("canonicalKeyDigest");
 CREATE INDEX "ApprovalRequest_targetType_targetId_idx" ON "ApprovalRequest"("targetType", "targetId");
 

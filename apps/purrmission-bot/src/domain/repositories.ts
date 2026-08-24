@@ -232,12 +232,14 @@ export interface ApprovalRequestRepository {
   ): Promise<ApprovalRequest | null>;
 
   /**
-   * Find a pending request by exact signature (canonicalKeyDigest or targetKey).
+   * Find a pending request by exact signature (authFamily, audience, canonicalKeyDigest or targetKey).
    */
   findPendingSignature(
     resourceId: string,
     requesterId: string,
     action: string,
+    authFamily: string,
+    audience: string,
     canonicalKeyDigest: string | null,
     targetKey: string | null,
     tx?: Prisma.TransactionClient
@@ -1770,6 +1772,9 @@ export class PrismaApprovalRequestRepository implements ApprovalRequestRepositor
         requesterId,
         idempotencyKey,
       },
+      orderBy: {
+        createdAt: 'desc',
+      },
     });
     return row ? this.mapPrismaToDomain(row) : null;
   }
@@ -1921,6 +1926,8 @@ export class PrismaApprovalRequestRepository implements ApprovalRequestRepositor
     resourceId: string,
     requesterId: string,
     action: string,
+    authFamily: string,
+    audience: string,
     canonicalKeyDigest: string | null,
     targetKey: string | null,
     tx?: Prisma.TransactionClient
@@ -1931,6 +1938,8 @@ export class PrismaApprovalRequestRepository implements ApprovalRequestRepositor
       resourceId,
       requesterId,
       action,
+      authFamily,
+      audience,
       status: 'PENDING',
       expiresAt: { gt: now },
     };

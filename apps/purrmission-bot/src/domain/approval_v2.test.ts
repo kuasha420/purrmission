@@ -576,5 +576,118 @@ describe('Approval Request V2, Immutable Grants, and Atomic Consumption (Issue #
       const winners = [res1, res2].filter((r) => r.success);
       assert.equal(winners.length, 1, 'Single TOTP delegation consent can only be consumed once');
     });
+
+    it('rejects TOTP delegation consent when authFamily or audience does not match request', async () => {
+      const requester = createDiscordPrincipal('user-1');
+      const custodyOwner = createDiscordPrincipal('custody-owner');
+
+      const req = await services.approval.createApprovalRequest({
+        resourceId: 'res-1',
+        principal: requester,
+        requesterId: 'user-1',
+        requesterType: 'DISCORD_USER',
+        authKind: 'DISCORD',
+        action: 'totp.code.read',
+      });
+      assert.ok(req.request);
+
+      // Consent created specifically for PAWTHY_CLI, but request is for DISCORD
+      const consent = await services.resource.createTOTPDelegationConsent(
+        {
+          resourceId: 'res-1',
+          requesterId: 'user-1',
+          operation: 'totp.code.read',
+          authFamily: 'PAWTHY_CLI',
+          audience: 'purrmission-bot',
+        },
+        custodyOwner
+      );
+
+      const decisionRes = await services.approval.recordDecision(
+        req.request.id,
+        'APPROVE',
+        createDiscordPrincipal('guardian-1'),
+        consent.id
+      );
+      assert.equal(decisionRes.success, false);
+      assert.match(decisionRes.error || '', /bindings do not match/);
+    });
+
+    it('deduplicates pending requests with same authFamily and audience, but separates different auth families', async () => {
+      const requester = createDiscordPrincipal('user-1');
+
+      const req1 = await services.approval.createApprovalRequest({
+        resourceId: 'res-1',
+        principal: requester,
+        requesterId: 'user-1',
+        requesterType: 'DISCORD_USER',
+        authKind: 'DISCORD',
+        action: 'secret.value.read',
+        targetKey: 'api_key',
+      });
+
+      // Same authFamily/audience returns existing pending
+      const req2 = await services.approval.createApprovalRequest({
+        resourceId: 'res-1',
+        principal: requester,
+        requesterId: 'user-1',
+        requesterType: 'DISCORD_USER',
+        authKind: 'DISCORD',
+        action: 'secret.value.read',
+        targetKey: 'api_key',
+      });
+      assert.equal(req1.request?.id, req2.request?.id);
+
+      // Distinct authFamily (e.g. PAWTHY_TOKEN) creates distinct request
+      const pawthyPrincipal = {
+        id: 'token-1',
+        type: 'PAWTHY_TOKEN' as const,
+        subjectId: 'user-1',
+        authKind: 'PAWTHY' as const,
+        authFamily: 'PAWTHY_CLI' as const,
+        audience: 'pawthy-cli',
+      };
+      const req3 = await services.approval.createApprovalRequest({
+        resourceId: 'res-1',
+        principal: pawthyPrincipal,
+        requesterId: 'user-1',
+        requesterType: 'DISCORD_USER',
+        authKind: 'PAWTHY',
+        action: 'secret.value.read',
+        targetKey: 'api_key',
+      });
+      assert.notEqual(req1.request?.id, req3.request?.id);
+    });
+
+    it('consistently produces the same payload digest regardless of constraint object key ordering', async () => {
+      const requester = createDiscordPrincipal('user-1');
+
+      const req1 = await services.approval.createApprovalRequest({
+        resourceId: 'res-1',
+        principal: requester,
+        requesterId: 'user-1',
+        requesterType: 'DISCORD_USER',
+        authKind: 'DISCORD',
+        action: 'secret.value.read',
+        targetKey: 'api_key',
+        idempotencyKey: 'idem-sort-test-1',
+        constraints: { z: 1, a: 2, m: { nestedB: true, nestedA: false } },
+      });
+
+      const req2 = await services.approval.createApprovalRequest({
+        resourceId: 'res-1',
+        principal: requester,
+        requesterId: 'user-1',
+        requesterType: 'DISCORD_USER',
+        authKind: 'DISCORD',
+        action: 'secret.value.read',
+        targetKey: 'api_key',
+        idempotencyKey: 'idem-sort-test-1',
+        constraints: { a: 2, m: { nestedA: false, nestedB: true }, z: 1 },
+      });
+
+      assert.equal(req1.request?.id, req2.request?.id);
+      assert.equal(req1.request?.payloadDigest, req2.request?.payloadDigest);
+    });
   });
 });

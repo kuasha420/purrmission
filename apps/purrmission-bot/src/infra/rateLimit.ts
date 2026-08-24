@@ -40,7 +40,7 @@ export class RateLimiter {
    * @param windowMs - Time window in milliseconds
    * @param maxRequests - Max requests allowed in the window
    */
-  constructor(windowMs: number = 60000, maxRequests: number = 100) {
+  constructor(windowMs: number = 60000, maxRequests: number = 10) {
     this.config = { windowMs, maxRequests };
 
     // Cleanup interval to remove stale buckets

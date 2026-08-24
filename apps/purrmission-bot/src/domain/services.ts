@@ -64,6 +64,25 @@ import {
 import { rateLimiter } from '../infra/rateLimit.js';
 
 /**
+ * Recursively canonicalize JSON values with sorted object keys.
+ */
+function canonicalJsonStringify(value: unknown): string {
+  if (value === null || typeof value !== 'object') {
+    return JSON.stringify(value);
+  }
+  if (value instanceof Date) {
+    return JSON.stringify(value.toISOString());
+  }
+  if (Array.isArray(value)) {
+    return `[${value.map((item) => canonicalJsonStringify(item)).join(',')}]`;
+  }
+  const entries = Object.entries(value as Record<string, unknown>).sort(([k1], [k2]) =>
+    k1.localeCompare(k2)
+  );
+  return `{${entries.map(([k, v]) => `${JSON.stringify(k)}:${canonicalJsonStringify(v)}`).join(',')}}`;
+}
+
+/**
  * Helper to compute canonical payload digest for idempotency.
  */
 function computeRequestPayloadDigest(fields: {
@@ -76,7 +95,7 @@ function computeRequestPayloadDigest(fields: {
   authFamily: string;
   audience: string;
 }): string {
-  const normalized = JSON.stringify({
+  const normalized = canonicalJsonStringify({
     resourceId: fields.resourceId,
     action: fields.action,
     targetKey: fields.targetKey,
@@ -279,6 +298,8 @@ export class ApprovalService {
       input.resourceId,
       requesterId,
       action,
+      authFamily,
+      audience,
       canonicalKeyDigest,
       targetKey
     );
@@ -436,6 +457,25 @@ export class ApprovalService {
         guardians,
       };
     } catch (err) {
+      if (idempotencyKey) {
+        const concurrentReq = await repositories.approvalRequests.findByIdempotencyKey(
+          requesterId,
+          idempotencyKey
+        );
+        if (concurrentReq) {
+          if (concurrentReq.payloadDigest === payloadDigest) {
+            return {
+              success: true,
+              request: concurrentReq,
+              resource,
+              guardians: await getEffectiveGuardians(repositories, input.resourceId),
+            };
+          }
+          throw new ConflictError(
+            'Idempotency key reuse with different request parameters is forbidden (409 Conflict).'
+          );
+        }
+      }
       logger.error('Failed to create approval request atomically', {
         resourceId: input.resourceId,
         error: err instanceof Error ? err.message : String(err),
@@ -619,6 +659,18 @@ export class ApprovalService {
                   );
                 }
 
+                if (
+                  consent.authFamily !== request.authFamily ||
+                  consent.audience !== request.audience ||
+                  consent.operation !== request.action ||
+                  consent.requesterId !== request.requesterId ||
+                  consent.resourceId !== request.resourceId
+                ) {
+                  throw new AccessDeniedError(
+                    'TOTP delegation consent bindings do not match the requested operation, auth family, audience, or subject.'
+                  );
+                }
+
                 grantExpiresAt = new Date(
                   Math.min(Date.now() + 5 * 60 * 1000, consent.maxGrantExpiresAt.getTime())
                 );
@@ -628,11 +680,11 @@ export class ApprovalService {
                     id: consent.id,
                     resourceId: request.resourceId,
                     totpAccountId: consent.totpAccountId,
-                    operation: consent.operation,
+                    operation: request.action,
                     requesterId: request.requesterId,
                     ownerDiscordUserId: consent.ownerDiscordUserId,
-                    authFamily: consent.authFamily,
-                    audience: consent.audience,
+                    authFamily: request.authFamily,
+                    audience: request.audience,
                     accountVersion: consent.accountVersion,
                     linkVersion: consent.linkVersion,
                     grantExpiresAt,
@@ -2859,8 +2911,16 @@ export class ResourceService {
           );
         });
         consumedGrantId = grantId;
-      } catch {
-        return null;
+      } catch (err) {
+        if (err instanceof AccessDeniedError || err instanceof ConflictError) {
+          return null;
+        }
+        logger.error('Failed to consume grant in revealField', {
+          error: err instanceof Error ? err.message : String(err),
+          resourceId,
+          fieldName: name,
+        });
+        throw err;
       }
     } else {
       await this.audit.log({
