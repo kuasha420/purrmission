@@ -54,6 +54,7 @@ import {
   OutboxRepository,
 } from './repositories.js';
 import { containsAuditSubject, type AuditScope } from './audit.js';
+import { DuplicateError } from './errors.js';
 import crypto from 'node:crypto';
 
 /**
