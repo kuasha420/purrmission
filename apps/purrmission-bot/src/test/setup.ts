@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 
 // Set up mock environment variables for tests if not already set
+process.env.NODE_ENV = process.env.NODE_ENV || 'test';
 process.env.DISCORD_BOT_TOKEN = process.env.DISCORD_BOT_TOKEN || 'mock';
 process.env.DISCORD_CLIENT_ID = process.env.DISCORD_CLIENT_ID || 'mock';
 process.env.DISCORD_GUILD_ID = process.env.DISCORD_GUILD_ID || 'mock';

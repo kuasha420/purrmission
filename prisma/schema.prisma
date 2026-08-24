@@ -278,22 +278,32 @@ model AuditCheckpoint {
 }
 
 model OutboxEvent {
-  id             String   @id @default(uuid())
-  schemaVersion  Int      @default(1)
+  id             String    @id @default(uuid())
+  schemaVersion  Int       @default(1)
   eventType      String
   resourceId     String?
   requestId      String?
+  destinationId  String?
+  recipientId    String?
+  deliveryId     String?
   correlationId  String
   causationId    String?
   integrityKeyId String
   integrityHash  String
   payload        Json // Redacted routing context / notifications; never secret material
-  status         String   @default("PENDING") // PENDING, PROCESSED, FAILED
-  attempts       Int      @default(0)
+  status         String    @default("PENDING") // PENDING, DELIVERY_IN_PROGRESS, DELIVERED_PENDING_AUDIT, PROCESSED, FAILED
+  attempts       Int       @default(0)
   lastErrorCode  String?
-  createdAt      DateTime @default(now())
-  updatedAt      DateTime @updatedAt
+  claimedAt      DateTime?
+  claimExpiresAt DateTime?
+  claimedBy      String?
+  nextRetryAt    DateTime?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
 
+  @@index([status, claimExpiresAt])
+  @@index([nextRetryAt])
+  @@index([deliveryId])
   @@index([status])
   @@index([resourceId])
   @@index([requestId])
@@ -411,16 +421,30 @@ model Credential {
   @@index([digest])
 }
 
+enum CallbackDestinationStatus {
+  PENDING_VERIFICATION
+  ACTIVE
+  DISABLED
+}
+
 model CallbackDestination {
-  id         String   @id @default(uuid())
-  resourceId String
-  url        String
-  secret     String
-  enabled    Boolean  @default(true)
-  createdAt  DateTime @default(now())
-  updatedAt  DateTime @updatedAt
+  id                             String                    @id @default(uuid())
+  resourceId                     String
+  projectId                      String?
+  name                           String?
+  url                            String
+  status                         CallbackDestinationStatus @default(PENDING_VERIFICATION)
+  keyId                          String                    @default("default")
+  encryptedSecret                String
+  verificationToken              String?
+  verificationChallengeExpiresAt DateTime?
+  verifiedAt                     DateTime?
+  createdAt                      DateTime                  @default(now())
+  updatedAt                      DateTime                  @updatedAt
 
   resource Resource @relation(fields: [resourceId], references: [id], onDelete: Cascade)
 
+  @@index([resourceId, status])
+  @@index([projectId, status])
   @@index([resourceId])
 }

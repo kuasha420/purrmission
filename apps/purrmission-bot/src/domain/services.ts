@@ -27,13 +27,21 @@ import {
   Capability,
   CapabilityContext,
   EvaluationResult,
+  CallbackDestinationMetadataProjection,
 } from './models.js';
 import type { Repositories } from './repositories.js';
 import { logger } from '../logging/logger.js';
 import { AuditService, buildOutboxEvent } from './audit.js';
 import { AuthService, AccessDeniedError, ForbiddenError } from './auth.js';
 import { ProjectService } from './project.js';
-import { ResourceNotFoundError, DuplicateError, ValidationError, ConflictError } from './errors.js';
+import {
+  ResourceNotFoundError,
+  DuplicateError,
+  ValidationError,
+  ConflictError,
+  NotFoundError,
+  DomainAuthorizationError,
+} from './errors.js';
 import {
   getEffectiveGuardians,
   isEffectiveGuardian,
@@ -42,6 +50,7 @@ import {
 } from './policy.js';
 import { createDiscordPrincipal, validatePrincipal } from './principal.js';
 import { generateTOTPCode } from './totp.js';
+import { encryptValue } from '../infra/crypto.js';
 import {
   computeAllKeyedDigestCandidates,
   computeKeyedDigestRecord,
@@ -401,44 +410,94 @@ export class ApprovalService {
           tx
         );
 
-        // Enqueue Outbox event to notify guardians deterministically
-        const delivery = buildOutboxEvent({
-          id: deterministicUUID(req.id + '_REQUEST_CREATED'),
-          eventType: 'REQUEST_CREATED',
-          resourceId: input.resourceId,
-          requestId: req.id,
-          causationId: req.id,
-          payload: {
-            requestId: req.id,
-            resourceId: input.resourceId,
-          },
-        });
-        await repositories.outbox.create(delivery, tx);
+        // Enqueue Outbox event to notify each guardian independently and deterministically
+        if (guardians.length > 0) {
+          for (const guardian of guardians) {
+            const deliveryId = deterministicUUID(req.id + '_GUARDIAN_' + guardian.discordUserId);
+            const delivery = buildOutboxEvent({
+              id: deliveryId,
+              deliveryId,
+              recipientId: guardian.discordUserId,
+              eventType: 'REQUEST_CREATED_GUARDIAN_NOTIFICATION',
+              resourceId: input.resourceId,
+              requestId: req.id,
+              causationId: req.id,
+              payload: {
+                requestId: req.id,
+                resourceId: input.resourceId,
+                recipientId: guardian.discordUserId,
+              },
+            });
+            await repositories.outbox.create(delivery, tx);
 
-        await this.audit.log(
-          {
-            eventFamily: 'DELIVERY',
-            eventType: 'DELIVERY_ENQUEUE',
-            surface: 'DOMAIN',
-            operation: 'delivery.guardian.enqueue',
-            outcomeCode: 'QUEUED',
-            decisionCode: 'ALLOW',
-            reasonCode: 'AUTHENTICATED_SUBJECT',
-            authoritySources: ['AUTHENTICATED_SUBJECT'],
-            targetType: 'DELIVERY',
-            targetId: delivery.id,
-            actorType: principal.type,
-            principalId: principal.id,
-            actorId: principal.subjectId,
-            authKind: principal.authKind,
+            await this.audit.log(
+              {
+                eventFamily: 'DELIVERY',
+                eventType: 'DELIVERY_ENQUEUE',
+                surface: 'DOMAIN',
+                operation: 'delivery.guardian.enqueue',
+                outcomeCode: 'QUEUED',
+                decisionCode: 'ALLOW',
+                reasonCode: 'AUTHENTICATED_SUBJECT',
+                authoritySources: ['AUTHENTICATED_SUBJECT'],
+                targetType: 'DELIVERY',
+                targetId: delivery.id,
+                actorType: principal.type,
+                principalId: principal.id,
+                actorId: principal.subjectId,
+                authKind: principal.authKind,
+                resourceId: input.resourceId,
+                requestId: req.id,
+                correlationId: delivery.correlationId,
+                causationId: delivery.causationId,
+                payload: {
+                  deliveryId: delivery.id,
+                  deliveryType: 'REQUEST_CREATED_GUARDIAN_NOTIFICATION',
+                  recipientId: guardian.discordUserId,
+                },
+              },
+              tx
+            );
+          }
+        } else {
+          const delivery = buildOutboxEvent({
+            id: deterministicUUID(req.id + '_REQUEST_CREATED'),
+            eventType: 'REQUEST_CREATED',
             resourceId: input.resourceId,
             requestId: req.id,
-            correlationId: delivery.correlationId,
-            causationId: delivery.causationId,
-            payload: { deliveryType: 'REQUEST_CREATED' },
-          },
-          tx
-        );
+            causationId: req.id,
+            payload: {
+              requestId: req.id,
+              resourceId: input.resourceId,
+            },
+          });
+          await repositories.outbox.create(delivery, tx);
+
+          await this.audit.log(
+            {
+              eventFamily: 'DELIVERY',
+              eventType: 'DELIVERY_ENQUEUE',
+              surface: 'DOMAIN',
+              operation: 'delivery.guardian.enqueue',
+              outcomeCode: 'QUEUED',
+              decisionCode: 'ALLOW',
+              reasonCode: 'AUTHENTICATED_SUBJECT',
+              authoritySources: ['AUTHENTICATED_SUBJECT'],
+              targetType: 'DELIVERY',
+              targetId: delivery.id,
+              actorType: principal.type,
+              principalId: principal.id,
+              actorId: principal.subjectId,
+              authKind: principal.authKind,
+              resourceId: input.resourceId,
+              requestId: req.id,
+              correlationId: delivery.correlationId,
+              causationId: delivery.causationId,
+              payload: { deliveryType: 'REQUEST_CREATED' },
+            },
+            tx
+          );
+        }
 
         return req;
       });
@@ -837,45 +896,107 @@ export class ApprovalService {
           tx
         );
 
-        // Always enqueue a callback delivery event deterministically
-        const delivery = buildOutboxEvent({
-          id: deterministicUUID(request.id + '_APPROVAL_CALLBACK'),
-          eventType: 'APPROVAL_CALLBACK',
-          resourceId: request.resourceId,
-          requestId: request.id,
-          causationId: request.id,
-          payload: {
-            requestId: request.id,
-            status: newStatus,
-            grantId: issuedGrant ? issuedGrant.id : null,
-          },
-        });
-        await repositories.outbox.create(delivery, tx);
-
-        await this.audit.log(
-          {
-            eventFamily: 'DELIVERY',
-            eventType: 'DELIVERY_ENQUEUE',
-            surface: 'DOMAIN',
-            operation: 'delivery.callback.enqueue',
-            outcomeCode: 'QUEUED',
-            decisionCode: 'ALLOW',
-            reasonCode: authorization.reasonCode,
-            authoritySources: authorization.authoritySources,
-            targetType: 'DELIVERY',
-            targetId: delivery.id,
-            actorType: principal.type,
-            principalId: principal.id,
-            actorId: principal.subjectId,
-            authKind: principal.authKind,
-            resourceId: request.resourceId,
-            requestId: request.id,
-            correlationId: delivery.correlationId,
-            causationId: delivery.causationId,
-            payload: { deliveryType: 'APPROVAL_CALLBACK' },
-          },
+        // Enqueue callback delivery events for all active registered destinations
+        const activeDestinations = await repositories.callbackDestinations.findByResourceId(
+          request.resourceId,
+          'ACTIVE',
           tx
         );
+
+        if (activeDestinations.length > 0) {
+          for (const dest of activeDestinations) {
+            const deliveryId = deterministicUUID(
+              request.id + '_CALLBACK_' + dest.id + '_' + newStatus
+            );
+            const delivery = buildOutboxEvent({
+              id: deliveryId,
+              deliveryId,
+              destinationId: dest.id,
+              eventType: 'APPROVAL_CALLBACK',
+              resourceId: request.resourceId,
+              requestId: request.id,
+              causationId: request.id,
+              payload: {
+                requestId: request.id,
+                destinationId: dest.id,
+                status: newStatus,
+                targetVersion: request.targetVersion,
+                grantId: issuedGrant ? issuedGrant.id : null,
+              },
+            });
+            await repositories.outbox.create(delivery, tx);
+
+            await this.audit.log(
+              {
+                eventFamily: 'DELIVERY',
+                eventType: 'DELIVERY_ENQUEUE',
+                surface: 'DOMAIN',
+                operation: 'delivery.callback.enqueue',
+                outcomeCode: 'QUEUED',
+                decisionCode: 'ALLOW',
+                reasonCode: authorization.reasonCode,
+                authoritySources: authorization.authoritySources,
+                targetType: 'DELIVERY',
+                targetId: delivery.id,
+                actorType: principal.type,
+                principalId: principal.id,
+                actorId: principal.subjectId,
+                authKind: principal.authKind,
+                resourceId: request.resourceId,
+                requestId: request.id,
+                correlationId: delivery.correlationId,
+                causationId: delivery.causationId,
+                payload: {
+                  deliveryId: delivery.id,
+                  destinationId: dest.id,
+                  deliveryType: 'APPROVAL_CALLBACK',
+                },
+              },
+              tx
+            );
+          }
+        } else {
+          // Enqueue single fallback callback delivery event deterministically
+          const delivery = buildOutboxEvent({
+            id: deterministicUUID(request.id + '_APPROVAL_CALLBACK'),
+            eventType: 'APPROVAL_CALLBACK',
+            resourceId: request.resourceId,
+            requestId: request.id,
+            causationId: request.id,
+            payload: {
+              requestId: request.id,
+              status: newStatus,
+              targetVersion: request.targetVersion,
+              grantId: issuedGrant ? issuedGrant.id : null,
+            },
+          });
+          await repositories.outbox.create(delivery, tx);
+
+          await this.audit.log(
+            {
+              eventFamily: 'DELIVERY',
+              eventType: 'DELIVERY_ENQUEUE',
+              surface: 'DOMAIN',
+              operation: 'delivery.callback.enqueue',
+              outcomeCode: 'QUEUED',
+              decisionCode: 'ALLOW',
+              reasonCode: authorization.reasonCode,
+              authoritySources: authorization.authoritySources,
+              targetType: 'DELIVERY',
+              targetId: delivery.id,
+              actorType: principal.type,
+              principalId: principal.id,
+              actorId: principal.subjectId,
+              authKind: principal.authKind,
+              resourceId: request.resourceId,
+              requestId: request.id,
+              correlationId: delivery.correlationId,
+              causationId: delivery.causationId,
+              payload: { deliveryType: 'APPROVAL_CALLBACK' },
+            },
+            tx
+          );
+        }
 
         const updReq: ApprovalRequest = {
           ...request,
@@ -3199,6 +3320,462 @@ export class ResourceService {
 }
 
 /**
+ * Service managing Owner-controlled callback destinations.
+ */
+export class CallbackDestinationService {
+  constructor(
+    private readonly repos: Repositories,
+    private readonly audit: AuditService,
+    private readonly transaction: Repositories['transaction']
+  ) {}
+
+  async createDestination(
+    input: {
+      resourceId: string;
+      projectId?: string;
+      name?: string;
+      url: string;
+    },
+    principal: Principal
+  ): Promise<{
+    destination: CallbackDestinationMetadataProjection;
+    secret: string;
+    verificationToken: string;
+  }> {
+    validatePrincipal(principal);
+
+    const auth = await hasCapability(this.repos, principal, 'callback.destination.manage', {
+      resourceId: input.resourceId,
+      projectId: input.projectId,
+    });
+
+    if (!auth.allowed) {
+      await this.audit.log({
+        eventFamily: 'RESOURCE_CONFIGURATION',
+        eventType: 'CALLBACK_REGISTER',
+        surface: 'DOMAIN',
+        operation: 'callback.destination.create',
+        outcomeCode: 'DENIED',
+        decisionCode: auth.decisionCode,
+        reasonCode: auth.reasonCode,
+        authoritySources: auth.authoritySources,
+        targetType: 'RESOURCE',
+        targetId: input.resourceId,
+        actorType: principal.type,
+        principalId: principal.id,
+        actorId: principal.subjectId,
+        authKind: principal.authKind,
+        resourceId: input.resourceId,
+        projectId: input.projectId,
+        payload: { name: input.name ?? null, url: input.url },
+      });
+      throw new DomainAuthorizationError(auth.safeExplanation);
+    }
+
+    // Validate URL scheme and format
+    let parsedUrl: URL;
+    try {
+      parsedUrl = new URL(input.url);
+    } catch {
+      throw new ValidationError('Invalid callback destination URL.');
+    }
+
+    const isTestEnv = process.env.NODE_ENV === 'test';
+    const allowPrivate = isTestEnv && process.env.ALLOW_PRIVATE_WEBHOOKS === 'true';
+    if (parsedUrl.protocol !== 'https:' && !(allowPrivate && parsedUrl.protocol === 'http:')) {
+      throw new ValidationError('Callback destination URL must use HTTPS protocol.');
+    }
+
+    const port = parsedUrl.port
+      ? Number(parsedUrl.port)
+      : parsedUrl.protocol === 'https:'
+        ? 443
+        : 80;
+    if (port !== 443 && port !== 8443 && !(allowPrivate && (port === 80 || port > 1024))) {
+      throw new ValidationError(`Callback destination port ${port} is not allowed.`);
+    }
+
+    const plaintextSecret = crypto.randomBytes(32).toString('hex');
+    const encryptedSecret = encryptValue(plaintextSecret);
+    const verificationToken = crypto.randomUUID();
+    const challengeExpiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000); // 24 hours
+
+    const created = await this.repos.callbackDestinations.create({
+      resourceId: input.resourceId,
+      projectId: input.projectId ?? null,
+      name: input.name ?? null,
+      url: input.url,
+      keyId: 'default',
+      encryptedSecret,
+      status: 'PENDING_VERIFICATION',
+      verificationToken,
+      verificationChallengeExpiresAt: challengeExpiresAt,
+    });
+
+    await this.audit.log({
+      eventFamily: 'RESOURCE_CONFIGURATION',
+      eventType: 'CALLBACK_REGISTER',
+      surface: 'DOMAIN',
+      operation: 'callback.destination.create',
+      outcomeCode: 'SUCCESS',
+      decisionCode: 'ALLOW',
+      reasonCode: auth.reasonCode,
+      authoritySources: auth.authoritySources,
+      targetType: 'RESOURCE',
+      targetId: input.resourceId,
+      actorType: principal.type,
+      principalId: principal.id,
+      actorId: principal.subjectId,
+      authKind: principal.authKind,
+      resourceId: input.resourceId,
+      projectId: input.projectId,
+      payload: {
+        destinationId: created.id,
+        name: input.name ?? null,
+        url: input.url,
+        status: created.status,
+      },
+    });
+
+    return {
+      destination: {
+        id: created.id,
+        resourceId: created.resourceId,
+        projectId: created.projectId,
+        name: created.name,
+        url: created.url,
+        status: created.status,
+        verifiedAt: created.verifiedAt,
+        createdAt: created.createdAt,
+        updatedAt: created.updatedAt,
+      },
+      secret: plaintextSecret,
+      verificationToken,
+    };
+  }
+
+  async verifyDestination(
+    destinationId: string,
+    token: string,
+    principal: Principal
+  ): Promise<CallbackDestinationMetadataProjection> {
+    validatePrincipal(principal);
+
+    const destination = await this.repos.callbackDestinations.findById(destinationId);
+    if (!destination) {
+      throw new NotFoundError('Callback destination not found.');
+    }
+
+    const auth = await hasCapability(this.repos, principal, 'callback.destination.verify', {
+      resourceId: destination.resourceId,
+      projectId: destination.projectId ?? undefined,
+    });
+
+    if (!auth.allowed) {
+      await this.audit.log({
+        eventFamily: 'RESOURCE_CONFIGURATION',
+        eventType: 'CALLBACK_VERIFY',
+        surface: 'DOMAIN',
+        operation: 'callback.destination.verify',
+        outcomeCode: 'DENIED',
+        decisionCode: auth.decisionCode,
+        reasonCode: auth.reasonCode,
+        authoritySources: auth.authoritySources,
+        targetType: 'RESOURCE',
+        targetId: destination.resourceId,
+        actorType: principal.type,
+        principalId: principal.id,
+        actorId: principal.subjectId,
+        authKind: principal.authKind,
+        resourceId: destination.resourceId,
+        projectId: destination.projectId,
+        payload: { destinationId },
+      });
+      throw new DomainAuthorizationError(auth.safeExplanation);
+    }
+
+    if (
+      !destination.verificationToken ||
+      destination.verificationToken !== token ||
+      !destination.verificationChallengeExpiresAt ||
+      destination.verificationChallengeExpiresAt < new Date()
+    ) {
+      await this.audit.log({
+        eventFamily: 'RESOURCE_CONFIGURATION',
+        eventType: 'CALLBACK_VERIFY',
+        surface: 'DOMAIN',
+        operation: 'callback.destination.verify',
+        outcomeCode: 'FAILURE',
+        decisionCode: 'ALLOW',
+        reasonCode: auth.reasonCode,
+        authoritySources: auth.authoritySources,
+        targetType: 'RESOURCE',
+        targetId: destination.resourceId,
+        actorType: principal.type,
+        principalId: principal.id,
+        actorId: principal.subjectId,
+        authKind: principal.authKind,
+        resourceId: destination.resourceId,
+        projectId: destination.projectId,
+        payload: { destinationId, error: 'INVALID_OR_EXPIRED_TOKEN' },
+      });
+      throw new ValidationError('Invalid or expired destination verification challenge token.');
+    }
+
+    const now = new Date();
+    await this.repos.callbackDestinations.updateStatus(destinationId, 'ACTIVE', now);
+
+    await this.audit.log({
+      eventFamily: 'RESOURCE_CONFIGURATION',
+      eventType: 'CALLBACK_VERIFY',
+      surface: 'DOMAIN',
+      operation: 'callback.destination.verify',
+      outcomeCode: 'SUCCESS',
+      decisionCode: 'ALLOW',
+      reasonCode: auth.reasonCode,
+      authoritySources: auth.authoritySources,
+      targetType: 'RESOURCE',
+      targetId: destination.resourceId,
+      actorType: principal.type,
+      principalId: principal.id,
+      actorId: principal.subjectId,
+      authKind: principal.authKind,
+      resourceId: destination.resourceId,
+      projectId: destination.projectId,
+      payload: { destinationId, status: 'ACTIVE' },
+    });
+
+    const updated = await this.repos.callbackDestinations.findMetadataById(destinationId);
+    if (!updated) throw new NotFoundError('Destination not found after verification.');
+    return updated;
+  }
+
+  async rotateSecret(destinationId: string, principal: Principal): Promise<{ secret: string }> {
+    validatePrincipal(principal);
+
+    const destination = await this.repos.callbackDestinations.findById(destinationId);
+    if (!destination) {
+      throw new NotFoundError('Callback destination not found.');
+    }
+
+    const auth = await hasCapability(this.repos, principal, 'callback.destination.manage', {
+      resourceId: destination.resourceId,
+      projectId: destination.projectId ?? undefined,
+    });
+
+    if (!auth.allowed) {
+      await this.audit.log({
+        eventFamily: 'RESOURCE_CONFIGURATION',
+        eventType: 'CALLBACK_ROTATE_SECRET',
+        surface: 'DOMAIN',
+        operation: 'callback.destination.rotate-secret',
+        outcomeCode: 'DENIED',
+        decisionCode: auth.decisionCode,
+        reasonCode: auth.reasonCode,
+        authoritySources: auth.authoritySources,
+        targetType: 'RESOURCE',
+        targetId: destination.resourceId,
+        actorType: principal.type,
+        principalId: principal.id,
+        actorId: principal.subjectId,
+        authKind: principal.authKind,
+        resourceId: destination.resourceId,
+        projectId: destination.projectId,
+        payload: { destinationId },
+      });
+      throw new DomainAuthorizationError(auth.safeExplanation);
+    }
+
+    const plaintextSecret = crypto.randomBytes(32).toString('hex');
+    const encryptedSecret = encryptValue(plaintextSecret);
+
+    await this.repos.callbackDestinations.rotateSecret(destinationId, 'default', encryptedSecret);
+
+    await this.audit.log({
+      eventFamily: 'RESOURCE_CONFIGURATION',
+      eventType: 'CALLBACK_ROTATE_SECRET',
+      surface: 'DOMAIN',
+      operation: 'callback.destination.rotate-secret',
+      outcomeCode: 'SUCCESS',
+      decisionCode: 'ALLOW',
+      reasonCode: auth.reasonCode,
+      authoritySources: auth.authoritySources,
+      targetType: 'RESOURCE',
+      targetId: destination.resourceId,
+      actorType: principal.type,
+      principalId: principal.id,
+      actorId: principal.subjectId,
+      authKind: principal.authKind,
+      resourceId: destination.resourceId,
+      projectId: destination.projectId,
+      payload: { destinationId },
+    });
+
+    return { secret: plaintextSecret };
+  }
+
+  async disableDestination(
+    destinationId: string,
+    principal: Principal
+  ): Promise<CallbackDestinationMetadataProjection> {
+    validatePrincipal(principal);
+
+    const destination = await this.repos.callbackDestinations.findById(destinationId);
+    if (!destination) {
+      throw new NotFoundError('Callback destination not found.');
+    }
+
+    const auth = await hasCapability(this.repos, principal, 'callback.destination.manage', {
+      resourceId: destination.resourceId,
+      projectId: destination.projectId ?? undefined,
+    });
+
+    if (!auth.allowed) {
+      await this.audit.log({
+        eventFamily: 'RESOURCE_CONFIGURATION',
+        eventType: 'CALLBACK_DISABLE',
+        surface: 'DOMAIN',
+        operation: 'callback.destination.disable',
+        outcomeCode: 'DENIED',
+        decisionCode: auth.decisionCode,
+        reasonCode: auth.reasonCode,
+        authoritySources: auth.authoritySources,
+        targetType: 'RESOURCE',
+        targetId: destination.resourceId,
+        actorType: principal.type,
+        principalId: principal.id,
+        actorId: principal.subjectId,
+        authKind: principal.authKind,
+        resourceId: destination.resourceId,
+        projectId: destination.projectId,
+        payload: { destinationId },
+      });
+      throw new DomainAuthorizationError(auth.safeExplanation);
+    }
+
+    await this.repos.callbackDestinations.updateStatus(destinationId, 'DISABLED');
+
+    await this.audit.log({
+      eventFamily: 'RESOURCE_CONFIGURATION',
+      eventType: 'CALLBACK_DISABLE',
+      surface: 'DOMAIN',
+      operation: 'callback.destination.disable',
+      outcomeCode: 'SUCCESS',
+      decisionCode: 'ALLOW',
+      reasonCode: auth.reasonCode,
+      authoritySources: auth.authoritySources,
+      targetType: 'RESOURCE',
+      targetId: destination.resourceId,
+      actorType: principal.type,
+      principalId: principal.id,
+      actorId: principal.subjectId,
+      authKind: principal.authKind,
+      resourceId: destination.resourceId,
+      projectId: destination.projectId,
+      payload: { destinationId, status: 'DISABLED' },
+    });
+
+    const updated = await this.repos.callbackDestinations.findMetadataById(destinationId);
+    if (!updated) throw new NotFoundError('Destination not found after disabling.');
+    return updated;
+  }
+
+  async deleteDestination(destinationId: string, principal: Principal): Promise<void> {
+    validatePrincipal(principal);
+
+    const destination = await this.repos.callbackDestinations.findById(destinationId);
+    if (!destination) {
+      throw new NotFoundError('Callback destination not found.');
+    }
+
+    const auth = await hasCapability(this.repos, principal, 'callback.destination.manage', {
+      resourceId: destination.resourceId,
+      projectId: destination.projectId ?? undefined,
+    });
+
+    if (!auth.allowed) {
+      await this.audit.log({
+        eventFamily: 'RESOURCE_CONFIGURATION',
+        eventType: 'CALLBACK_DELETE',
+        surface: 'DOMAIN',
+        operation: 'callback.destination.delete',
+        outcomeCode: 'DENIED',
+        decisionCode: auth.decisionCode,
+        reasonCode: auth.reasonCode,
+        authoritySources: auth.authoritySources,
+        targetType: 'RESOURCE',
+        targetId: destination.resourceId,
+        actorType: principal.type,
+        principalId: principal.id,
+        actorId: principal.subjectId,
+        authKind: principal.authKind,
+        resourceId: destination.resourceId,
+        projectId: destination.projectId,
+        payload: { destinationId },
+      });
+      throw new DomainAuthorizationError(auth.safeExplanation);
+    }
+
+    await this.repos.callbackDestinations.delete(destinationId);
+
+    await this.audit.log({
+      eventFamily: 'RESOURCE_CONFIGURATION',
+      eventType: 'CALLBACK_DELETE',
+      surface: 'DOMAIN',
+      operation: 'callback.destination.delete',
+      outcomeCode: 'SUCCESS',
+      decisionCode: 'ALLOW',
+      reasonCode: auth.reasonCode,
+      authoritySources: auth.authoritySources,
+      targetType: 'RESOURCE',
+      targetId: destination.resourceId,
+      actorType: principal.type,
+      principalId: principal.id,
+      actorId: principal.subjectId,
+      authKind: principal.authKind,
+      resourceId: destination.resourceId,
+      projectId: destination.projectId,
+      payload: { destinationId },
+    });
+  }
+
+  async listDestinations(
+    resourceId: string,
+    principal: Principal
+  ): Promise<CallbackDestinationMetadataProjection[]> {
+    validatePrincipal(principal);
+
+    const auth = await hasCapability(this.repos, principal, 'callback.destination.view', {
+      resourceId,
+    });
+
+    if (!auth.allowed) {
+      await this.audit.log({
+        eventFamily: 'RESOURCE_CONFIGURATION',
+        eventType: 'CALLBACK_LIST',
+        surface: 'DOMAIN',
+        operation: 'callback.destination.list',
+        outcomeCode: 'DENIED',
+        decisionCode: auth.decisionCode,
+        reasonCode: auth.reasonCode,
+        authoritySources: auth.authoritySources,
+        targetType: 'RESOURCE',
+        targetId: resourceId,
+        actorType: principal.type,
+        principalId: principal.id,
+        actorId: principal.subjectId,
+        authKind: principal.authKind,
+        resourceId,
+        payload: { resourceId },
+      });
+      throw new DomainAuthorizationError(auth.safeExplanation);
+    }
+
+    return this.repos.callbackDestinations.findMetadataByResourceId(resourceId);
+  }
+}
+
+/**
  * Container for all services.
  */
 export interface Services {
@@ -3209,6 +3786,7 @@ export interface Services {
   project: ProjectService;
   ports: DomainPorts;
   metadata: MetadataQueryService;
+  callbackDestinations: CallbackDestinationService;
 }
 
 /**
@@ -3247,5 +3825,10 @@ export function createServices(baseDeps: {
     project,
     ports: new DomainPortsImpl(project, resource, approval, audit, baseDeps.repositories),
     metadata: createRepositoryMetadataQueryService(baseDeps.repositories),
+    callbackDestinations: new CallbackDestinationService(
+      baseDeps.repositories,
+      audit,
+      baseDeps.repositories.transaction
+    ),
   };
 }

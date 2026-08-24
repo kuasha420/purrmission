@@ -29,3 +29,15 @@ export class ConflictError extends DomainError {
     super(message);
   }
 }
+
+export class NotFoundError extends DomainError {
+  constructor(message: string) {
+    super(message);
+  }
+}
+
+export class DomainAuthorizationError extends DomainError {
+  constructor(message: string) {
+    super(message);
+  }
+}

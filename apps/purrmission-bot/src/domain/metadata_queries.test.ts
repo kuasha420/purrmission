@@ -291,6 +291,9 @@ describe('adapter-neutral metadata query contracts', () => {
   it('documents every #117 capability that has no metadata DTO target', () => {
     assert.deepEqual(Object.keys(METADATA_CAPABILITY_EXCLUSIONS).sort(), [
       'audit.own.read',
+      'callback.destination.manage',
+      'callback.destination.verify',
+      'callback.destination.view',
       'grant.consume',
       'project.create',
       'resource.create',

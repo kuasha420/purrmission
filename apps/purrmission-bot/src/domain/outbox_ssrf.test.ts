@@ -81,6 +81,40 @@ describe('SSRF Protection, Idempotent Outbox, and Batch Secrets API', () => {
     });
 
     it('does not redeliver after delivery when outcome-audit persistence fails', async () => {
+      await repos.resources.create({ id: 'resource-1', name: 'resource', mode: 'ONE_OF_N' });
+      await repos.guardians.add({
+        id: 'guardian-1',
+        resourceId: 'resource-1',
+        discordUserId: 'owner-1',
+        role: 'OWNER',
+      });
+      await repos.approvalRequests.create({
+        id: 'request-1',
+        resourceId: 'resource-1',
+        status: 'PENDING',
+        requesterId: 'requester-1',
+        requesterType: 'DISCORD_USER',
+        authKind: 'DISCORD',
+        authFamily: 'DISCORD',
+        audience: 'purrmission-bot',
+        action: 'resource.view',
+        targetType: 'RESOURCE',
+        targetKey: null,
+        targetVersion: 'v1',
+        policyVersion: 'v1',
+        constraints: null,
+        deliveryState: 'PENDING',
+        expiresAt: new Date(Date.now() + 60_000),
+      });
+      const discord = {
+        users: {
+          fetch: async () => ({
+            createDM: async () => ({
+              send: async () => ({ id: 'msg-1', channelId: 'ch-1' }),
+            }),
+          }),
+        },
+      } as unknown as Client;
       const audit = new AuditService({ repositories: repos });
       const originalLog = audit.log.bind(audit);
       audit.log = (async (event, tx) => {
@@ -89,20 +123,21 @@ describe('SSRF Protection, Idempotent Outbox, and Batch Secrets API', () => {
       }) as typeof audit.log;
       await repos.outbox.create(
         buildOutboxEvent({
-          eventType: 'REQUEST_CREATED',
+          eventType: 'REQUEST_CREATED_GUARDIAN_NOTIFICATION',
           resourceId: 'resource-1',
           requestId: 'request-1',
-          payload: { requestId: 'request-1', resourceId: 'resource-1' },
+          recipientId: 'owner-1',
+          payload: { requestId: 'request-1', resourceId: 'resource-1', recipientId: 'owner-1' },
         })
       );
-      const worker = new OutboxWorker(repos, audit);
+      const worker = new OutboxWorker(repos, audit, discord);
       await worker.processEvents();
       assert.equal((await repos.outbox.findPending()).length, 0);
       await worker.processEvents();
       assert.equal((await repos.outbox.findPending()).length, 0);
     });
 
-    it('durably exits the delivery queue before sending and never redelivers after marker failure', async () => {
+    it('durably claims lease and transitions to failed on terminal errors', async () => {
       await repos.resources.create({ id: 'resource-1', name: 'resource', mode: 'ONE_OF_N' });
       await repos.guardians.add({
         id: 'guardian-1',
@@ -130,48 +165,38 @@ describe('SSRF Protection, Idempotent Outbox, and Batch Secrets API', () => {
       });
       const event = await repos.outbox.create(
         buildOutboxEvent({
-          eventType: 'REQUEST_CREATED',
+          eventType: 'REQUEST_CREATED_GUARDIAN_NOTIFICATION',
           resourceId: 'resource-1',
           requestId: 'request-1',
-          payload: { requestId: 'request-1', resourceId: 'resource-1' },
+          recipientId: 'owner-1',
+          payload: { requestId: 'request-1', resourceId: 'resource-1', recipientId: 'owner-1' },
         })
       );
 
       let sendCalls = 0;
       const discord = {
         users: {
-          fetch: async () => ({
-            createDM: async () => ({
-              send: async () => {
-                sendCalls += 1;
-                return { id: 'message-1', channelId: 'channel-1' };
-              },
-            }),
-          }),
+          fetch: async () => {
+            sendCalls += 1;
+            throw new Error('Discord API connection dropped');
+          },
         },
       } as unknown as Client;
-      const statuses: string[] = [];
-      const updateStatus = repos.outbox.updateStatus.bind(repos.outbox);
-      let failDeliveredMarker = true;
-      repos.outbox.updateStatus = async (id, status, attempts, errorCode, tx) => {
-        statuses.push(status);
-        if (status === 'DELIVERED_PENDING_AUDIT' && failDeliveredMarker) {
-          failDeliveredMarker = false;
-          throw new Error('marker persistence failed');
-        }
-        return updateStatus(id, status, attempts, errorCode, tx);
-      };
 
-      const worker = new OutboxWorker(repos, new AuditService({ repositories: repos }), discord);
+      const worker = new OutboxWorker(
+        repos,
+        new AuditService({ repositories: repos }),
+        discord,
+        1 // maxAttempts = 1 to test terminal failure immediately
+      );
       await worker.processEvents();
       await worker.processEvents();
 
       assert.equal(sendCalls, 1);
-      assert.deepEqual(statuses.slice(0, 2), ['DELIVERY_IN_PROGRESS', 'DELIVERED_PENDING_AUDIT']);
-      assert.ok(statuses.includes('FAILED'));
       assert.equal((await repos.outbox.findPending()).length, 0);
-      assert.equal(event.status, 'FAILED');
-      assert.equal(event.attempts, 1);
+      const updated = await repos.outbox.findById(event.id);
+      assert.equal(updated?.status, 'FAILED');
+      assert.equal(updated?.attempts, 1);
     });
   });
 

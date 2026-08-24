@@ -918,6 +918,26 @@ export async function hasCapability(
         'AUTHENTICATED_SUBJECT',
       ]);
 
+    // --- CALLBACK DESTINATION CAPABILITIES ---
+    case 'callback.destination.manage':
+    case 'callback.destination.verify':
+      if (isResourceOwner) {
+        return allow('OWNER', 'Resource Owner may manage and verify callback destinations.');
+      }
+      return deny(
+        'NO_ROLE',
+        'Only the Resource Owner or Project Owner may manage callback destinations.'
+      );
+
+    case 'callback.destination.view':
+      if (isResourceOwner) {
+        return allow('OWNER', 'Resource Owner may view callback destinations.');
+      }
+      if (pMemberRole === 'WRITER') {
+        return allow('WRITER', 'Project Writer may view callback destinations.');
+      }
+      return deny('NO_ROLE', 'Only Owners or Writers may view callback destinations.');
+
     default:
       return deny('NO_ROLE', 'Unknown capability');
   }

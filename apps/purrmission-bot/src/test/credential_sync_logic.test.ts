@@ -7,11 +7,9 @@ import {
   ResourceRepository,
   GuardianRepository,
   ResourceFieldRepository,
-  Repositories,
   AuthRepository,
   TOTPRepository,
   AuditRepository,
-  OutboxRepository,
 } from '../domain/repositories.js';
 import {
   Project,
@@ -27,8 +25,6 @@ import {
   ProjectMember,
   CreateProjectMemberInput,
   ProjectMemberRole,
-  OutboxEvent,
-  CreateOutboxEventInput,
   CreateAuditLogInput,
   ResourceMetadata,
 } from '../domain/models.js';
@@ -36,7 +32,9 @@ import { randomUUID } from 'crypto';
 import {
   InMemoryApprovalGrantRepository,
   InMemoryApprovalRequestRepository,
+  InMemoryCallbackDestinationRepository,
   InMemoryCredentialRepository,
+  InMemoryOutboxRepository,
 } from '../domain/repositories.mock.js';
 
 // --- In-Memory Repository Implementations ---
@@ -245,41 +243,6 @@ class MemFieldRepo implements ResourceFieldRepository {
   }
 }
 
-class MemOutboxRepo implements OutboxRepository {
-  events: OutboxEvent[] = [];
-
-  async create(input: CreateOutboxEventInput, _tx?: any): Promise<OutboxEvent> {
-    const event: OutboxEvent = {
-      ...input,
-      status: 'PENDING',
-      attempts: 0,
-      updatedAt: new Date(),
-    };
-    this.events.push(event);
-    return event;
-  }
-
-  async findPending(): Promise<OutboxEvent[]> {
-    return this.events.filter((e) => e.status === 'PENDING');
-  }
-
-  async updateStatus(
-    id: string,
-    status: 'PENDING' | 'DELIVERED_PENDING_AUDIT' | 'PROCESSED' | 'FAILED',
-    attempts: number,
-    lastErrorCode?: string,
-    _tx?: any
-  ): Promise<void> {
-    const event = this.events.find((e) => e.id === id);
-    if (event) {
-      event.status = status;
-      event.attempts = attempts;
-      event.lastErrorCode = lastErrorCode ?? null;
-      event.updatedAt = new Date();
-    }
-  }
-}
-
 // --- Smoke Test ---
 
 describe('Credential Sync Logic Smoke Test', () => {
@@ -292,7 +255,7 @@ describe('Credential Sync Logic Smoke Test', () => {
   const fieldRepo = new MemFieldRepo();
   let approvalRepo = new InMemoryApprovalRequestRepository();
   let grantRepo = new InMemoryApprovalGrantRepository();
-  const outboxRepo = new MemOutboxRepo();
+  const outboxRepo = new InMemoryOutboxRepository();
 
   // Mock unnecessary repos
   const authRepo = {} as AuthRepository;
@@ -320,7 +283,7 @@ describe('Credential Sync Logic Smoke Test', () => {
     outbox: outboxRepo,
     credentials: new InMemoryCredentialRepository(),
     approvalGrants: grantRepo,
-    callbackDestinations: {} as Repositories['callbackDestinations'],
+    callbackDestinations: new InMemoryCallbackDestinationRepository(),
   };
 
   beforeEach(() => {
@@ -335,7 +298,8 @@ describe('Credential Sync Logic Smoke Test', () => {
     grantRepo = new InMemoryApprovalGrantRepository();
     repositories.approvalRequests = approvalRepo;
     repositories.approvalGrants = grantRepo;
-    outboxRepo.events = [];
+    repositories.outbox = new InMemoryOutboxRepository();
+    repositories.callbackDestinations = new InMemoryCallbackDestinationRepository();
 
     services = createServices({ repositories });
   });
