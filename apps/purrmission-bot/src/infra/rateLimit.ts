@@ -22,6 +22,7 @@ const LIMITER_CATEGORIES = new Set([
   'credential-validation-failure-check',
   'resource-credential-validation-failure-check',
   'get-2fa',
+  'approval-create',
 ]);
 
 /** Return only the operation category; limiter keys can contain credentials or subject IDs. */
@@ -39,7 +40,7 @@ export class RateLimiter {
    * @param windowMs - Time window in milliseconds
    * @param maxRequests - Max requests allowed in the window
    */
-  constructor(windowMs: number = 60000, maxRequests: number = 10) {
+  constructor(windowMs: number = 60000, maxRequests: number = 100) {
     this.config = { windowMs, maxRequests };
 
     // Cleanup interval to remove stale buckets

@@ -7,7 +7,6 @@ import {
   ResourceRepository,
   GuardianRepository,
   ResourceFieldRepository,
-  ApprovalRequestRepository,
   Repositories,
   AuthRepository,
   TOTPRepository,
@@ -20,14 +19,11 @@ import {
   Resource,
   Guardian,
   ResourceField,
-  ApprovalRequest,
-  ApprovalStatus,
   CreateProjectInput,
   CreateEnvironmentInput,
   CreateResourceInput,
   AddGuardianInput,
   CreateResourceFieldInput,
-  CreateApprovalRequestInput,
   ProjectMember,
   CreateProjectMemberInput,
   ProjectMemberRole,
@@ -35,10 +31,13 @@ import {
   CreateOutboxEventInput,
   CreateAuditLogInput,
   ResourceMetadata,
-  ApprovalRequestMetadataProjection,
 } from '../domain/models.js';
 import { randomUUID } from 'crypto';
-import { InMemoryCredentialRepository } from '../domain/repositories.mock.js';
+import {
+  InMemoryApprovalGrantRepository,
+  InMemoryApprovalRequestRepository,
+  InMemoryCredentialRepository,
+} from '../domain/repositories.mock.js';
 
 // --- In-Memory Repository Implementations ---
 
@@ -246,148 +245,6 @@ class MemFieldRepo implements ResourceFieldRepository {
   }
 }
 
-class MemApprovalRepo implements ApprovalRequestRepository {
-  requests: ApprovalRequest[] = [];
-
-  async create(input: CreateApprovalRequestInput, _tx?: any): Promise<ApprovalRequest> {
-    const r: ApprovalRequest = {
-      ...input,
-      id: input.id || randomUUID(),
-      createdAt: new Date(),
-      status: 'PENDING',
-      expiresAt: input.expiresAt || null,
-    };
-    this.requests.push(r);
-    return r;
-  }
-  async findById(id: string): Promise<ApprovalRequest | null> {
-    return this.requests.find((r) => r.id === id) || null;
-  }
-  async updateStatus(
-    id: string,
-    status: ApprovalStatus,
-    resolvedBy?: string,
-    _tx?: any
-  ): Promise<void> {
-    const r = this.requests.find((r) => r.id === id);
-    if (!r) throw new Error('Not found');
-    r.status = status;
-    if (resolvedBy) {
-      r.resolvedBy = resolvedBy;
-      r.resolvedAt = new Date();
-    }
-  }
-  async updateDeliveryReference(
-    id: string,
-    discordMessageId: string,
-    discordChannelId: string
-  ): Promise<void> {
-    const request = this.requests.find((item) => item.id === id);
-    if (request) {
-      request.discordMessageId = discordMessageId;
-      request.discordChannelId = discordChannelId;
-    }
-  }
-  async findActiveByRequester(
-    resourceId: string,
-    requesterId: string
-  ): Promise<ApprovalRequest | null> {
-    const now = new Date();
-    // Simple logic: find PENDING or APPROVED req where context.requesterId == requesterId
-    // Assuming context is simple object
-    return (
-      this.requests.find(
-        (r) =>
-          r.resourceId === resourceId &&
-          ['PENDING', 'APPROVED'].includes(r.status) &&
-          (!r.expiresAt || r.expiresAt > now) &&
-          r.context?.['requesterId'] === requesterId
-      ) || null
-    );
-  }
-  async findPending(
-    resourceId: string,
-    requesterId: string,
-    action: string,
-    targetKey: string | null
-  ): Promise<ApprovalRequest | null> {
-    const now = new Date();
-    return (
-      this.requests.find(
-        (request) =>
-          request.resourceId === resourceId &&
-          request.requesterId === requesterId &&
-          request.action === action &&
-          request.targetKey === targetKey &&
-          request.status === 'PENDING' &&
-          request.expiresAt > now
-      ) ?? null
-    );
-  }
-  async findByResourceId(resourceId: string): Promise<ApprovalRequest[]> {
-    return this.requests.filter((r) => r.resourceId === resourceId);
-  }
-  async findByRequesterId(requesterId: string): Promise<ApprovalRequest[]> {
-    return this.requests.filter((request) => request.requesterId === requesterId);
-  }
-  private metadata(request: ApprovalRequest): ApprovalRequestMetadataProjection {
-    const {
-      id,
-      resourceId,
-      status,
-      requesterId,
-      requesterType,
-      authKind,
-      action,
-      targetKey,
-      targetVersion,
-      policyVersion,
-      createdAt,
-      expiresAt,
-    } = request;
-    return {
-      id,
-      resourceId,
-      status,
-      requesterId,
-      requesterType,
-      authKind,
-      action,
-      targetKey,
-      targetVersion,
-      policyVersion,
-      createdAt,
-      expiresAt,
-    };
-  }
-  async findMetadataById(id: string): Promise<ApprovalRequestMetadataProjection | null> {
-    const request = await this.findById(id);
-    return request ? this.metadata(request) : null;
-  }
-  async findMetadataByRequesterId(
-    requesterId: string
-  ): Promise<ApprovalRequestMetadataProjection[]> {
-    return (await this.findByRequesterId(requesterId)).map((request) => this.metadata(request));
-  }
-  async findMetadataByResourceId(resourceId: string): Promise<ApprovalRequestMetadataProjection[]> {
-    return (await this.findByResourceId(resourceId)).map((request) => this.metadata(request));
-  }
-  async findPendingByResourceId(resourceId: string): Promise<ApprovalRequest[]> {
-    return this.requests.filter((r) => r.resourceId === resourceId && r.status === 'PENDING');
-  }
-  async expireRequests(_tx?: any): Promise<number> {
-    const now = new Date();
-    let count = 0;
-    for (const r of this.requests) {
-      if (r.status === 'PENDING' && r.expiresAt && r.expiresAt < now) {
-        r.status = 'EXPIRED';
-        count++;
-      }
-    }
-    return count;
-  }
-}
-
 class MemOutboxRepo implements OutboxRepository {
   events: OutboxEvent[] = [];
 
@@ -433,7 +290,8 @@ describe('Credential Sync Logic Smoke Test', () => {
   const resourceRepo = new MemResourceRepo();
   const guardianRepo = new MemGuardianRepo();
   const fieldRepo = new MemFieldRepo();
-  const approvalRepo = new MemApprovalRepo();
+  let approvalRepo = new InMemoryApprovalRequestRepository();
+  let grantRepo = new InMemoryApprovalGrantRepository();
   const outboxRepo = new MemOutboxRepo();
 
   // Mock unnecessary repos
@@ -461,7 +319,7 @@ describe('Credential Sync Logic Smoke Test', () => {
     audit: auditRepo,
     outbox: outboxRepo,
     credentials: new InMemoryCredentialRepository(),
-    approvalGrants: {} as Repositories['approvalGrants'],
+    approvalGrants: grantRepo,
     callbackDestinations: {} as Repositories['callbackDestinations'],
   };
 
@@ -473,7 +331,10 @@ describe('Credential Sync Logic Smoke Test', () => {
     resourceRepo.resources = [];
     guardianRepo.guardians = [];
     fieldRepo.fields = [];
-    approvalRepo.requests = [];
+    approvalRepo = new InMemoryApprovalRequestRepository();
+    grantRepo = new InMemoryApprovalGrantRepository();
+    repositories.approvalRequests = approvalRepo;
+    repositories.approvalGrants = grantRepo;
     outboxRepo.events = [];
 
     services = createServices({ repositories });
@@ -594,7 +455,7 @@ describe('Credential Sync Logic Smoke Test', () => {
 
     // Now, let's manually modify the request in the repo to be expired (expiresAt in the past)
     const requestId = result.request.id;
-    const rawReq = approvalRepo.requests.find((r) => r.id === requestId);
+    const rawReq = await approvalRepo.findById(requestId);
     assert.ok(rawReq);
     rawReq.expiresAt = new Date(Date.now() - 60000); // 1 minute ago
 

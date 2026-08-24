@@ -122,6 +122,7 @@ describe('required current-surface audit coverage', () => {
       requesterType: requester.type,
       authKind: requester.authKind,
       action: 'secret.value.read',
+      targetKey: 'DATABASE_PASSWORD',
     });
     assert.ok(created.request);
 
@@ -133,7 +134,7 @@ describe('required current-surface audit coverage', () => {
       createDiscordPrincipal('owner-1')
     );
     assert.equal(approved.success, true);
-    assert.equal(await repositories.approvalGrants.findByRequestId(created.request.id), null);
+    assert.ok(await repositories.approvalGrants.findByRequestId(created.request.id));
 
     const worker = new OutboxWorker(repositories, services.audit);
     await worker.processEvents();

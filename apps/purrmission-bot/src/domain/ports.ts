@@ -179,14 +179,29 @@ export interface DomainPorts {
     resourceId: string,
     action: string,
     targetKey?: string | null,
+    options?: {
+      canonicalKeys?: readonly string[] | null;
+      reason?: string;
+      idempotencyKey?: string;
+      constraints?: Record<string, unknown> | null;
+      expiresInMs?: number;
+      authFamily?: string;
+      audience?: string;
+    },
     correlationId?: string
   ): Promise<{ success: boolean; request?: ApprovalRequest; error?: string }>;
   recordApprovalDecision(
     principal: Principal,
     requestId: string,
     decision: 'APPROVE' | 'DENY',
+    consentId?: string,
     correlationId?: string
-  ): Promise<{ success: boolean }>;
+  ): Promise<{ success: boolean; error?: string }>;
+  cancelApprovalRequest(
+    principal: Principal,
+    requestId: string,
+    correlationId?: string
+  ): Promise<{ success: boolean; error?: string }>;
   getApprovalRequest(
     principal: Principal,
     requestId: string,

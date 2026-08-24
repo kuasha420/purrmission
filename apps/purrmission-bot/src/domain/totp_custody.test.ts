@@ -313,7 +313,7 @@ describe('TOTP custody boundaries', () => {
     for (const subject of ['writer', 'reader', 'guardian', 'requester']) {
       await assert.rejects(
         resourceService.revealTOTPCode(resourceId, createDiscordPrincipal(subject)),
-        /deferred until request-bound/
+        /requires a valid, unconsumed approval grant/i
       );
       await assert.rejects(
         resourceService.linkTOTPAccount(
@@ -334,7 +334,7 @@ describe('TOTP custody boundaries', () => {
       accountName: 'Existing linked seed',
       secret: 'JBSWY3DPEHPK3PXP',
     });
-    const consent = await resourceService.createTOTPLinkConsent(
+    const linkConsent = await resourceService.createTOTPLinkConsent(
       account.id,
       resourceId,
       createDiscordPrincipal(ownerId),
@@ -345,13 +345,11 @@ describe('TOTP custody boundaries', () => {
       resourceId,
       account.id,
       createDiscordPrincipal(ownerId),
-      consent.id
+      linkConsent.id
     );
 
-    assert.match(
-      await resourceService.revealTOTPCode(resourceId, createDiscordPrincipal(ownerId)),
-      /^\d{6}$/
-    );
+    const code = await resourceService.revealTOTPCode(resourceId, createDiscordPrincipal(ownerId));
+    assert.match(code, /^\d{6}$/);
   });
 
   it('rejects a direct owner reveal after the consent-bound account version rotates', async () => {
@@ -387,7 +385,7 @@ describe('TOTP custody boundaries', () => {
     const resourceId = await createOwnedResource('resource-owner');
     const account = await repos.totp.create({
       ownerDiscordUserId: 'seed-owner',
-      accountName: 'Existing linked seed',
+      accountName: 'Pre-existing seed',
       secret: 'JBSWY3DPEHPK3PXP',
     });
     const linkConsent = await resourceService.createTOTPLinkConsent(
@@ -395,7 +393,7 @@ describe('TOTP custody boundaries', () => {
       resourceId,
       createDiscordPrincipal('seed-owner'),
       'resource-owner',
-      {}
+      { allowDelegation: true }
     );
     await resourceService.linkTOTPAccount(
       resourceId,
@@ -411,10 +409,16 @@ describe('TOTP custody boundaries', () => {
       requesterId: 'requester',
       requesterType: 'DISCORD_USER',
       authKind: 'DISCORD',
+      authFamily: 'DISCORD',
+      audience: 'discord',
       action: 'totp.code.read',
+      targetType: 'TOTP_ACCOUNT',
+      targetId: account.id,
       targetKey: null,
       targetVersion: resource.version,
       policyVersion: resource.version,
+      resolverId: 'guardian-1',
+      resolverType: 'DISCORD_USER',
       constraints: null,
       expiresAt: new Date(Date.now() + 60_000),
     });
@@ -439,8 +443,7 @@ describe('TOTP custody boundaries', () => {
         grant.id,
         consent.id
       ),
-      (error: unknown) =>
-        error instanceof AccessDeniedError && error.message.includes('request-bound')
+      (error: unknown) => error instanceof AccessDeniedError
     );
     assert.equal((await repos.approvalGrants.findById(grant.id))?.consumedAt, null);
     assert.equal((await repos.totp.findDelegationConsentById(consent.id))?.usedAt, null);

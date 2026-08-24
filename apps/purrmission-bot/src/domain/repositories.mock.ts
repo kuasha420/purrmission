@@ -209,10 +209,64 @@ export class InMemoryApprovalRequestRepository implements ApprovalRequestReposit
   async create(input: CreateApprovalRequestInput): Promise<ApprovalRequest> {
     const request: ApprovalRequest = {
       ...input,
-      createdAt: new Date(),
+      id: input.id ?? crypto.randomUUID(),
+      projectId: input.projectId ?? null,
+      environmentId: input.environmentId ?? null,
+      targetType: input.targetType ?? 'RESOURCE',
+      targetId: input.targetId ?? null,
+      targetKey: input.targetKey ?? null,
+      canonicalKeySet: input.canonicalKeySet ?? null,
+      canonicalKeyDigest: input.canonicalKeyDigest ?? null,
+      reason: input.reason ?? null,
+      idempotencyKey: input.idempotencyKey ?? null,
+      payloadDigest: input.payloadDigest ?? null,
+      deliveryState: input.deliveryState ?? 'PENDING',
+      createdAt: input.createdAt ?? new Date(),
     };
     this.requests.set(request.id, request);
     return request;
+  }
+
+  async transitionDecision(
+    id: string,
+    status: 'APPROVED' | 'DENIED',
+    resolvedBy: string,
+    resolvedByType = 'DISCORD_USER'
+  ): Promise<boolean> {
+    const request = this.requests.get(id);
+    if (!request || request.status !== 'PENDING' || request.expiresAt <= new Date()) {
+      return false;
+    }
+    request.status = status;
+    request.resolvedBy = resolvedBy;
+    request.resolvedByType = resolvedByType;
+    request.resolvedAt = new Date();
+    return true;
+  }
+
+  async cancel(id: string, requesterId: string): Promise<boolean> {
+    const request = this.requests.get(id);
+    if (
+      !request ||
+      request.requesterId !== requesterId ||
+      request.status !== 'PENDING' ||
+      request.expiresAt <= new Date()
+    ) {
+      return false;
+    }
+    request.status = 'CANCELLED';
+    request.cancelledBy = requesterId;
+    request.cancelledAt = new Date();
+    return true;
+  }
+
+  async expire(id: string): Promise<boolean> {
+    const request = this.requests.get(id);
+    if (!request || request.status !== 'PENDING') {
+      return false;
+    }
+    request.status = 'EXPIRED';
+    return true;
   }
 
   async updateStatus(id: string, status: ApprovalStatus, resolvedBy?: string): Promise<void> {
@@ -241,6 +295,18 @@ export class InMemoryApprovalRequestRepository implements ApprovalRequestReposit
     return this.requests.get(id) ?? null;
   }
 
+  async findByIdempotencyKey(
+    requesterId: string,
+    idempotencyKey: string
+  ): Promise<ApprovalRequest | null> {
+    for (const req of this.requests.values()) {
+      if (req.requesterId === requesterId && req.idempotencyKey === idempotencyKey) {
+        return req;
+      }
+    }
+    return null;
+  }
+
   async findPendingByResourceId(resourceId: string): Promise<ApprovalRequest[]> {
     const result: ApprovalRequest[] = [];
     for (const request of this.requests.values()) {
@@ -265,12 +331,19 @@ export class InMemoryApprovalRequestRepository implements ApprovalRequestReposit
     const {
       id,
       resourceId,
+      projectId,
+      environmentId,
       status,
       requesterId,
       requesterType,
       authKind,
+      authFamily,
+      audience,
       action,
+      targetType,
+      targetId,
       targetKey,
+      canonicalKeyDigest,
       targetVersion,
       policyVersion,
       createdAt,
@@ -279,12 +352,19 @@ export class InMemoryApprovalRequestRepository implements ApprovalRequestReposit
     return {
       id,
       resourceId,
+      projectId,
+      environmentId,
       status,
       requesterId,
       requesterType,
       authKind,
+      authFamily,
+      audience,
       action,
+      targetType,
+      targetId,
       targetKey,
+      canonicalKeyDigest,
       targetVersion,
       policyVersion,
       createdAt,
@@ -348,6 +428,33 @@ export class InMemoryApprovalRequestRepository implements ApprovalRequestReposit
           request.status === 'PENDING' &&
           request.expiresAt > now
       ) || null
+    );
+  }
+
+  async findPendingSignature(
+    resourceId: string,
+    requesterId: string,
+    action: string,
+    canonicalKeyDigest: string | null,
+    targetKey: string | null
+  ): Promise<ApprovalRequest | null> {
+    const now = new Date();
+    return (
+      Array.from(this.requests.values()).find((request) => {
+        if (
+          request.resourceId !== resourceId ||
+          request.requesterId !== requesterId ||
+          request.action !== action ||
+          request.status !== 'PENDING' ||
+          request.expiresAt <= now
+        ) {
+          return false;
+        }
+        if (canonicalKeyDigest !== null) {
+          return request.canonicalKeyDigest === canonicalKeyDigest;
+        }
+        return request.targetKey === targetKey;
+      }) || null
     );
   }
 
@@ -1174,21 +1281,33 @@ export class InMemoryApprovalGrantRepository implements ApprovalGrantRepository 
     _tx?: Prisma.TransactionClient
   ): Promise<ApprovalGrant> {
     const grant: ApprovalGrant = {
-      id: crypto.randomUUID(),
+      id: input.id ?? crypto.randomUUID(),
       requestId: input.requestId,
       resourceId: input.resourceId,
+      projectId: input.projectId ?? null,
+      environmentId: input.environmentId ?? null,
       requesterId: input.requesterId,
       requesterType: input.requesterType,
       authKind: input.authKind,
+      authFamily: input.authFamily ?? 'DISCORD',
+      audience: input.audience ?? 'purrmission-bot',
       action: input.action,
-      targetKey: input.targetKey,
+      targetType: input.targetType ?? 'RESOURCE',
+      targetId: input.targetId ?? null,
+      targetKey: input.targetKey ?? null,
+      canonicalKeySet: input.canonicalKeySet ?? null,
+      canonicalKeyDigest: input.canonicalKeyDigest ?? null,
       targetVersion: input.targetVersion,
       policyVersion: input.policyVersion,
       constraints: input.constraints ?? null,
-      createdAt: new Date(),
+      resolverId: input.resolverId ?? 'system',
+      resolverType: input.resolverType ?? 'DISCORD_USER',
+      resolverEvidence: input.resolverEvidence ?? null,
+      createdAt: input.createdAt ?? new Date(),
       expiresAt: input.expiresAt,
-      consumedAt: null,
-      revokedAt: null,
+      consumedAt: input.consumedAt ?? null,
+      revokedAt: input.revokedAt ?? null,
+      revokedReason: input.revokedReason ?? null,
     };
     this.grants.set(grant.id, grant);
     return grant;
@@ -1212,15 +1331,45 @@ export class InMemoryApprovalGrantRepository implements ApprovalGrantRepository 
   ): Promise<ApprovalGrantMetadataProjection | null> {
     const grant = Array.from(this.grants.values()).find((item) => item.requestId === requestId);
     if (!grant) return null;
-    const { id, resourceId, expiresAt, consumedAt, revokedAt } = grant;
-    return { id, requestId, resourceId, expiresAt, consumedAt, revokedAt };
+    const {
+      id,
+      resourceId,
+      projectId,
+      environmentId,
+      requesterId,
+      action,
+      targetType,
+      targetId,
+      targetKey,
+      canonicalKeyDigest,
+      expiresAt,
+      consumedAt,
+      revokedAt,
+    } = grant;
+    return {
+      id,
+      requestId,
+      resourceId,
+      projectId,
+      environmentId,
+      requesterId,
+      action,
+      targetType,
+      targetId,
+      targetKey,
+      canonicalKeyDigest,
+      expiresAt,
+      consumedAt,
+      revokedAt,
+    };
   }
 
   async findActiveUnconsumed(
     resourceId: string,
     requesterId: string,
     action: string,
-    targetKey: string | null
+    targetKey: string | null,
+    canonicalKeyDigest?: string | null
   ): Promise<ApprovalGrant | null> {
     const now = new Date();
     for (const grant of this.grants.values()) {
@@ -1228,12 +1377,17 @@ export class InMemoryApprovalGrantRepository implements ApprovalGrantRepository 
         grant.resourceId === resourceId &&
         grant.requesterId === requesterId &&
         grant.action === action &&
-        grant.targetKey === targetKey &&
         grant.consumedAt === null &&
         grant.revokedAt === null &&
         grant.expiresAt > now
       ) {
-        return grant;
+        if (canonicalKeyDigest !== undefined && canonicalKeyDigest !== null) {
+          if (grant.canonicalKeyDigest === canonicalKeyDigest) return grant;
+        } else if (targetKey !== null) {
+          if (grant.targetKey === targetKey) return grant;
+        } else {
+          return grant;
+        }
       }
     }
     return null;
@@ -1253,11 +1407,14 @@ export class InMemoryApprovalGrantRepository implements ApprovalGrantRepository 
     return false;
   }
 
-  async revoke(id: string, _tx?: Prisma.TransactionClient): Promise<void> {
+  async revoke(id: string, reason?: string, _tx?: Prisma.TransactionClient): Promise<boolean> {
     const grant = this.grants.get(id);
-    if (grant) {
+    if (grant && grant.revokedAt === null) {
       grant.revokedAt = new Date();
+      grant.revokedReason = reason ?? null;
+      return true;
     }
+    return false;
   }
 }
 
