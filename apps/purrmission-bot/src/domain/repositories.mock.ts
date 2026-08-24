@@ -1057,7 +1057,10 @@ export class InMemoryOutboxRepository implements OutboxRepository {
     if (event) {
       event.status = 'PROCESSED';
       event.claimedBy = null;
+      event.claimedAt = null;
       event.claimExpiresAt = null;
+      event.nextRetryAt = null;
+      event.lastErrorCode = null;
       if (attempts !== undefined) event.attempts = attempts;
       event.updatedAt = new Date();
     }
@@ -1074,7 +1077,9 @@ export class InMemoryOutboxRepository implements OutboxRepository {
       event.status = 'FAILED';
       event.lastErrorCode = lastErrorCode;
       event.claimedBy = null;
+      event.claimedAt = null;
       event.claimExpiresAt = null;
+      event.nextRetryAt = null;
       if (attempts !== undefined) event.attempts = attempts;
       event.updatedAt = new Date();
     }

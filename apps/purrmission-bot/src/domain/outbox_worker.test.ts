@@ -516,6 +516,7 @@ describe('OutboxWorker & Callback State Machine', () => {
         );
         assert.ok(callbackEvent);
         assert.equal(callbackEvent.status, 'PENDING');
+        assert.equal(callbackEvent.lastErrorCode, 'HTTP_500');
         assert.ok(callbackEvent.nextRetryAt !== null);
       } finally {
         process.env.ALLOW_PRIVATE_WEBHOOKS = prevAllow;

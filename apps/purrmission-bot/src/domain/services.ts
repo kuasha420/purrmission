@@ -3400,41 +3400,51 @@ export class CallbackDestinationService {
     const verificationToken = crypto.randomUUID();
     const challengeExpiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000); // 24 hours
 
-    const created = await this.repos.callbackDestinations.create({
-      resourceId: input.resourceId,
-      projectId: input.projectId ?? null,
-      name: input.name ?? null,
-      url: input.url,
-      keyId: 'default',
-      encryptedSecret,
-      status: 'PENDING_VERIFICATION',
-      verificationToken,
-      verificationChallengeExpiresAt: challengeExpiresAt,
-    });
+    const created = await this.transaction(async (tx) => {
+      const dest = await this.repos.callbackDestinations.create(
+        {
+          resourceId: input.resourceId,
+          projectId: input.projectId ?? null,
+          name: input.name ?? null,
+          url: input.url,
+          keyId: 'default',
+          encryptedSecret,
+          status: 'PENDING_VERIFICATION',
+          verificationToken,
+          verificationChallengeExpiresAt: challengeExpiresAt,
+        },
+        tx
+      );
 
-    await this.audit.log({
-      eventFamily: 'RESOURCE_CONFIGURATION',
-      eventType: 'CALLBACK_REGISTER',
-      surface: 'DOMAIN',
-      operation: 'callback.destination.create',
-      outcomeCode: 'SUCCESS',
-      decisionCode: 'ALLOW',
-      reasonCode: auth.reasonCode,
-      authoritySources: auth.authoritySources,
-      targetType: 'RESOURCE',
-      targetId: input.resourceId,
-      actorType: principal.type,
-      principalId: principal.id,
-      actorId: principal.subjectId,
-      authKind: principal.authKind,
-      resourceId: input.resourceId,
-      projectId: input.projectId,
-      payload: {
-        destinationId: created.id,
-        name: input.name ?? null,
-        url: input.url,
-        status: created.status,
-      },
+      await this.audit.log(
+        {
+          eventFamily: 'RESOURCE_CONFIGURATION',
+          eventType: 'CALLBACK_REGISTER',
+          surface: 'DOMAIN',
+          operation: 'callback.destination.create',
+          outcomeCode: 'SUCCESS',
+          decisionCode: 'ALLOW',
+          reasonCode: auth.reasonCode,
+          authoritySources: auth.authoritySources,
+          targetType: 'RESOURCE',
+          targetId: input.resourceId,
+          actorType: principal.type,
+          principalId: principal.id,
+          actorId: principal.subjectId,
+          authKind: principal.authKind,
+          resourceId: input.resourceId,
+          projectId: input.projectId,
+          payload: {
+            destinationId: dest.id,
+            name: input.name ?? null,
+            url: input.url,
+            status: dest.status,
+          },
+        },
+        tx
+      );
+
+      return dest;
     });
 
     return {
@@ -3523,26 +3533,31 @@ export class CallbackDestinationService {
     }
 
     const now = new Date();
-    await this.repos.callbackDestinations.updateStatus(destinationId, 'ACTIVE', now);
+    await this.transaction(async (tx) => {
+      await this.repos.callbackDestinations.updateStatus(destinationId, 'ACTIVE', now, tx);
 
-    await this.audit.log({
-      eventFamily: 'RESOURCE_CONFIGURATION',
-      eventType: 'CALLBACK_VERIFY',
-      surface: 'DOMAIN',
-      operation: 'callback.destination.verify',
-      outcomeCode: 'SUCCESS',
-      decisionCode: 'ALLOW',
-      reasonCode: auth.reasonCode,
-      authoritySources: auth.authoritySources,
-      targetType: 'RESOURCE',
-      targetId: destination.resourceId,
-      actorType: principal.type,
-      principalId: principal.id,
-      actorId: principal.subjectId,
-      authKind: principal.authKind,
-      resourceId: destination.resourceId,
-      projectId: destination.projectId,
-      payload: { destinationId, status: 'ACTIVE' },
+      await this.audit.log(
+        {
+          eventFamily: 'RESOURCE_CONFIGURATION',
+          eventType: 'CALLBACK_VERIFY',
+          surface: 'DOMAIN',
+          operation: 'callback.destination.verify',
+          outcomeCode: 'SUCCESS',
+          decisionCode: 'ALLOW',
+          reasonCode: auth.reasonCode,
+          authoritySources: auth.authoritySources,
+          targetType: 'RESOURCE',
+          targetId: destination.resourceId,
+          actorType: principal.type,
+          principalId: principal.id,
+          actorId: principal.subjectId,
+          authKind: principal.authKind,
+          resourceId: destination.resourceId,
+          projectId: destination.projectId,
+          payload: { destinationId, status: 'ACTIVE' },
+        },
+        tx
+      );
     });
 
     const updated = await this.repos.callbackDestinations.findMetadataById(destinationId);
@@ -3589,26 +3604,36 @@ export class CallbackDestinationService {
     const plaintextSecret = crypto.randomBytes(32).toString('hex');
     const encryptedSecret = encryptValue(plaintextSecret);
 
-    await this.repos.callbackDestinations.rotateSecret(destinationId, 'default', encryptedSecret);
+    await this.transaction(async (tx) => {
+      await this.repos.callbackDestinations.rotateSecret(
+        destinationId,
+        'default',
+        encryptedSecret,
+        tx
+      );
 
-    await this.audit.log({
-      eventFamily: 'RESOURCE_CONFIGURATION',
-      eventType: 'CALLBACK_ROTATE_SECRET',
-      surface: 'DOMAIN',
-      operation: 'callback.destination.rotate-secret',
-      outcomeCode: 'SUCCESS',
-      decisionCode: 'ALLOW',
-      reasonCode: auth.reasonCode,
-      authoritySources: auth.authoritySources,
-      targetType: 'RESOURCE',
-      targetId: destination.resourceId,
-      actorType: principal.type,
-      principalId: principal.id,
-      actorId: principal.subjectId,
-      authKind: principal.authKind,
-      resourceId: destination.resourceId,
-      projectId: destination.projectId,
-      payload: { destinationId },
+      await this.audit.log(
+        {
+          eventFamily: 'RESOURCE_CONFIGURATION',
+          eventType: 'CALLBACK_ROTATE_SECRET',
+          surface: 'DOMAIN',
+          operation: 'callback.destination.rotate-secret',
+          outcomeCode: 'SUCCESS',
+          decisionCode: 'ALLOW',
+          reasonCode: auth.reasonCode,
+          authoritySources: auth.authoritySources,
+          targetType: 'RESOURCE',
+          targetId: destination.resourceId,
+          actorType: principal.type,
+          principalId: principal.id,
+          actorId: principal.subjectId,
+          authKind: principal.authKind,
+          resourceId: destination.resourceId,
+          projectId: destination.projectId,
+          payload: { destinationId },
+        },
+        tx
+      );
     });
 
     return { secret: plaintextSecret };
@@ -3653,26 +3678,31 @@ export class CallbackDestinationService {
       throw new DomainAuthorizationError(auth.safeExplanation);
     }
 
-    await this.repos.callbackDestinations.updateStatus(destinationId, 'DISABLED');
+    await this.transaction(async (tx) => {
+      await this.repos.callbackDestinations.updateStatus(destinationId, 'DISABLED', undefined, tx);
 
-    await this.audit.log({
-      eventFamily: 'RESOURCE_CONFIGURATION',
-      eventType: 'CALLBACK_DISABLE',
-      surface: 'DOMAIN',
-      operation: 'callback.destination.disable',
-      outcomeCode: 'SUCCESS',
-      decisionCode: 'ALLOW',
-      reasonCode: auth.reasonCode,
-      authoritySources: auth.authoritySources,
-      targetType: 'RESOURCE',
-      targetId: destination.resourceId,
-      actorType: principal.type,
-      principalId: principal.id,
-      actorId: principal.subjectId,
-      authKind: principal.authKind,
-      resourceId: destination.resourceId,
-      projectId: destination.projectId,
-      payload: { destinationId, status: 'DISABLED' },
+      await this.audit.log(
+        {
+          eventFamily: 'RESOURCE_CONFIGURATION',
+          eventType: 'CALLBACK_DISABLE',
+          surface: 'DOMAIN',
+          operation: 'callback.destination.disable',
+          outcomeCode: 'SUCCESS',
+          decisionCode: 'ALLOW',
+          reasonCode: auth.reasonCode,
+          authoritySources: auth.authoritySources,
+          targetType: 'RESOURCE',
+          targetId: destination.resourceId,
+          actorType: principal.type,
+          principalId: principal.id,
+          actorId: principal.subjectId,
+          authKind: principal.authKind,
+          resourceId: destination.resourceId,
+          projectId: destination.projectId,
+          payload: { destinationId, status: 'DISABLED' },
+        },
+        tx
+      );
     });
 
     const updated = await this.repos.callbackDestinations.findMetadataById(destinationId);
@@ -3716,26 +3746,31 @@ export class CallbackDestinationService {
       throw new DomainAuthorizationError(auth.safeExplanation);
     }
 
-    await this.repos.callbackDestinations.delete(destinationId);
+    await this.transaction(async (tx) => {
+      await this.repos.callbackDestinations.delete(destinationId, tx);
 
-    await this.audit.log({
-      eventFamily: 'RESOURCE_CONFIGURATION',
-      eventType: 'CALLBACK_DELETE',
-      surface: 'DOMAIN',
-      operation: 'callback.destination.delete',
-      outcomeCode: 'SUCCESS',
-      decisionCode: 'ALLOW',
-      reasonCode: auth.reasonCode,
-      authoritySources: auth.authoritySources,
-      targetType: 'RESOURCE',
-      targetId: destination.resourceId,
-      actorType: principal.type,
-      principalId: principal.id,
-      actorId: principal.subjectId,
-      authKind: principal.authKind,
-      resourceId: destination.resourceId,
-      projectId: destination.projectId,
-      payload: { destinationId },
+      await this.audit.log(
+        {
+          eventFamily: 'RESOURCE_CONFIGURATION',
+          eventType: 'CALLBACK_DELETE',
+          surface: 'DOMAIN',
+          operation: 'callback.destination.delete',
+          outcomeCode: 'SUCCESS',
+          decisionCode: 'ALLOW',
+          reasonCode: auth.reasonCode,
+          authoritySources: auth.authoritySources,
+          targetType: 'RESOURCE',
+          targetId: destination.resourceId,
+          actorType: principal.type,
+          principalId: principal.id,
+          actorId: principal.subjectId,
+          authKind: principal.authKind,
+          resourceId: destination.resourceId,
+          projectId: destination.projectId,
+          payload: { destinationId },
+        },
+        tx
+      );
     });
   }
 

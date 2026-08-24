@@ -1557,6 +1557,11 @@ export class PrismaOutboxRepository implements OutboxRepository {
             { status: 'PENDING' },
             { status: 'DELIVERY_IN_PROGRESS', claimExpiresAt: { lt: now } },
           ],
+          AND: [
+            {
+              OR: [{ nextRetryAt: null }, { nextRetryAt: { lte: now } }],
+            },
+          ],
         },
         data: {
           status: 'DELIVERY_IN_PROGRESS',
@@ -1609,7 +1614,10 @@ export class PrismaOutboxRepository implements OutboxRepository {
       data: {
         status: 'PROCESSED',
         claimedBy: null,
+        claimedAt: null,
         claimExpiresAt: null,
+        nextRetryAt: null,
+        lastErrorCode: null,
         ...(attempts !== undefined ? { attempts } : {}),
       },
     });
@@ -1628,7 +1636,9 @@ export class PrismaOutboxRepository implements OutboxRepository {
         status: 'FAILED',
         lastErrorCode,
         claimedBy: null,
+        claimedAt: null,
         claimExpiresAt: null,
+        nextRetryAt: null,
         ...(attempts !== undefined ? { attempts } : {}),
       },
     });

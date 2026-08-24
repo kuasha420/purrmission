@@ -218,9 +218,16 @@ export class OutboxWorker {
       if (error instanceof DiscordClientUnavailableError) {
         throw error;
       }
-      throw new DeliverySideEffectError(
-        error instanceof Error ? error.name || error.message : 'DELIVERY_UNKNOWN'
-      );
+      if (error instanceof DeliverySideEffectError) {
+        throw error;
+      }
+      let safeError: string;
+      if (error instanceof Error) {
+        safeError = error.name && error.name !== 'Error' ? error.name : error.message;
+      } else {
+        safeError = String(error);
+      }
+      throw new DeliverySideEffectError(safeError || 'DELIVERY_UNKNOWN');
     }
 
     try {
@@ -379,9 +386,7 @@ export class OutboxWorker {
       });
 
       if (response.statusCode < 200 || response.statusCode >= 300) {
-        throw new Error(
-          `Callback delivery returned non-2xx HTTP status code: ${response.statusCode}`
-        );
+        throw new DeliverySideEffectError(`HTTP_${response.statusCode}`);
       }
 
       return 'DELIVERED';
@@ -409,9 +414,7 @@ export class OutboxWorker {
       });
 
       if (response.statusCode < 200 || response.statusCode >= 300) {
-        throw new Error(
-          `Callback delivery returned non-2xx HTTP status code: ${response.statusCode}`
-        );
+        throw new DeliverySideEffectError(`HTTP_${response.statusCode}`);
       }
     }
 

@@ -182,6 +182,8 @@ export class DomainPortsImpl implements DomainPorts {
     }
 
     const created = await this.repositories.transaction(async (tx) => {
+      const verificationToken = crypto.randomUUID();
+      const challengeExpiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000);
       const destination = await this.repositories.callbackDestinations.create(
         {
           resourceId,
@@ -189,7 +191,9 @@ export class DomainPortsImpl implements DomainPorts {
           url,
           keyId: 'default',
           encryptedSecret: encryptValue(secret),
-          status: 'ACTIVE',
+          status: 'PENDING_VERIFICATION',
+          verificationToken,
+          verificationChallengeExpiresAt: challengeExpiresAt,
         },
         tx
       );
