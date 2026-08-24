@@ -3156,7 +3156,7 @@ export class PrismaCallbackDestinationRepository implements CallbackDestinationR
       data: {
         status,
         ...(verifiedAt !== undefined ? { verifiedAt } : {}),
-        ...(status === 'ACTIVE'
+        ...(status !== 'PENDING_VERIFICATION'
           ? { verificationToken: null, verificationChallengeExpiresAt: null }
           : {}),
       },

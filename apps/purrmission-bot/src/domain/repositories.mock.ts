@@ -1672,7 +1672,7 @@ export class InMemoryCallbackDestinationRepository implements CallbackDestinatio
     if (dest) {
       dest.status = status;
       if (verifiedAt !== undefined) dest.verifiedAt = verifiedAt;
-      if (status === 'ACTIVE') {
+      if (status !== 'PENDING_VERIFICATION') {
         dest.verificationToken = null;
         dest.verificationChallengeExpiresAt = null;
       }

@@ -420,6 +420,18 @@ describe('OutboxWorker & Callback State Machine', () => {
       );
       assert.equal(disabled.status, 'DISABLED');
 
+      // 7b. Attempting to verify a DISABLED destination fails with ValidationError
+      await assert.rejects(
+        async () => {
+          await services.callbackDestinations.verifyDestination(
+            createRes.destination.id,
+            'any-token',
+            ownerPrincipal
+          );
+        },
+        (err) => err instanceof ValidationError
+      );
+
       // 8. Delete destination
       await services.callbackDestinations.deleteDestination(
         createRes.destination.id,

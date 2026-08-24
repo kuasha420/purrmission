@@ -3504,6 +3504,33 @@ export class CallbackDestinationService {
       throw new DomainAuthorizationError(auth.safeExplanation);
     }
 
+    if (destination.status !== 'PENDING_VERIFICATION') {
+      await this.audit.log({
+        eventFamily: 'RESOURCE_CONFIGURATION',
+        eventType: 'CALLBACK_VERIFY',
+        surface: 'DOMAIN',
+        operation: 'callback.destination.verify',
+        outcomeCode: 'FAILURE',
+        decisionCode: 'ALLOW',
+        reasonCode: auth.reasonCode,
+        authoritySources: auth.authoritySources,
+        targetType: 'RESOURCE',
+        targetId: destination.resourceId,
+        actorType: principal.type,
+        principalId: principal.id,
+        actorId: principal.subjectId,
+        authKind: principal.authKind,
+        resourceId: destination.resourceId,
+        projectId: destination.projectId,
+        payload: {
+          destinationId,
+          error: 'INVALID_STATUS_FOR_VERIFICATION',
+          status: destination.status,
+        },
+      });
+      throw new ValidationError('Callback destination is not in PENDING_VERIFICATION status.');
+    }
+
     if (
       !destination.verificationToken ||
       destination.verificationToken !== token ||
