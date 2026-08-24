@@ -22,6 +22,7 @@ const LIMITER_CATEGORIES = new Set([
   'credential-validation-failure-check',
   'resource-credential-validation-failure-check',
   'get-2fa',
+  'approval-create',
 ]);
 
 /** Return only the operation category; limiter keys can contain credentials or subject IDs. */

@@ -105,7 +105,7 @@ export interface Guardian {
 /**
  * Status of an approval request.
  */
-export type ApprovalStatus = 'PENDING' | 'APPROVED' | 'DENIED' | 'EXPIRED';
+export type ApprovalStatus = 'PENDING' | 'APPROVED' | 'DENIED' | 'EXPIRED' | 'CANCELLED';
 
 /**
  * An approval request for access to a protected resource.
@@ -113,41 +113,68 @@ export type ApprovalStatus = 'PENDING' | 'APPROVED' | 'DENIED' | 'EXPIRED';
 export interface ApprovalRequest {
   id: string;
   resourceId: string;
+  projectId?: string | null;
+  environmentId?: string | null;
   status: ApprovalStatus;
   context?: Record<string, unknown> | null; // Legacy metadata/telemetry compatibility
   requesterId: string;
   requesterType: string;
   authKind: string;
+  authFamily: string;
+  audience: string;
   action: string;
+  targetType: string;
+  targetId?: string | null;
   targetKey: string | null;
+  canonicalKeySet?: string[] | null;
+  canonicalKeyDigest?: string | null;
   targetVersion: string;
   policyVersion: string;
+  reason?: string | null;
   constraints: Record<string, unknown> | null;
   callbackUrl?: string;
+  idempotencyKey?: string | null;
+  payloadDigest?: string | null;
+  deliveryState: string;
   discordMessageId?: string;
   discordChannelId?: string;
   createdAt: Date;
   expiresAt: Date;
   resolvedBy?: string;
+  resolvedByType?: string;
   resolvedAt?: Date;
+  cancelledBy?: string;
+  cancelledAt?: Date;
 }
 
 export interface ApprovalGrant {
   id: string;
   requestId: string;
   resourceId: string;
+  projectId?: string | null;
+  environmentId?: string | null;
   requesterId: string;
   requesterType: string;
   authKind: string;
+  authFamily: string;
+  audience: string;
   action: string;
+  targetType: string;
+  targetId?: string | null;
   targetKey: string | null;
+  canonicalKeySet?: string[] | null;
+  canonicalKeyDigest?: string | null;
   targetVersion: string;
   policyVersion: string;
   constraints: Record<string, unknown> | null;
+  resolverId: string;
+  resolverType: string;
+  resolverEvidence?: Record<string, unknown> | null;
   createdAt: Date;
   expiresAt: Date;
   consumedAt: Date | null;
   revokedAt: Date | null;
+  revokedReason?: string | null;
 }
 
 /** Request projection that cannot carry callback or free-form context/constraints. */
@@ -155,12 +182,19 @@ export type ApprovalRequestMetadataProjection = Pick<
   ApprovalRequest,
   | 'id'
   | 'resourceId'
+  | 'projectId'
+  | 'environmentId'
   | 'status'
   | 'requesterId'
   | 'requesterType'
   | 'authKind'
+  | 'authFamily'
+  | 'audience'
   | 'action'
+  | 'targetType'
+  | 'targetId'
   | 'targetKey'
+  | 'canonicalKeyDigest'
   | 'targetVersion'
   | 'policyVersion'
   | 'createdAt'
@@ -170,7 +204,20 @@ export type ApprovalRequestMetadataProjection = Pick<
 /** Grant projection that excludes constraints and credential/auth provenance. */
 export type ApprovalGrantMetadataProjection = Pick<
   ApprovalGrant,
-  'id' | 'requestId' | 'resourceId' | 'expiresAt' | 'consumedAt' | 'revokedAt'
+  | 'id'
+  | 'requestId'
+  | 'resourceId'
+  | 'projectId'
+  | 'environmentId'
+  | 'requesterId'
+  | 'action'
+  | 'targetType'
+  | 'targetId'
+  | 'targetKey'
+  | 'canonicalKeyDigest'
+  | 'expiresAt'
+  | 'consumedAt'
+  | 'revokedAt'
 >;
 
 /**
@@ -190,6 +237,9 @@ export interface DecisionResult {
 
   /** Updated request state */
   request?: ApprovalRequest;
+
+  /** The issued approval grant if approved */
+  grant?: ApprovalGrant;
 
   /** Action to take after recording the decision */
   action?: {
@@ -221,13 +271,22 @@ export type AddGuardianInput = Omit<Guardian, 'id' | 'createdAt'> & { id?: strin
  */
 export type CreateApprovalRequestInput = Omit<
   ApprovalRequest,
-  'createdAt' | 'resolvedBy' | 'resolvedAt'
->;
+  'createdAt' | 'resolvedBy' | 'resolvedByType' | 'resolvedAt' | 'cancelledBy' | 'cancelledAt'
+> & {
+  id?: string;
+  createdAt?: Date;
+};
 
 export type CreateApprovalGrantInput = Omit<
   ApprovalGrant,
-  'id' | 'createdAt' | 'consumedAt' | 'revokedAt'
->;
+  'id' | 'createdAt' | 'consumedAt' | 'revokedAt' | 'revokedReason'
+> & {
+  id?: string;
+  createdAt?: Date;
+  consumedAt?: Date | null;
+  revokedAt?: Date | null;
+  revokedReason?: string | null;
+};
 
 /**
  * Type of access being requested via approval flow.
@@ -722,6 +781,9 @@ export interface CapabilityContext {
   targetVersion?: string;
   policyVersion?: string;
   requiredAudience?: string;
+  requiredAuthFamily?: string;
+  canonicalKeyDigest?: string;
+  canonicalKeys?: readonly string[];
   currentTimestamp?: Date;
 }
 

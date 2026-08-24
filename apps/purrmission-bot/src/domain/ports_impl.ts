@@ -291,29 +291,53 @@ export class DomainPortsImpl implements DomainPorts {
     principal: Principal,
     resourceId: string,
     action: string,
-    targetKey?: string | null
-  ): Promise<{ success: boolean; request?: ApprovalRequest }> {
+    targetKey?: string | null,
+    options?: {
+      canonicalKeys?: readonly string[] | null;
+      reason?: string;
+      idempotencyKey?: string;
+      constraints?: Record<string, unknown> | null;
+      expiresInMs?: number;
+      authFamily?: string;
+      audience?: string;
+    }
+  ): Promise<{ success: boolean; request?: ApprovalRequest; error?: string }> {
     return this.approvalService.createApprovalRequest({
       resourceId,
       principal,
       requesterId: principal.subjectId,
       requesterType: principal.type === 'SERVICE' ? 'SERVICE_PRINCIPAL' : 'DISCORD_USER',
       authKind: principal.authKind,
+      authFamily: options?.authFamily,
+      audience: options?.audience,
       action,
       targetKey: targetKey ?? null,
+      canonicalKeys: options?.canonicalKeys,
+      reason: options?.reason,
+      idempotencyKey: options?.idempotencyKey,
+      constraints: options?.constraints,
+      expiresInMs: options?.expiresInMs,
     });
   }
 
   async recordApprovalDecision(
     principal: Principal,
     requestId: string,
-    decision: 'APPROVE' | 'DENY'
-  ): Promise<{ success: boolean }> {
+    decision: 'APPROVE' | 'DENY',
+    consentId?: string
+  ): Promise<{ success: boolean; error?: string }> {
     if (principal.type === 'SERVICE') {
       throw new ForbiddenError('Service principals cannot resolve approval requests');
     }
 
-    return this.approvalService.recordDecision(requestId, decision, principal);
+    return this.approvalService.recordDecision(requestId, decision, principal, consentId);
+  }
+
+  async cancelApprovalRequest(
+    principal: Principal,
+    requestId: string
+  ): Promise<{ success: boolean; error?: string }> {
+    return this.approvalService.cancelApprovalRequest(requestId, principal);
   }
 
   async getApprovalRequest(

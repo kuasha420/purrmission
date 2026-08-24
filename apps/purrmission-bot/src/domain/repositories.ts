@@ -127,7 +127,30 @@ export interface ApprovalRequestRepository {
   ): Promise<ApprovalRequest>;
 
   /**
-   * Update the status of an approval request.
+   * Conditionally transition a pending request to APPROVED or DENIED in-transaction.
+   * Returns true if exactly 1 row was updated, false if the request was already decided/expired/cancelled.
+   */
+  transitionDecision(
+    id: string,
+    status: 'APPROVED' | 'DENIED',
+    resolvedBy: string,
+    resolvedByType?: string,
+    tx?: Prisma.TransactionClient
+  ): Promise<boolean>;
+
+  /**
+   * Conditionally cancel a pending request by the requester.
+   * Returns true if exactly 1 row was updated, false if not pending, expired, or not owned.
+   */
+  cancel(id: string, requesterId: string, tx?: Prisma.TransactionClient): Promise<boolean>;
+
+  /**
+   * Conditionally expire a single pending request.
+   */
+  expire(id: string, tx?: Prisma.TransactionClient): Promise<boolean>;
+
+  /**
+   * Update the status of an approval request (compatibility/fallback).
    */
   updateStatus(
     id: string,
@@ -135,6 +158,7 @@ export interface ApprovalRequestRepository {
     resolvedBy?: string,
     tx?: Prisma.TransactionClient
   ): Promise<void>;
+
   /** Store the Discord delivery reference after an outbox notification succeeds. */
   updateDeliveryReference(
     id: string,
@@ -146,23 +170,44 @@ export interface ApprovalRequestRepository {
   /**
    * Find an approval request by its ID.
    */
-  findById(id: string): Promise<ApprovalRequest | null>;
+  findById(id: string, tx?: Prisma.TransactionClient): Promise<ApprovalRequest | null>;
+
+  /**
+   * Find an approval request by actor subject ID and idempotency key.
+   */
+  findByIdempotencyKey(
+    requesterId: string,
+    idempotencyKey: string,
+    tx?: Prisma.TransactionClient
+  ): Promise<ApprovalRequest | null>;
 
   /**
    * Find all pending requests for a resource.
    */
-  findPendingByResourceId(resourceId: string): Promise<ApprovalRequest[]>;
+  findPendingByResourceId(
+    resourceId: string,
+    tx?: Prisma.TransactionClient
+  ): Promise<ApprovalRequest[]>;
 
   /**
    * Find all requests for a resource.
    */
-  findByResourceId(resourceId: string): Promise<ApprovalRequest[]>;
+  findByResourceId(resourceId: string, tx?: Prisma.TransactionClient): Promise<ApprovalRequest[]>;
 
   /** Subject-bound request discovery; never substitutes a global request scan. */
-  findByRequesterId(requesterId: string): Promise<ApprovalRequest[]>;
-  findMetadataById(id: string): Promise<ApprovalRequestMetadataProjection | null>;
-  findMetadataByRequesterId(requesterId: string): Promise<ApprovalRequestMetadataProjection[]>;
-  findMetadataByResourceId(resourceId: string): Promise<ApprovalRequestMetadataProjection[]>;
+  findByRequesterId(requesterId: string, tx?: Prisma.TransactionClient): Promise<ApprovalRequest[]>;
+  findMetadataById(
+    id: string,
+    tx?: Prisma.TransactionClient
+  ): Promise<ApprovalRequestMetadataProjection | null>;
+  findMetadataByRequesterId(
+    requesterId: string,
+    tx?: Prisma.TransactionClient
+  ): Promise<ApprovalRequestMetadataProjection[]>;
+  findMetadataByResourceId(
+    resourceId: string,
+    tx?: Prisma.TransactionClient
+  ): Promise<ApprovalRequestMetadataProjection[]>;
 
   /**
    * Find an active approval request by resource, requester, action and targetKey.
@@ -171,7 +216,8 @@ export interface ApprovalRequestRepository {
     resourceId: string,
     requesterId: string,
     action: string,
-    targetKey: string | null
+    targetKey: string | null,
+    tx?: Prisma.TransactionClient
   ): Promise<ApprovalRequest | null>;
 
   /**
@@ -181,7 +227,22 @@ export interface ApprovalRequestRepository {
     resourceId: string,
     requesterId: string,
     action: string,
-    targetKey: string | null
+    targetKey: string | null,
+    tx?: Prisma.TransactionClient
+  ): Promise<ApprovalRequest | null>;
+
+  /**
+   * Find a pending request by exact signature (authFamily, audience, canonicalKeyDigest or targetKey).
+   */
+  findPendingSignature(
+    resourceId: string,
+    requesterId: string,
+    action: string,
+    authFamily: string,
+    audience: string,
+    canonicalKeyDigest: string | null,
+    targetKey: string | null,
+    tx?: Prisma.TransactionClient
   ): Promise<ApprovalRequest | null>;
 
   /**
@@ -194,21 +255,26 @@ export interface ApprovalRequestRepository {
 export interface ApprovalGrantRepository {
   create(input: CreateApprovalGrantInput, tx?: Prisma.TransactionClient): Promise<ApprovalGrant>;
 
-  findById(id: string): Promise<ApprovalGrant | null>;
+  findById(id: string, tx?: Prisma.TransactionClient): Promise<ApprovalGrant | null>;
 
-  findByRequestId(requestId: string): Promise<ApprovalGrant | null>;
-  findMetadataByRequestId(requestId: string): Promise<ApprovalGrantMetadataProjection | null>;
+  findByRequestId(requestId: string, tx?: Prisma.TransactionClient): Promise<ApprovalGrant | null>;
+  findMetadataByRequestId(
+    requestId: string,
+    tx?: Prisma.TransactionClient
+  ): Promise<ApprovalGrantMetadataProjection | null>;
 
   findActiveUnconsumed(
     resourceId: string,
     requesterId: string,
     action: string,
-    targetKey: string | null
+    targetKey: string | null,
+    canonicalKeyDigest?: string | null,
+    tx?: Prisma.TransactionClient
   ): Promise<ApprovalGrant | null>;
 
   consume(id: string, tx?: Prisma.TransactionClient): Promise<boolean>;
 
-  revoke(id: string, tx?: Prisma.TransactionClient): Promise<void>;
+  revoke(id: string, reason?: string, tx?: Prisma.TransactionClient): Promise<boolean>;
 }
 
 /**
@@ -1563,23 +1629,96 @@ export class PrismaApprovalRequestRepository implements ApprovalRequestRepositor
       data: {
         id: input.id,
         resourceId: input.resourceId,
+        projectId: input.projectId ?? null,
+        environmentId: input.environmentId ?? null,
         status: input.status,
         context: input.context ? (input.context as Prisma.InputJsonValue) : Prisma.JsonNull,
         requesterId: input.requesterId,
         requesterType: input.requesterType,
         authKind: input.authKind,
+        authFamily: input.authFamily,
+        audience: input.audience,
         action: input.action,
-        targetKey: input.targetKey,
+        targetType: input.targetType ?? 'RESOURCE',
+        targetId: input.targetId ?? null,
+        targetKey: input.targetKey ?? null,
+        canonicalKeySet: input.canonicalKeySet
+          ? (input.canonicalKeySet as Prisma.InputJsonValue)
+          : Prisma.JsonNull,
+        canonicalKeyDigest: input.canonicalKeyDigest ?? null,
         targetVersion: input.targetVersion,
         policyVersion: input.policyVersion,
+        reason: input.reason ?? null,
         constraints: input.constraints ? JSON.stringify(input.constraints) : null,
-        callbackUrl: input.callbackUrl,
+        callbackUrl: input.callbackUrl ?? null,
+        idempotencyKey: input.idempotencyKey ?? null,
+        payloadDigest: input.payloadDigest ?? null,
+        deliveryState: input.deliveryState ?? 'PENDING',
+        createdAt: input.createdAt,
         expiresAt: input.expiresAt,
         discordMessageId: input.discordMessageId,
         discordChannelId: input.discordChannelId,
       },
     });
     return this.mapPrismaToDomain(created);
+  }
+
+  async transitionDecision(
+    id: string,
+    status: 'APPROVED' | 'DENIED',
+    resolvedBy: string,
+    resolvedByType = 'DISCORD_USER',
+    tx?: Prisma.TransactionClient
+  ): Promise<boolean> {
+    const client = tx || this.prisma;
+    const now = new Date();
+    const result = await client.approvalRequest.updateMany({
+      where: {
+        id,
+        status: 'PENDING',
+        expiresAt: { gt: now },
+      },
+      data: {
+        status,
+        resolvedBy,
+        resolvedByType,
+        resolvedAt: now,
+      },
+    });
+    return result.count === 1;
+  }
+
+  async cancel(id: string, requesterId: string, tx?: Prisma.TransactionClient): Promise<boolean> {
+    const client = tx || this.prisma;
+    const now = new Date();
+    const result = await client.approvalRequest.updateMany({
+      where: {
+        id,
+        requesterId,
+        status: 'PENDING',
+        expiresAt: { gt: now },
+      },
+      data: {
+        status: 'CANCELLED',
+        cancelledBy: requesterId,
+        cancelledAt: now,
+      },
+    });
+    return result.count === 1;
+  }
+
+  async expire(id: string, tx?: Prisma.TransactionClient): Promise<boolean> {
+    const client = tx || this.prisma;
+    const result = await client.approvalRequest.updateMany({
+      where: {
+        id,
+        status: 'PENDING',
+      },
+      data: {
+        status: 'EXPIRED',
+      },
+    });
+    return result.count === 1;
   }
 
   async updateStatus(
@@ -1614,15 +1753,38 @@ export class PrismaApprovalRequestRepository implements ApprovalRequestRepositor
     });
   }
 
-  async findById(id: string): Promise<ApprovalRequest | null> {
-    const row = await this.prisma.approvalRequest.findUnique({
+  async findById(id: string, tx?: Prisma.TransactionClient): Promise<ApprovalRequest | null> {
+    const client = tx || this.prisma;
+    const row = await client.approvalRequest.findUnique({
       where: { id },
     });
     return row ? this.mapPrismaToDomain(row) : null;
   }
 
-  async findPendingByResourceId(resourceId: string): Promise<ApprovalRequest[]> {
-    const rows = await this.prisma.approvalRequest.findMany({
+  async findByIdempotencyKey(
+    requesterId: string,
+    idempotencyKey: string,
+    tx?: Prisma.TransactionClient
+  ): Promise<ApprovalRequest | null> {
+    const client = tx || this.prisma;
+    const row = await client.approvalRequest.findFirst({
+      where: {
+        requesterId,
+        idempotencyKey,
+      },
+      orderBy: {
+        createdAt: 'desc',
+      },
+    });
+    return row ? this.mapPrismaToDomain(row) : null;
+  }
+
+  async findPendingByResourceId(
+    resourceId: string,
+    tx?: Prisma.TransactionClient
+  ): Promise<ApprovalRequest[]> {
+    const client = tx || this.prisma;
+    const rows = await client.approvalRequest.findMany({
       where: {
         resourceId,
         status: 'PENDING',
@@ -1631,8 +1793,12 @@ export class PrismaApprovalRequestRepository implements ApprovalRequestRepositor
     return rows.map((row) => this.mapPrismaToDomain(row));
   }
 
-  async findByResourceId(resourceId: string): Promise<ApprovalRequest[]> {
-    const rows = await this.prisma.approvalRequest.findMany({
+  async findByResourceId(
+    resourceId: string,
+    tx?: Prisma.TransactionClient
+  ): Promise<ApprovalRequest[]> {
+    const client = tx || this.prisma;
+    const rows = await client.approvalRequest.findMany({
       where: {
         resourceId,
       },
@@ -1640,8 +1806,12 @@ export class PrismaApprovalRequestRepository implements ApprovalRequestRepositor
     return rows.map((row) => this.mapPrismaToDomain(row));
   }
 
-  async findByRequesterId(requesterId: string): Promise<ApprovalRequest[]> {
-    const rows = await this.prisma.approvalRequest.findMany({ where: { requesterId } });
+  async findByRequesterId(
+    requesterId: string,
+    tx?: Prisma.TransactionClient
+  ): Promise<ApprovalRequest[]> {
+    const client = tx || this.prisma;
+    const rows = await client.approvalRequest.findMany({ where: { requesterId } });
     return rows.map((row) => this.mapPrismaToDomain(row));
   }
 
@@ -1649,12 +1819,19 @@ export class PrismaApprovalRequestRepository implements ApprovalRequestRepositor
     return {
       id: true,
       resourceId: true,
+      projectId: true,
+      environmentId: true,
       status: true,
       requesterId: true,
       requesterType: true,
       authKind: true,
+      authFamily: true,
+      audience: true,
       action: true,
+      targetType: true,
+      targetId: true,
       targetKey: true,
+      canonicalKeyDigest: true,
       targetVersion: true,
       policyVersion: true,
       createdAt: true,
@@ -1662,24 +1839,34 @@ export class PrismaApprovalRequestRepository implements ApprovalRequestRepositor
     } as const;
   }
 
-  async findMetadataById(id: string): Promise<ApprovalRequestMetadataProjection | null> {
-    return this.prisma.approvalRequest.findUnique({
+  async findMetadataById(
+    id: string,
+    tx?: Prisma.TransactionClient
+  ): Promise<ApprovalRequestMetadataProjection | null> {
+    const client = tx || this.prisma;
+    return client.approvalRequest.findUnique({
       where: { id },
       select: this.metadataSelect(),
     });
   }
 
   async findMetadataByRequesterId(
-    requesterId: string
+    requesterId: string,
+    tx?: Prisma.TransactionClient
   ): Promise<ApprovalRequestMetadataProjection[]> {
-    return this.prisma.approvalRequest.findMany({
+    const client = tx || this.prisma;
+    return client.approvalRequest.findMany({
       where: { requesterId },
       select: this.metadataSelect(),
     });
   }
 
-  async findMetadataByResourceId(resourceId: string): Promise<ApprovalRequestMetadataProjection[]> {
-    return this.prisma.approvalRequest.findMany({
+  async findMetadataByResourceId(
+    resourceId: string,
+    tx?: Prisma.TransactionClient
+  ): Promise<ApprovalRequestMetadataProjection[]> {
+    const client = tx || this.prisma;
+    return client.approvalRequest.findMany({
       where: { resourceId },
       select: this.metadataSelect(),
     });
@@ -1689,10 +1876,12 @@ export class PrismaApprovalRequestRepository implements ApprovalRequestRepositor
     resourceId: string,
     requesterId: string,
     action: string,
-    targetKey: string | null
+    targetKey: string | null,
+    tx?: Prisma.TransactionClient
   ): Promise<ApprovalRequest | null> {
+    const client = tx || this.prisma;
     const now = new Date();
-    const row = await this.prisma.approvalRequest.findFirst({
+    const row = await client.approvalRequest.findFirst({
       where: {
         resourceId,
         requesterId,
@@ -1712,10 +1901,12 @@ export class PrismaApprovalRequestRepository implements ApprovalRequestRepositor
     resourceId: string,
     requesterId: string,
     action: string,
-    targetKey: string | null
+    targetKey: string | null,
+    tx?: Prisma.TransactionClient
   ): Promise<ApprovalRequest | null> {
+    const client = tx || this.prisma;
     const now = new Date();
-    const row = await this.prisma.approvalRequest.findFirst({
+    const row = await client.approvalRequest.findFirst({
       where: {
         resourceId,
         requesterId,
@@ -1724,6 +1915,41 @@ export class PrismaApprovalRequestRepository implements ApprovalRequestRepositor
         status: 'PENDING',
         expiresAt: { gt: now },
       },
+      orderBy: {
+        createdAt: 'desc',
+      },
+    });
+    return row ? this.mapPrismaToDomain(row) : null;
+  }
+
+  async findPendingSignature(
+    resourceId: string,
+    requesterId: string,
+    action: string,
+    authFamily: string,
+    audience: string,
+    canonicalKeyDigest: string | null,
+    targetKey: string | null,
+    tx?: Prisma.TransactionClient
+  ): Promise<ApprovalRequest | null> {
+    const client = tx || this.prisma;
+    const now = new Date();
+    const where: Prisma.ApprovalRequestWhereInput = {
+      resourceId,
+      requesterId,
+      action,
+      authFamily,
+      audience,
+      status: 'PENDING',
+      expiresAt: { gt: now },
+    };
+    if (canonicalKeyDigest !== null) {
+      where.canonicalKeyDigest = canonicalKeyDigest;
+    } else {
+      where.targetKey = targetKey;
+    }
+    const row = await client.approvalRequest.findFirst({
+      where,
       orderBy: {
         createdAt: 'desc',
       },
@@ -1750,21 +1976,36 @@ export class PrismaApprovalRequestRepository implements ApprovalRequestRepositor
     return {
       id: row.id,
       resourceId: row.resourceId,
+      projectId: row.projectId ?? null,
+      environmentId: row.environmentId ?? null,
       status: row.status as ApprovalStatus,
       context: row.context as Record<string, unknown> | null,
       requesterId: row.requesterId,
       requesterType: row.requesterType,
       authKind: row.authKind,
+      authFamily: row.authFamily,
+      audience: row.audience,
       action: row.action,
+      targetType: row.targetType,
+      targetId: row.targetId ?? null,
       targetKey: row.targetKey,
+      canonicalKeySet: row.canonicalKeySet as string[] | null,
+      canonicalKeyDigest: row.canonicalKeyDigest ?? null,
       targetVersion: row.targetVersion,
       policyVersion: row.policyVersion,
+      reason: row.reason ?? null,
       constraints: row.constraints ? JSON.parse(row.constraints) : null,
       callbackUrl: row.callbackUrl ?? undefined,
+      idempotencyKey: row.idempotencyKey ?? null,
+      payloadDigest: row.payloadDigest ?? null,
+      deliveryState: row.deliveryState,
       createdAt: row.createdAt,
       expiresAt: row.expiresAt,
       resolvedBy: row.resolvedBy ?? undefined,
+      resolvedByType: row.resolvedByType ?? undefined,
       resolvedAt: row.resolvedAt ?? undefined,
+      cancelledBy: row.cancelledBy ?? undefined,
+      cancelledAt: row.cancelledAt ?? undefined,
       discordMessageId: row.discordMessageId ?? undefined,
       discordChannelId: row.discordChannelId ?? undefined,
     };
@@ -1781,41 +2022,76 @@ export class PrismaApprovalGrantRepository implements ApprovalGrantRepository {
     const client = tx || this.prisma;
     const row = await client.approvalGrant.create({
       data: {
+        id: input.id,
         requestId: input.requestId,
         resourceId: input.resourceId,
+        projectId: input.projectId ?? null,
+        environmentId: input.environmentId ?? null,
         requesterId: input.requesterId,
         requesterType: input.requesterType,
         authKind: input.authKind,
+        authFamily: input.authFamily,
+        audience: input.audience,
         action: input.action,
-        targetKey: input.targetKey,
+        targetType: input.targetType ?? 'RESOURCE',
+        targetId: input.targetId ?? null,
+        targetKey: input.targetKey ?? null,
+        canonicalKeySet: input.canonicalKeySet
+          ? (input.canonicalKeySet as Prisma.InputJsonValue)
+          : Prisma.JsonNull,
+        canonicalKeyDigest: input.canonicalKeyDigest ?? null,
         targetVersion: input.targetVersion,
         policyVersion: input.policyVersion,
         constraints: input.constraints ? JSON.stringify(input.constraints) : null,
+        resolverId: input.resolverId,
+        resolverType: input.resolverType,
+        resolverEvidence: input.resolverEvidence
+          ? (input.resolverEvidence as Prisma.InputJsonValue)
+          : Prisma.JsonNull,
+        createdAt: input.createdAt,
         expiresAt: input.expiresAt,
+        consumedAt: input.consumedAt ?? null,
+        revokedAt: input.revokedAt ?? null,
+        revokedReason: input.revokedReason ?? null,
       },
     });
     return this.mapRow(row);
   }
 
-  async findById(id: string): Promise<ApprovalGrant | null> {
-    const row = await this.prisma.approvalGrant.findUnique({ where: { id } });
+  async findById(id: string, tx?: Prisma.TransactionClient): Promise<ApprovalGrant | null> {
+    const client = tx || this.prisma;
+    const row = await client.approvalGrant.findUnique({ where: { id } });
     return row ? this.mapRow(row) : null;
   }
 
-  async findByRequestId(requestId: string): Promise<ApprovalGrant | null> {
-    const row = await this.prisma.approvalGrant.findUnique({ where: { requestId } });
+  async findByRequestId(
+    requestId: string,
+    tx?: Prisma.TransactionClient
+  ): Promise<ApprovalGrant | null> {
+    const client = tx || this.prisma;
+    const row = await client.approvalGrant.findUnique({ where: { requestId } });
     return row ? this.mapRow(row) : null;
   }
 
   async findMetadataByRequestId(
-    requestId: string
+    requestId: string,
+    tx?: Prisma.TransactionClient
   ): Promise<ApprovalGrantMetadataProjection | null> {
-    return this.prisma.approvalGrant.findUnique({
+    const client = tx || this.prisma;
+    return client.approvalGrant.findUnique({
       where: { requestId },
       select: {
         id: true,
         requestId: true,
         resourceId: true,
+        projectId: true,
+        environmentId: true,
+        requesterId: true,
+        action: true,
+        targetType: true,
+        targetId: true,
+        targetKey: true,
+        canonicalKeyDigest: true,
         expiresAt: true,
         consumedAt: true,
         revokedAt: true,
@@ -1827,19 +2103,27 @@ export class PrismaApprovalGrantRepository implements ApprovalGrantRepository {
     resourceId: string,
     requesterId: string,
     action: string,
-    targetKey: string | null
+    targetKey: string | null,
+    canonicalKeyDigest?: string | null,
+    tx?: Prisma.TransactionClient
   ): Promise<ApprovalGrant | null> {
+    const client = tx || this.prisma;
     const now = new Date();
-    const row = await this.prisma.approvalGrant.findFirst({
-      where: {
-        resourceId,
-        requesterId,
-        action,
-        targetKey,
-        consumedAt: null,
-        revokedAt: null,
-        expiresAt: { gt: now },
-      },
+    const where: Prisma.ApprovalGrantWhereInput = {
+      resourceId,
+      requesterId,
+      action,
+      consumedAt: null,
+      revokedAt: null,
+      expiresAt: { gt: now },
+    };
+    if (canonicalKeyDigest !== undefined && canonicalKeyDigest !== null) {
+      where.canonicalKeyDigest = canonicalKeyDigest;
+    } else if (targetKey !== null) {
+      where.targetKey = targetKey;
+    }
+    const row = await client.approvalGrant.findFirst({
+      where,
       orderBy: {
         createdAt: 'desc',
       },
@@ -1863,12 +2147,19 @@ export class PrismaApprovalGrantRepository implements ApprovalGrantRepository {
     return result.count === 1;
   }
 
-  async revoke(id: string, tx?: Prisma.TransactionClient): Promise<void> {
+  async revoke(id: string, reason?: string, tx?: Prisma.TransactionClient): Promise<boolean> {
     const client = tx || this.prisma;
-    await client.approvalGrant.update({
-      where: { id },
-      data: { revokedAt: new Date() },
+    const result = await client.approvalGrant.updateMany({
+      where: {
+        id,
+        revokedAt: null,
+      },
+      data: {
+        revokedAt: new Date(),
+        revokedReason: reason ?? null,
+      },
     });
+    return result.count === 1;
   }
 
   private mapRow(row: any): ApprovalGrant {
@@ -1876,18 +2167,30 @@ export class PrismaApprovalGrantRepository implements ApprovalGrantRepository {
       id: row.id,
       requestId: row.requestId,
       resourceId: row.resourceId,
+      projectId: row.projectId ?? null,
+      environmentId: row.environmentId ?? null,
       requesterId: row.requesterId,
       requesterType: row.requesterType,
       authKind: row.authKind,
+      authFamily: row.authFamily,
+      audience: row.audience,
       action: row.action,
-      targetKey: row.targetKey,
+      targetType: row.targetType,
+      targetId: row.targetId ?? null,
+      targetKey: row.targetKey ?? null,
+      canonicalKeySet: row.canonicalKeySet as string[] | null,
+      canonicalKeyDigest: row.canonicalKeyDigest ?? null,
       targetVersion: row.targetVersion,
       policyVersion: row.policyVersion,
       constraints: row.constraints ? JSON.parse(row.constraints) : null,
+      resolverId: row.resolverId,
+      resolverType: row.resolverType,
+      resolverEvidence: row.resolverEvidence as Record<string, unknown> | null,
       createdAt: row.createdAt,
       expiresAt: row.expiresAt,
-      consumedAt: row.consumedAt,
-      revokedAt: row.revokedAt,
+      consumedAt: row.consumedAt ?? null,
+      revokedAt: row.revokedAt ?? null,
+      revokedReason: row.revokedReason ?? null,
     };
   }
 }

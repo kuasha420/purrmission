@@ -117,11 +117,15 @@ describe('SSRF Protection, Idempotent Outbox, and Batch Secrets API', () => {
         requesterId: 'requester-1',
         requesterType: 'DISCORD_USER',
         authKind: 'DISCORD',
+        authFamily: 'DISCORD',
+        audience: 'purrmission-bot',
         action: 'resource.view',
+        targetType: 'RESOURCE',
         targetKey: null,
         targetVersion: 'v1',
         policyVersion: 'v1',
         constraints: null,
+        deliveryState: 'PENDING',
         expiresAt: new Date(Date.now() + 60_000),
       });
       const event = await repos.outbox.create(

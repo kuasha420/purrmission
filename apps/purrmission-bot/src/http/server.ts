@@ -194,8 +194,6 @@ export function createHttpServer(deps: HttpServerDeps): FastifyInstance {
       requesterType: principal.type,
       authKind: principal.authKind,
       action: 'resource.view',
-      targetVersion: resource.version,
-      policyVersion: resource.version,
     });
 
     if (!result.success) {

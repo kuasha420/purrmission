@@ -110,6 +110,7 @@ export const AUDIT_EVENT_CATALOG = {
   TOTP_LINK: 'TOTP_LIFECYCLE',
   TOTP_LINK_CONSENT_CREATE: 'TOTP_LIFECYCLE',
   TOTP_DELEGATION_CONSENT_CREATE: 'TOTP_LIFECYCLE',
+  TOTP_DELEGATION_CONSENT_CONSUME: 'TOTP_LIFECYCLE',
   TOTP_UNLINK: 'TOTP_LIFECYCLE',
   TOTP_ACCOUNT_CREATE: 'TOTP_LIFECYCLE',
   TOTP_ACCOUNT_UPDATE: 'TOTP_LIFECYCLE',
@@ -121,6 +122,7 @@ export const AUDIT_EVENT_CATALOG = {
   REQUEST_CREATE: 'REQUEST_GRANT_LIFECYCLE',
   REQUEST_EXPIRE: 'REQUEST_GRANT_LIFECYCLE',
   REQUEST_EXPIRY_SWEEP: 'REQUEST_GRANT_LIFECYCLE',
+  REQUEST_CANCEL: 'REQUEST_GRANT_LIFECYCLE',
   APPROVAL_DECISION: 'REQUEST_GRANT_LIFECYCLE',
   GRANT_ISSUE: 'REQUEST_GRANT_LIFECYCLE',
   GRANT_CONSUME: 'REQUEST_GRANT_LIFECYCLE',
@@ -172,6 +174,7 @@ const PAYLOAD_FIELDS_BY_EVENT = {
   TOTP_LINK: keys('totpAccountId', 'consentId'),
   TOTP_LINK_CONSENT_CREATE: keys('delegationEnabled'),
   TOTP_DELEGATION_CONSENT_CREATE: keys('action', 'authFamily', 'audience'),
+  TOTP_DELEGATION_CONSENT_CONSUME: keys('totpAccountId'),
   TOTP_UNLINK: keys('totpAccountId'),
   TOTP_ACCOUNT_CREATE: keys('accountName', 'issuerPresent'),
   TOTP_ACCOUNT_UPDATE: keys('accountName', 'backupKeyConfigured'),
@@ -183,10 +186,11 @@ const PAYLOAD_FIELDS_BY_EVENT = {
   REQUEST_CREATE: keys('action', 'targetKey', 'targetVersion', 'policyVersion', 'expiresAt'),
   REQUEST_EXPIRE: NONE,
   REQUEST_EXPIRY_SWEEP: keys('expiredCount'),
+  REQUEST_CANCEL: NONE,
   APPROVAL_DECISION: keys('decision', 'requesterId'),
-  GRANT_ISSUE: NONE,
-  GRANT_CONSUME: NONE,
-  GRANT_REVOKE: NONE,
+  GRANT_ISSUE: keys('action', 'targetKey', 'expiresAt'),
+  GRANT_CONSUME: keys('action', 'targetKey', 'expiresAt'),
+  GRANT_REVOKE: keys('reason'),
   DELIVERY_ENQUEUE: keys('deliveryType'),
   DELIVERY_ATTEMPT: keys('attempt', 'deliveryType'),
   DELIVERY_OUTCOME: keys('attempt', 'deliveryType', 'result', 'errorCode', 'terminal'),
@@ -713,7 +717,7 @@ export function buildOutboxEvent(
     input.eventType === 'REQUEST_CREATED'
       ? new Set(['requestId', 'resourceId'])
       : input.eventType === 'APPROVAL_CALLBACK'
-        ? new Set(['requestId', 'status'])
+        ? new Set(['requestId', 'status', 'grantId'])
         : null;
   if (!allowed) throw new Error(`Unregistered outbox event type: ${input.eventType}`);
   const payload: AuditMetadata = {};

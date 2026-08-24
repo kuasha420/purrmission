@@ -23,3 +23,9 @@ export class ValidationError extends DomainError {
     super(message);
   }
 }
+
+export class ConflictError extends DomainError {
+  constructor(message: string) {
+    super(message);
+  }
+}

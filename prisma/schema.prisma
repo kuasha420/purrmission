@@ -22,6 +22,7 @@ enum ApprovalRequestStatus {
   APPROVED
   DENIED
   EXPIRED
+  CANCELLED
 }
 
 model Resource {
@@ -78,53 +79,85 @@ model Guardian {
 }
 
 model ApprovalRequest {
-  id               String                @id @default(uuid())
-  resourceId       String
-  status           ApprovalRequestStatus @default(PENDING)
-  context          Json? // Nullable legacy context
-  requesterId      String                @default("legacy")
-  requesterType    String                @default("DISCORD_USER")
-  authKind         String                @default("DISCORD")
-  action           String                @default("resource.view")
-  targetKey        String?
-  targetVersion    String                @default("legacy")
-  policyVersion    String                @default("legacy")
-  constraints      String? // JSON serialized constraints
-  callbackUrl      String? // nullable
-  createdAt        DateTime              @default(now())
-  expiresAt        DateTime              @default(now())
-  resolvedBy       String?
-  resolvedAt       DateTime?
-  discordMessageId String?
-  discordChannelId String?
+  id                 String                @id @default(uuid())
+  resourceId         String
+  projectId          String?
+  environmentId      String?
+  status             ApprovalRequestStatus @default(PENDING)
+  context            Json? // Nullable legacy context
+  requesterId        String                @default("legacy")
+  requesterType      String                @default("DISCORD_USER")
+  authKind           String                @default("DISCORD")
+  authFamily         String                @default("DISCORD")
+  audience           String                @default("purrmission-bot")
+  action             String                @default("resource.view")
+  targetType         String                @default("RESOURCE")
+  targetId           String?
+  targetKey          String?
+  canonicalKeySet    Json?
+  canonicalKeyDigest String?
+  targetVersion      String                @default("legacy")
+  policyVersion      String                @default("legacy")
+  reason             String?
+  constraints        String? // JSON serialized constraints
+  callbackUrl        String? // nullable
+  idempotencyKey     String?
+  payloadDigest      String?
+  deliveryState      String                @default("PENDING")
+  createdAt          DateTime              @default(now())
+  expiresAt          DateTime              @default(now())
+  resolvedBy         String?
+  resolvedByType     String?
+  resolvedAt         DateTime?
+  cancelledBy        String?
+  cancelledAt        DateTime?
+  discordMessageId   String?
+  discordChannelId   String?
 
   resource Resource @relation(fields: [resourceId], references: [id], onDelete: Cascade)
 
+  @@unique([requesterId, idempotencyKey])
   @@index([resourceId])
   @@index([status])
   @@index([requesterId])
+  @@index([expiresAt])
+  @@index([canonicalKeyDigest])
+  @@index([targetType, targetId])
 }
 
 model ApprovalGrant {
-  id            String    @id @default(uuid())
-  requestId     String    @unique
-  resourceId    String
-  requesterId   String
-  requesterType String
-  authKind      String
-  action        String
-  targetKey     String?
-  targetVersion String
-  policyVersion String
-  constraints   String?
-  createdAt     DateTime  @default(now())
-  expiresAt     DateTime
-  consumedAt    DateTime?
-  revokedAt     DateTime?
+  id                 String    @id @default(uuid())
+  requestId          String    @unique
+  resourceId         String
+  projectId          String?
+  environmentId      String?
+  requesterId        String
+  requesterType      String
+  authKind           String
+  authFamily         String    @default("DISCORD")
+  audience           String    @default("purrmission-bot")
+  action             String
+  targetType         String    @default("RESOURCE")
+  targetId           String?
+  targetKey          String?
+  canonicalKeySet    Json?
+  canonicalKeyDigest String?
+  targetVersion      String
+  policyVersion      String
+  constraints        String?
+  resolverId         String    @default("system")
+  resolverType       String    @default("DISCORD_USER")
+  resolverEvidence   Json?
+  createdAt          DateTime  @default(now())
+  expiresAt          DateTime
+  consumedAt         DateTime?
+  revokedAt          DateTime?
+  revokedReason      String?
 
   @@index([resourceId])
   @@index([requesterId])
   @@index([expiresAt])
+  @@index([canonicalKeyDigest])
 }
 
 model TOTPAccount {

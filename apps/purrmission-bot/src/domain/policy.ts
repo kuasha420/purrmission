@@ -771,10 +771,8 @@ export async function hasCapability(
       if (!resolvedRequest) {
         return deny('MISSING_CONTEXT', 'Request decisions require an exact approval request.');
       }
-      if (userId) {
-        if (resolvedRequest.requesterId === userId) {
-          return deny('SELF_APPROVAL_FORBIDDEN', 'A requester cannot decide their own request.');
-        }
+      if (resolvedRequest.requesterId === authorizationSubjectId(principal)) {
+        return deny('SELF_APPROVAL_FORBIDDEN', 'A requester cannot decide their own request.');
       }
       if (isResourceOwner) return allow('OWNER', 'Resource Owner can decide requests');
       if (explicitGuardianRole === 'GUARDIAN')
@@ -798,8 +796,13 @@ export async function hasCapability(
         grant.requesterId !== authorizationSubjectId(principal) ||
         grant.authKind !== principal.authKind ||
         grant.resourceId !== resourceId ||
+        (context.requiredAuthFamily !== undefined &&
+          grant.authFamily !== context.requiredAuthFamily) ||
+        (context.requiredAudience !== undefined && grant.audience !== context.requiredAudience) ||
         (context.action !== undefined && grant.action !== context.action) ||
         (context.fieldName !== undefined && grant.targetKey !== context.fieldName) ||
+        (context.canonicalKeyDigest !== undefined &&
+          grant.canonicalKeyDigest !== context.canonicalKeyDigest) ||
         (context.targetVersion !== undefined && grant.targetVersion !== context.targetVersion) ||
         (context.policyVersion !== undefined && grant.policyVersion !== context.policyVersion)
       ) {

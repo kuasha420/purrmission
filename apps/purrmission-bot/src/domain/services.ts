@@ -33,7 +33,7 @@ import { logger } from '../logging/logger.js';
 import { AuditService, buildOutboxEvent } from './audit.js';
 import { AuthService, AccessDeniedError, ForbiddenError } from './auth.js';
 import { ProjectService } from './project.js';
-import { ResourceNotFoundError, DuplicateError, ValidationError } from './errors.js';
+import { ResourceNotFoundError, DuplicateError, ValidationError, ConflictError } from './errors.js';
 import {
   getEffectiveGuardians,
   isEffectiveGuardian,
@@ -64,17 +64,60 @@ import {
 import { rateLimiter } from '../infra/rateLimit.js';
 
 /**
+ * Recursively canonicalize JSON values with sorted object keys.
+ */
+function canonicalJsonStringify(value: unknown): string {
+  if (value === null || typeof value !== 'object') {
+    return JSON.stringify(value);
+  }
+  if (value instanceof Date) {
+    return JSON.stringify(value.toISOString());
+  }
+  if (Array.isArray(value)) {
+    return `[${value.map((item) => canonicalJsonStringify(item)).join(',')}]`;
+  }
+  const entries = Object.entries(value as Record<string, unknown>).sort(([k1], [k2]) =>
+    k1.localeCompare(k2)
+  );
+  return `{${entries.map(([k, v]) => `${JSON.stringify(k)}:${canonicalJsonStringify(v)}`).join(',')}}`;
+}
+
+/**
+ * Helper to compute canonical payload digest for idempotency.
+ */
+function computeRequestPayloadDigest(fields: {
+  resourceId: string;
+  action: string;
+  targetKey: string | null;
+  canonicalKeyDigest: string | null;
+  reason: string | null;
+  constraints: Record<string, unknown> | null;
+  authFamily: string;
+  audience: string;
+}): string {
+  const normalized = canonicalJsonStringify({
+    resourceId: fields.resourceId,
+    action: fields.action,
+    targetKey: fields.targetKey,
+    canonicalKeyDigest: fields.canonicalKeyDigest,
+    reason: fields.reason,
+    constraints: fields.constraints,
+    authFamily: fields.authFamily,
+    audience: fields.audience,
+  });
+  return crypto.createHash('sha256').update(normalized, 'utf8').digest('hex');
+}
+
+/**
  * Service dependencies.
  */
 export interface ServiceDependencies {
   repositories: Repositories;
   audit: AuditService;
   approval?: ApprovalService;
+  rateLimiter?: import('../infra/rateLimit.js').RateLimiter;
 }
 
-/**
- * Input for creating an approval request.
- */
 /**
  * Input for creating an approval request.
  */
@@ -84,15 +127,20 @@ export interface CreateApprovalRequestInput {
   context?: Record<string, unknown>;
   callbackUrl?: string;
   expiresInMs?: number;
-  // V2 fields:
+  // V2 typed fields:
   requesterId?: string;
   requesterType?: string;
   authKind?: string;
+  authFamily?: string;
+  audience?: string;
   action?: string;
+  targetType?: string;
+  targetId?: string | null;
   targetKey?: string | null;
-  targetVersion?: string;
-  policyVersion?: string;
+  canonicalKeys?: readonly string[] | null;
+  reason?: string;
   constraints?: Record<string, unknown> | null;
+  idempotencyKey?: string;
 }
 
 /**
@@ -112,11 +160,13 @@ export interface CreateApprovalRequestResult {
 export class ApprovalService {
   readonly deps: ServiceDependencies;
   private readonly audit: AuditService;
+  private readonly rateLimiter: import('../infra/rateLimit.js').RateLimiter;
 
   constructor(deps: ServiceDependencies) {
     if (!deps.audit) throw new TypeError('ApprovalService requires an audit dependency.');
     this.deps = deps;
     this.audit = deps.audit;
+    this.rateLimiter = deps.rateLimiter ?? rateLimiter;
   }
 
   private async runTransaction<T>(
@@ -145,35 +195,114 @@ export class ApprovalService {
       };
     }
 
-    // Resolve V2 properties with fallback/legacy defaults
-    const requesterId =
-      input.requesterId ||
-      (input.context?.requesterId ? String(input.context.requesterId) : 'legacy');
-    const requesterType = input.requesterType || 'DISCORD_USER';
-    const authKind = input.authKind || 'DISCORD';
+    if (input.expiresInMs !== undefined && input.expiresInMs <= 0) {
+      return {
+        success: false,
+        error: 'expiresInMs must be a positive number',
+      };
+    }
+
+    // Resolve principal / requester provenance
+    const principal =
+      input.principal ||
+      createDiscordPrincipal(
+        input.requesterId ||
+          (input.context?.requesterId ? String(input.context.requesterId) : 'legacy')
+      );
+    const requesterId = principal.subjectId;
+    const requesterType = principal.type;
+    const authKind = principal.authKind;
+    const authFamily =
+      input.authFamily ||
+      (principal.type === 'PAWTHY_TOKEN'
+        ? 'PAWTHY_CLI'
+        : principal.type === 'RESOURCE_API_KEY'
+          ? 'RESOURCE_KEY'
+          : principal.type === 'SERVICE'
+            ? 'SERVICE'
+            : 'DISCORD');
+    const audience = input.audience || principal.audience || 'purrmission-bot';
     const action = input.action || 'resource.view';
+    const reason = input.reason || null;
+    const constraints = input.constraints || null;
+    const idempotencyKey = input.idempotencyKey || null;
+
+    // Actor/target rate limit check
+    const rateLimitKey = `${requesterId}:${input.resourceId}:approval-create`;
+    if (!this.rateLimiter.check(rateLimitKey)) {
+      return {
+        success: false,
+        error: 'Rate limit exceeded for approval request creation',
+      };
+    }
+
+    // Target and version resolution
     const suppliedTargetKey = input.targetKey || null;
     const versions = await resolveTargetVersions(
       repositories,
       input.resourceId,
       action,
-      suppliedTargetKey
+      suppliedTargetKey,
+      input.canonicalKeys
     );
     if (!versions) {
       return { success: false, error: 'The exact request target does not exist.' };
     }
-    const { targetKey, targetVersion, policyVersion } = versions;
+    const {
+      targetType,
+      targetId,
+      targetKey,
+      canonicalKeySet,
+      canonicalKeyDigest,
+      targetVersion,
+      policyVersion,
+      projectId,
+      environmentId,
+    } = versions;
 
-    // Deduplication check: check if a PENDING request already exists for this exact signature
-    let existingPending = null;
-    if (typeof repositories.approvalRequests.findPending === 'function') {
-      existingPending = await repositories.approvalRequests.findPending(
-        input.resourceId,
+    // Compute canonical payload digest
+    const payloadDigest = computeRequestPayloadDigest({
+      resourceId: input.resourceId,
+      action,
+      targetKey,
+      canonicalKeyDigest,
+      reason,
+      constraints,
+      authFamily,
+      audience,
+    });
+
+    // Idempotency Key Handling
+    if (idempotencyKey) {
+      const existingByIdempotency = await repositories.approvalRequests.findByIdempotencyKey(
         requesterId,
-        action,
-        targetKey
+        idempotencyKey
       );
+      if (existingByIdempotency) {
+        if (existingByIdempotency.payloadDigest === payloadDigest) {
+          return {
+            success: true,
+            request: existingByIdempotency,
+            resource,
+            guardians: await getEffectiveGuardians(repositories, input.resourceId),
+          };
+        }
+        throw new ConflictError(
+          'Idempotency key reuse with different request parameters is forbidden (409 Conflict).'
+        );
+      }
     }
+
+    // Active Pending Deduplication
+    const existingPending = await repositories.approvalRequests.findPendingSignature(
+      input.resourceId,
+      requesterId,
+      action,
+      authFamily,
+      audience,
+      canonicalKeyDigest,
+      targetKey
+    );
     if (existingPending) {
       return {
         success: true,
@@ -183,7 +312,7 @@ export class ApprovalService {
       };
     }
 
-    // Get guardians for the resource
+    // Verify guardians exist
     const guardians = await getEffectiveGuardians(repositories, input.resourceId);
     if (guardians.length === 0) {
       return {
@@ -210,17 +339,30 @@ export class ApprovalService {
           {
             id: crypto.randomUUID(),
             resourceId: input.resourceId,
+            projectId,
+            environmentId,
             status: 'PENDING',
             context: input.context || null,
             requesterId,
             requesterType,
             authKind,
+            authFamily,
+            audience,
             action,
+            targetType,
+            targetId,
             targetKey,
+            canonicalKeySet,
+            canonicalKeyDigest,
             targetVersion,
             policyVersion,
-            constraints: input.constraints || null,
+            reason,
+            constraints,
             callbackUrl: input.callbackUrl,
+            idempotencyKey,
+            payloadDigest,
+            deliveryState: 'PENDING',
+            createdAt: new Date(),
             expiresAt,
           },
           tx
@@ -230,7 +372,7 @@ export class ApprovalService {
           {
             eventFamily: 'REQUEST_GRANT_LIFECYCLE',
             eventType: 'REQUEST_CREATE',
-            surface: 'DOMAIN',
+            surface: correlationStorage.getStore()?.surface ?? 'DOMAIN',
             operation: 'request.create',
             outcomeCode: 'SUCCESS',
             capability: 'request.create',
@@ -239,29 +381,15 @@ export class ApprovalService {
             authoritySources: ['AUTHENTICATED_SUBJECT'],
             targetType: 'APPROVAL_REQUEST',
             targetId: req.id,
-            actorType:
-              input.principal?.type ??
-              (authKind === 'API_KEY'
-                ? 'RESOURCE_API_KEY'
-                : requesterType === 'PAWTHY_TOKEN'
-                  ? 'PAWTHY_TOKEN'
-                  : requesterType === 'SERVICE'
-                    ? 'SERVICE'
-                    : 'DISCORD_USER'),
-            principalId: input.principal?.id ?? `legacy-${authKind}:${requesterId}`,
-            actorId: input.principal?.subjectId ?? requesterId,
-            authKind:
-              input.principal?.authKind ??
-              (authKind === 'PAWTHY'
-                ? 'PAWTHY'
-                : authKind === 'API_KEY'
-                  ? 'API_KEY'
-                  : authKind === 'SERVICE'
-                    ? 'SERVICE'
-                    : 'DISCORD'),
+            actorType: principal.type,
+            principalId: principal.id,
+            actorId: principal.subjectId,
+            authKind: principal.authKind,
+            projectId: projectId ?? undefined,
+            environmentId: environmentId ?? undefined,
             resourceId: input.resourceId,
             requestId: req.id,
-            correlationId: input.principal?.correlationId,
+            correlationId: principal.correlationId,
             payload: {
               action,
               targetKey,
@@ -286,6 +414,7 @@ export class ApprovalService {
           },
         });
         await repositories.outbox.create(delivery, tx);
+
         await this.audit.log(
           {
             eventFamily: 'DELIVERY',
@@ -298,10 +427,10 @@ export class ApprovalService {
             authoritySources: ['AUTHENTICATED_SUBJECT'],
             targetType: 'DELIVERY',
             targetId: delivery.id,
-            actorType: input.principal?.type ?? 'DISCORD_USER',
-            principalId: input.principal?.id ?? `legacy-${authKind}:${requesterId}`,
-            actorId: input.principal?.subjectId ?? requesterId,
-            authKind: input.principal?.authKind ?? 'DISCORD',
+            actorType: principal.type,
+            principalId: principal.id,
+            actorId: principal.subjectId,
+            authKind: principal.authKind,
             resourceId: input.resourceId,
             requestId: req.id,
             correlationId: delivery.correlationId,
@@ -328,6 +457,25 @@ export class ApprovalService {
         guardians,
       };
     } catch (err) {
+      if (idempotencyKey) {
+        const concurrentReq = await repositories.approvalRequests.findByIdempotencyKey(
+          requesterId,
+          idempotencyKey
+        );
+        if (concurrentReq) {
+          if (concurrentReq.payloadDigest === payloadDigest) {
+            return {
+              success: true,
+              request: concurrentReq,
+              resource,
+              guardians: await getEffectiveGuardians(repositories, input.resourceId),
+            };
+          }
+          throw new ConflictError(
+            'Idempotency key reuse with different request parameters is forbidden (409 Conflict).'
+          );
+        }
+      }
       logger.error('Failed to create approval request atomically', {
         resourceId: input.resourceId,
         error: err instanceof Error ? err.message : String(err),
@@ -342,15 +490,18 @@ export class ApprovalService {
    * @param requestId - The ID of the request
    * @param decision - The decision (APPROVE or DENY)
    * @param principal - Authenticated principal making the decision
+   * @param consentId - Optional TOTP delegation consent ID for delegated TOTP approvals
    * @returns The result of recording the decision
    */
   async recordDecision(
     requestId: string,
     decision: ApprovalDecision,
-    principal: Principal
+    principal: Principal,
+    consentId?: string
   ): Promise<DecisionResult> {
     const { repositories } = this.deps;
-    const byGuardianDiscordId = principal.subjectId;
+    const resolverId = principal.subjectId;
+    const resolverType = principal.type;
 
     // Find the request
     const request = await repositories.approvalRequests.findById(requestId);
@@ -373,7 +524,7 @@ export class ApprovalService {
     // Check if request has expired
     if (request.expiresAt < new Date()) {
       await this.runTransaction(async (tx) => {
-        await repositories.approvalRequests.updateStatus(requestId, 'EXPIRED', undefined, tx);
+        await repositories.approvalRequests.expire(requestId, tx);
         await this.audit.log(
           {
             eventFamily: 'REQUEST_GRANT_LIFECYCLE',
@@ -408,6 +559,7 @@ export class ApprovalService {
       requestId,
       resourceId: request.resourceId,
     });
+
     if (!authorization.allowed) {
       await this.audit.log({
         eventFamily: 'AUTHORIZATION',
@@ -432,7 +584,7 @@ export class ApprovalService {
       if (authorization.reasonCode === 'SELF_APPROVAL_FORBIDDEN') {
         logger.warn('Self-approval rejected', {
           requestId,
-          guardianId: byGuardianDiscordId,
+          guardianId: resolverId,
         });
         return {
           success: false,
@@ -442,7 +594,7 @@ export class ApprovalService {
 
       logger.warn('Decision made without request.decide capability', {
         requestId,
-        discordUserId: byGuardianDiscordId,
+        discordUserId: resolverId,
         resourceId: request.resourceId,
         reasonCode: authorization.reasonCode,
       });
@@ -452,11 +604,10 @@ export class ApprovalService {
       };
     }
 
-    // Update the request status
     const newStatus = decision === 'APPROVE' ? 'APPROVED' : 'DENIED';
 
     try {
-      await this.runTransaction(async (tx) => {
+      const { updatedRequest, grant } = await this.runTransaction(async (tx) => {
         await this.audit.log(
           {
             eventFamily: 'AUTHORIZATION',
@@ -480,15 +631,181 @@ export class ApprovalService {
           },
           tx
         );
-        await repositories.approvalRequests.updateStatus(
+
+        let issuedGrant: ApprovalGrant | undefined;
+        let grantExpiresAt: Date = new Date(Date.now() + 15 * 60 * 1000);
+        let consumedConsentRecord: TOTPDelegationConsent | null = null;
+
+        if (decision === 'APPROVE') {
+          if (request.action === 'totp.code.read') {
+            // TOTP grants expire in 5 minutes (300 seconds) max
+            grantExpiresAt = new Date(Date.now() + 5 * 60 * 1000);
+
+            // Check if requester is TOTP custody owner:
+            const resource = await repositories.resources.findById(request.resourceId, tx);
+            if (resource && resource.totpAccountId) {
+              const accountMetadata = await repositories.totp.findMetadataById(
+                resource.totpAccountId
+              );
+              if (accountMetadata && accountMetadata.ownerDiscordUserId !== request.requesterId) {
+                // Delegated TOTP access: consent consumption is MANDATORY
+                let consent: TOTPDelegationConsent | null = null;
+                if (consentId) {
+                  consent = await repositories.totp.findDelegationConsentById(consentId);
+                }
+                if (!consent) {
+                  throw new AccessDeniedError(
+                    'Delegated TOTP approval requires an active, unconsumed TOTP delegation consent from the custody owner.'
+                  );
+                }
+
+                if (
+                  consent.authFamily !== request.authFamily ||
+                  consent.audience !== request.audience ||
+                  consent.operation !== request.action ||
+                  consent.requesterId !== request.requesterId ||
+                  consent.resourceId !== request.resourceId
+                ) {
+                  throw new AccessDeniedError(
+                    'TOTP delegation consent bindings do not match the requested operation, auth family, audience, or subject.'
+                  );
+                }
+
+                grantExpiresAt = new Date(
+                  Math.min(Date.now() + 5 * 60 * 1000, consent.maxGrantExpiresAt.getTime())
+                );
+
+                const consumedConsent = await repositories.totp.consumeDelegationConsent(
+                  {
+                    id: consent.id,
+                    resourceId: request.resourceId,
+                    totpAccountId: consent.totpAccountId,
+                    operation: request.action,
+                    requesterId: request.requesterId,
+                    ownerDiscordUserId: consent.ownerDiscordUserId,
+                    authFamily: request.authFamily,
+                    audience: request.audience,
+                    accountVersion: consent.accountVersion,
+                    linkVersion: consent.linkVersion,
+                    grantExpiresAt,
+                  },
+                  tx
+                );
+                if (!consumedConsent) {
+                  throw new AccessDeniedError(
+                    'TOTP delegation consent is invalid, expired, or was already consumed.'
+                  );
+                }
+                consumedConsentRecord = consent;
+              }
+            }
+          }
+        }
+
+        // Atomic conditional transition
+        const transitioned = await repositories.approvalRequests.transitionDecision(
           requestId,
           newStatus,
-          byGuardianDiscordId,
+          resolverId,
+          resolverType,
           tx
         );
+        if (!transitioned) {
+          throw new ConflictError(
+            'Request is no longer pending or was decided/cancelled/expired concurrently.'
+          );
+        }
 
-        // APPROVED is decision state, not reveal authority. The conditional transition and
-        // request-bound immutable grant model lands in #122; #117 deliberately mints no grant.
+        if (decision === 'APPROVE') {
+          if (consumedConsentRecord) {
+            await this.audit.log(
+              {
+                eventFamily: 'TOTP_LIFECYCLE',
+                eventType: 'TOTP_DELEGATION_CONSENT_CONSUME',
+                surface: 'DOMAIN',
+                operation: 'totp.delegation-consent.consume',
+                outcomeCode: 'SUCCESS',
+                decisionCode: 'ALLOW',
+                reasonCode: 'AUTHENTICATED_SUBJECT',
+                authoritySources: ['TOTP_OWNER'],
+                targetType: 'TOTP_ACCOUNT',
+                targetId: consumedConsentRecord.totpAccountId,
+                actorType: principal.type,
+                principalId: principal.id,
+                actorId: principal.subjectId,
+                authKind: principal.authKind,
+                resourceId: request.resourceId,
+                requestId: request.id,
+                payload: { totpAccountId: consumedConsentRecord.totpAccountId },
+              },
+              tx
+            );
+          }
+
+          issuedGrant = await repositories.approvalGrants.create(
+            {
+              id: crypto.randomUUID(),
+              requestId: request.id,
+              resourceId: request.resourceId,
+              projectId: request.projectId,
+              environmentId: request.environmentId,
+              requesterId: request.requesterId,
+              requesterType: request.requesterType,
+              authKind: request.authKind,
+              authFamily: request.authFamily,
+              audience: request.audience,
+              action: request.action,
+              targetType: request.targetType,
+              targetId: request.targetId,
+              targetKey: request.targetKey,
+              canonicalKeySet: request.canonicalKeySet,
+              canonicalKeyDigest: request.canonicalKeyDigest,
+              targetVersion: request.targetVersion,
+              policyVersion: request.policyVersion,
+              constraints: request.constraints,
+              resolverId,
+              resolverType,
+              resolverEvidence: {
+                decision,
+                resolvedAt: new Date().toISOString(),
+                authoritySources: authorization.authoritySources,
+                reasonCode: authorization.reasonCode,
+              },
+              createdAt: new Date(),
+              expiresAt: grantExpiresAt,
+            },
+            tx
+          );
+
+          await this.audit.log(
+            {
+              eventFamily: 'REQUEST_GRANT_LIFECYCLE',
+              eventType: 'GRANT_ISSUE',
+              surface: 'DOMAIN',
+              operation: 'grant.issue',
+              outcomeCode: 'SUCCESS',
+              capability: 'request.decide',
+              decisionCode: 'ALLOW',
+              reasonCode: authorization.reasonCode,
+              authoritySources: authorization.authoritySources,
+              targetType: 'APPROVAL_GRANT',
+              targetId: issuedGrant.id,
+              actorType: principal.type,
+              principalId: principal.id,
+              actorId: resolverId,
+              authKind: principal.authKind,
+              resourceId: request.resourceId,
+              requestId: request.id,
+              grantId: issuedGrant.id,
+              payload: {
+                action: issuedGrant.action,
+                targetKey: issuedGrant.targetKey,
+                expiresAt: issuedGrant.expiresAt.toISOString(),
+              },
+            },
+            tx
+          );
+        }
 
         await this.audit.log(
           {
@@ -505,12 +822,13 @@ export class ApprovalService {
             targetId: request.id,
             actorType: principal.type,
             principalId: principal.id,
-            actorId: byGuardianDiscordId,
+            actorId: resolverId,
             authKind: principal.authKind,
             resolverType: principal.type,
             resolverId: principal.subjectId,
             resourceId: request.resourceId,
             requestId: request.id,
+            grantId: issuedGrant ? issuedGrant.id : null,
             payload: {
               decision,
               requesterId: request.requesterId,
@@ -529,9 +847,11 @@ export class ApprovalService {
           payload: {
             requestId: request.id,
             status: newStatus,
+            grantId: issuedGrant ? issuedGrant.id : null,
           },
         });
         await repositories.outbox.create(delivery, tx);
+
         await this.audit.log(
           {
             eventFamily: 'DELIVERY',
@@ -556,26 +876,29 @@ export class ApprovalService {
           },
           tx
         );
-      });
 
-      const updatedRequest: ApprovalRequest = {
-        ...request,
-        status: newStatus,
-        resolvedBy: byGuardianDiscordId,
-        resolvedAt: new Date(),
-      };
+        const updReq: ApprovalRequest = {
+          ...request,
+          status: newStatus,
+          resolvedBy: resolverId,
+          resolvedByType: resolverType,
+          resolvedAt: new Date(),
+        };
+
+        return { updatedRequest: updReq, grant: issuedGrant };
+      });
 
       logger.info('Recorded decision on approval request', {
         requestId,
         decision,
-        byGuardianDiscordId,
+        byGuardianDiscordId: resolverId,
         newStatus,
       });
 
-      // Prepare callback action if URL is configured
       const result: DecisionResult = {
         success: true,
         request: updatedRequest,
+        grant,
       };
 
       if (request.callbackUrl) {
@@ -588,11 +911,84 @@ export class ApprovalService {
 
       return result;
     } catch (err) {
+      if (err instanceof AccessDeniedError || err instanceof ConflictError) {
+        return {
+          success: false,
+          error: err.message,
+        };
+      }
       logger.error('Failed to record decision atomically', {
         requestId,
         error: err instanceof Error ? err.message : String(err),
       });
-      throw err; // Fail closed
+      throw err;
+    }
+  }
+
+  /**
+   * Cancel an approval request by its requester.
+   */
+  async cancelApprovalRequest(
+    requestId: string,
+    principal: Principal
+  ): Promise<{ success: boolean; error?: string }> {
+    const { repositories } = this.deps;
+    const request = await repositories.approvalRequests.findById(requestId);
+    if (!request) {
+      return { success: false, error: `Request not found: ${requestId}` };
+    }
+
+    const authorization = await hasCapability(repositories, principal, 'request.cancel-own', {
+      requestId,
+      resourceId: request.resourceId,
+    });
+    if (!authorization.allowed) {
+      return { success: false, error: 'Only the requester may cancel their own approval request.' };
+    }
+
+    try {
+      await this.runTransaction(async (tx) => {
+        const cancelled = await repositories.approvalRequests.cancel(
+          requestId,
+          principal.subjectId,
+          tx
+        );
+        if (!cancelled) {
+          throw new ConflictError(
+            'Request is no longer pending or was cancelled/decided/expired concurrently.'
+          );
+        }
+
+        await this.audit.log(
+          {
+            eventFamily: 'REQUEST_GRANT_LIFECYCLE',
+            eventType: 'REQUEST_CANCEL',
+            surface: correlationStorage.getStore()?.surface ?? 'DOMAIN',
+            operation: 'request.cancel-own',
+            outcomeCode: 'SUCCESS',
+            capability: 'request.cancel-own',
+            decisionCode: 'ALLOW',
+            reasonCode: authorization.reasonCode,
+            authoritySources: authorization.authoritySources,
+            targetType: 'APPROVAL_REQUEST',
+            targetId: request.id,
+            actorType: principal.type,
+            principalId: principal.id,
+            actorId: principal.subjectId,
+            authKind: principal.authKind,
+            resourceId: request.resourceId,
+            requestId: request.id,
+            payload: {},
+          },
+          tx
+        );
+      });
+      return { success: true };
+    } catch (err) {
+      return {
+        success: false,
+        error: err instanceof Error ? err.message : String(err),
+      };
     }
   }
 
@@ -627,7 +1023,8 @@ export class ApprovalService {
     resourceId: string,
     requesterId: string,
     action: string,
-    targetKey: string | null
+    targetKey: string | null,
+    canonicalKeyDigest?: string | null
   ): Promise<ApprovalGrant | null> {
     if (!this.deps.repositories.approvalGrants) {
       return null;
@@ -636,7 +1033,8 @@ export class ApprovalService {
       resourceId,
       requesterId,
       action,
-      targetKey
+      targetKey,
+      canonicalKeyDigest
     );
   }
 
@@ -649,14 +1047,19 @@ export class ApprovalService {
     action: string,
     currentTargetVersion: string,
     currentPolicyVersion: string,
+    options?: {
+      requiredAuthFamily?: string;
+      requiredAudience?: string;
+      canonicalKeyDigest?: string | null;
+    },
     tx?: Prisma.TransactionClient
-  ): Promise<void> {
+  ): Promise<ApprovalGrant> {
     const { repositories } = this.deps;
     if (!repositories.approvalGrants) {
-      return;
+      throw new AccessDeniedError('Approval grants repository not available.');
     }
 
-    const grant = await repositories.approvalGrants.findById(grantId);
+    const grant = await repositories.approvalGrants.findById(grantId, tx);
     if (!grant) {
       throw new AccessDeniedError('Approval grant not found.');
     }
@@ -682,9 +1085,25 @@ export class ApprovalService {
       throw new AccessDeniedError('Principal mismatch on approval grant.');
     }
 
+    // Revalidate authFamily and audience
+    if (options?.requiredAuthFamily && grant.authFamily !== options.requiredAuthFamily) {
+      throw new AccessDeniedError('Auth family mismatch on approval grant.');
+    }
+    if (options?.requiredAudience && grant.audience !== options.requiredAudience) {
+      throw new AccessDeniedError('Audience mismatch on approval grant.');
+    }
+
     // Revalidate action
     if (grant.action !== action) {
       throw new AccessDeniedError('Action mismatch on approval grant.');
+    }
+
+    // Revalidate canonicalKeyDigest
+    if (
+      options?.canonicalKeyDigest !== undefined &&
+      grant.canonicalKeyDigest !== options.canonicalKeyDigest
+    ) {
+      throw new AccessDeniedError('Canonical key set digest mismatch on approval grant.');
     }
 
     // Revalidate target version
@@ -697,42 +1116,49 @@ export class ApprovalService {
       throw new AccessDeniedError('Policy version mismatch. Consent has been invalidated.');
     }
 
-    // Atomically consume
-    const consumed = await repositories.approvalGrants.consume(grant.id, tx);
-    if (!consumed) {
-      throw new AccessDeniedError('Failed to consume approval grant atomically.');
+    const consumeFn = async (clientTx: Prisma.TransactionClient) => {
+      const consumed = await repositories.approvalGrants.consume(grant.id, clientTx);
+      if (!consumed) {
+        throw new AccessDeniedError('Failed to consume approval grant atomically.');
+      }
+
+      await this.audit.log(
+        {
+          eventFamily: 'REQUEST_GRANT_LIFECYCLE',
+          eventType: 'GRANT_CONSUME',
+          surface: correlationStorage.getStore()?.surface ?? 'DOMAIN',
+          operation: 'grant.consume',
+          outcomeCode: 'SUCCESS',
+          capability: 'grant.consume',
+          decisionCode: 'ALLOW',
+          reasonCode: 'GRANT',
+          authoritySources: ['APPROVAL_GRANT'],
+          targetType: 'APPROVAL_GRANT',
+          targetId: grant.id,
+          actorType: principal.type,
+          principalId: principal.id,
+          actorId: principal.subjectId,
+          authKind: principal.authKind,
+          resourceId: grant.resourceId,
+          requestId: grant.requestId,
+          grantId: grant.id,
+          payload: {
+            action,
+            targetKey: grant.targetKey,
+            expiresAt: grant.expiresAt.toISOString(),
+          },
+        },
+        clientTx
+      );
+
+      return { ...grant, consumedAt: new Date() };
+    };
+
+    if (tx) {
+      return consumeFn(tx);
+    } else {
+      return this.runTransaction(consumeFn);
     }
-
-    await this.audit.log(
-      {
-        eventFamily: 'REQUEST_GRANT_LIFECYCLE',
-        eventType: 'GRANT_CONSUME',
-        surface: 'DOMAIN',
-        operation: 'grant.consume',
-        outcomeCode: 'SUCCESS',
-        capability: 'grant.consume',
-        decisionCode: 'ALLOW',
-        reasonCode: 'GRANT',
-        authoritySources: ['APPROVAL_GRANT'],
-        targetType: 'APPROVAL_GRANT',
-        targetId: grant.id,
-        actorType: principal.type,
-        principalId: principal.id,
-        actorId: principal.subjectId,
-        authKind: principal.authKind,
-        resourceId: grant.resourceId,
-        requestId: grant.requestId,
-        grantId: grant.id,
-        payload: {},
-      },
-      tx
-    );
-
-    logger.info('Consumed approval grant', {
-      grantId: grant.id,
-      requestId: grant.requestId,
-      requesterId: grant.requesterId,
-    });
   }
 
   /**
@@ -2082,10 +2508,53 @@ export class ResourceService {
       linkEnvelope.accountVersion === accountMetadata.version &&
       linkEnvelope.linkPolicyVersion === resource.totpLinkVersion
     );
-    const authorized = evalResult.allowed && evalResult.decisionCode === 'ALLOW' && linkIsCurrent;
+    let consumedGrantId: string | null = null;
 
-    if (!authorized) {
-      void grantId;
+    if (evalResult.allowed && evalResult.decisionCode === 'ALLOW' && linkIsCurrent) {
+      // Direct access allowed (Resource Owner or Custody Owner)
+    } else if (grantId && linkIsCurrent) {
+      // Delegated access via Approval Grant
+      const targetVersions = await resolveTargetVersions(
+        repositories,
+        resourceId,
+        'totp.code.read'
+      );
+      if (!targetVersions) {
+        throw new AccessDeniedError('Resource target versions could not be resolved.');
+      }
+
+      const authFamily =
+        userPrincipal.type === 'PAWTHY_TOKEN'
+          ? 'PAWTHY_CLI'
+          : userPrincipal.type === 'RESOURCE_API_KEY'
+            ? 'RESOURCE_KEY'
+            : userPrincipal.type === 'SERVICE'
+              ? 'SERVICE'
+              : 'DISCORD';
+      const audience = userPrincipal.audience || 'purrmission-bot';
+
+      if (!this.deps.approval) {
+        throw new AccessDeniedError(
+          'Approval service dependency not available for grant consumption.'
+        );
+      }
+
+      await this.runTransaction(async (tx) => {
+        await this.deps.approval!.consumeGrant(
+          grantId,
+          userPrincipal,
+          'totp.code.read',
+          targetVersions.targetVersion,
+          targetVersions.policyVersion,
+          {
+            requiredAuthFamily: authFamily,
+            requiredAudience: audience,
+          },
+          tx
+        );
+      });
+      consumedGrantId = grantId;
+    } else {
       void consentId;
       await this.audit.log({
         eventFamily: 'AUTHORIZATION',
@@ -2104,7 +2573,13 @@ export class ResourceService {
         actorId,
         authKind: userPrincipal.authKind,
         resourceId,
-        payload: { reason: linkIsCurrent ? 'No direct TOTP code authority' : 'Stale TOTP link' },
+        payload: {
+          reason: !linkIsCurrent
+            ? 'Stale TOTP link'
+            : grantId
+              ? 'Invalid or unauthorized approval grant'
+              : 'No direct TOTP code authority or approval grant',
+        },
       });
       if (!linkIsCurrent) {
         throw new AccessDeniedError(
@@ -2112,12 +2587,11 @@ export class ResourceService {
         );
       }
       throw new AccessDeniedError(
-        'Delegated TOTP reveal is deferred until request-bound consent and grant authority lands in #120/#122.'
+        'Delegated TOTP reveal requires a valid, unconsumed approval grant.'
       );
     }
 
-    // Load value-bearing custody data only after authorization and, for delegated access, after
-    // both exact one-time authorities have been consumed atomically.
+    // Load value-bearing custody data only after authorization and atomic consumption.
     const account = await repositories.totp.findById(resource.totpAccountId);
     if (!account || account.version !== accountMetadata.version) {
       throw new AccessDeniedError('TOTP account changed during authorization.');
@@ -2132,8 +2606,8 @@ export class ResourceService {
       outcomeCode: 'SUCCESS',
       capability: 'totp.code.read',
       decisionCode: 'ALLOW',
-      reasonCode: evalResult.reasonCode,
-      authoritySources: evalResult.authoritySources,
+      reasonCode: consumedGrantId ? 'GRANT' : evalResult.reasonCode,
+      authoritySources: consumedGrantId ? ['APPROVAL_GRANT'] : evalResult.authoritySources,
       targetType: 'TOTP_ACCOUNT',
       targetId: account.id,
       actorType: userPrincipal.type,
@@ -2141,7 +2615,7 @@ export class ResourceService {
       actorId,
       authKind: userPrincipal.authKind,
       resourceId,
-      grantId: null,
+      grantId: consumedGrantId,
       payload: { totpAccountId: account.id },
     });
 
@@ -2369,32 +2843,108 @@ export class ResourceService {
   async revealField(
     resourceId: string,
     name: string,
-    principal: Principal
+    principal: Principal,
+    grantId?: string
   ): Promise<ResourceField | null> {
     const decision = await hasCapability(this.deps.repositories, principal, 'secret.value.read', {
       resourceId,
       fieldName: name,
     });
-    await this.audit.log({
-      eventFamily: 'AUTHORIZATION',
-      eventType: 'AUTHORIZATION_DECISION',
-      surface: 'HTTP',
-      operation: 'secret.value.read.authorize',
-      outcomeCode: decision.allowed ? 'SUCCESS' : 'DENIED',
-      capability: 'secret.value.read',
-      decisionCode: decision.decisionCode,
-      reasonCode: decision.reasonCode,
-      authoritySources: decision.authoritySources,
-      targetType: 'SECRET',
-      targetId: `${resourceId}:${name}`,
-      actorType: principal.type,
-      principalId: principal.id,
-      actorId: principal.subjectId,
-      authKind: principal.authKind,
-      resourceId,
-      payload: { fieldName: name },
-    });
-    if (!decision.allowed) return null;
+
+    let consumedGrantId: string | null = null;
+
+    if (decision.allowed) {
+      // Direct access allowed
+      await this.audit.log({
+        eventFamily: 'AUTHORIZATION',
+        eventType: 'AUTHORIZATION_DECISION',
+        surface: 'HTTP',
+        operation: 'secret.value.read.authorize',
+        outcomeCode: 'SUCCESS',
+        capability: 'secret.value.read',
+        decisionCode: decision.decisionCode,
+        reasonCode: decision.reasonCode,
+        authoritySources: decision.authoritySources,
+        targetType: 'SECRET',
+        targetId: `${resourceId}:${name}`,
+        actorType: principal.type,
+        principalId: principal.id,
+        actorId: principal.subjectId,
+        authKind: principal.authKind,
+        resourceId,
+        payload: { fieldName: name },
+      });
+    } else if (grantId && this.deps.approval) {
+      // Delegated access via grant
+      const versions = await resolveTargetVersions(
+        this.deps.repositories,
+        resourceId,
+        'secret.value.read',
+        name
+      );
+      if (!versions) return null;
+
+      const authFamily =
+        principal.type === 'PAWTHY_TOKEN'
+          ? 'PAWTHY_CLI'
+          : principal.type === 'RESOURCE_API_KEY'
+            ? 'RESOURCE_KEY'
+            : principal.type === 'SERVICE'
+              ? 'SERVICE'
+              : 'DISCORD';
+      const audience = principal.audience || 'purrmission-bot';
+
+      try {
+        await this.runTransaction(async (tx) => {
+          await this.deps.approval!.consumeGrant(
+            grantId,
+            principal,
+            'secret.value.read',
+            versions.targetVersion,
+            versions.policyVersion,
+            {
+              requiredAuthFamily: authFamily,
+              requiredAudience: audience,
+              canonicalKeyDigest: versions.canonicalKeyDigest,
+            },
+            tx
+          );
+        });
+        consumedGrantId = grantId;
+      } catch (err) {
+        if (err instanceof AccessDeniedError || err instanceof ConflictError) {
+          return null;
+        }
+        logger.error('Failed to consume grant in revealField', {
+          error: err instanceof Error ? err.message : String(err),
+          resourceId,
+          fieldName: name,
+        });
+        throw err;
+      }
+    } else {
+      await this.audit.log({
+        eventFamily: 'AUTHORIZATION',
+        eventType: 'AUTHORIZATION_DECISION',
+        surface: 'HTTP',
+        operation: 'secret.value.read.authorize',
+        outcomeCode: 'DENIED',
+        capability: 'secret.value.read',
+        decisionCode: decision.decisionCode,
+        reasonCode: decision.reasonCode,
+        authoritySources: decision.authoritySources,
+        targetType: 'SECRET',
+        targetId: `${resourceId}:${name}`,
+        actorType: principal.type,
+        principalId: principal.id,
+        actorId: principal.subjectId,
+        authKind: principal.authKind,
+        resourceId,
+        payload: { fieldName: name },
+      });
+      return null;
+    }
+
     await this.audit.log({
       eventFamily: 'SECRET_LIFECYCLE',
       eventType: 'SECRET_REVEAL',
@@ -2403,8 +2953,8 @@ export class ResourceService {
       outcomeCode: 'SUCCESS',
       capability: 'secret.value.read',
       decisionCode: 'ALLOW',
-      reasonCode: decision.reasonCode,
-      authoritySources: decision.authoritySources,
+      reasonCode: consumedGrantId ? 'GRANT' : decision.reasonCode,
+      authoritySources: consumedGrantId ? ['APPROVAL_GRANT'] : decision.authoritySources,
       targetType: 'SECRET',
       targetId: `${resourceId}:${name}`,
       actorType: principal.type,
@@ -2412,6 +2962,7 @@ export class ResourceService {
       actorId: principal.subjectId,
       authKind: principal.authKind,
       resourceId,
+      grantId: consumedGrantId,
       payload: { fieldName: name },
     });
     return this.deps.repositories.resourceFields.findByResourceAndName(resourceId, name);
@@ -2663,7 +3214,10 @@ export interface Services {
 /**
  * Create all services with the given dependencies.
  */
-export function createServices(baseDeps: { repositories: Repositories }): Services {
+export function createServices(baseDeps: {
+  repositories: Repositories;
+  rateLimiter?: import('../infra/rateLimit.js').RateLimiter;
+}): Services {
   const audit = new AuditService(baseDeps);
   const fullDeps: ServiceDependencies = {
     ...baseDeps,
