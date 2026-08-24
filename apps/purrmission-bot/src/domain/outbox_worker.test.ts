@@ -393,6 +393,18 @@ describe('OutboxWorker & Callback State Machine', () => {
       assert.equal(verified.status, 'ACTIVE');
       assert.ok(verified.verifiedAt !== null);
 
+      // 5b. Single-use: Re-using the challenge token now fails as it was cleared on activation
+      await assert.rejects(
+        async () => {
+          await services.callbackDestinations.verifyDestination(
+            createRes.destination.id,
+            createRes.verificationToken,
+            ownerPrincipal
+          );
+        },
+        (err) => err instanceof ValidationError
+      );
+
       // 6. Rotate signing secret
       const rotation = await services.callbackDestinations.rotateSecret(
         createRes.destination.id,

@@ -312,7 +312,7 @@ export class OutboxWorker {
         content: `🔐 Approval request for resource: ${resourceId}`,
       });
 
-      if (this.repos.approvalRequests.updateDeliveryReference) {
+      if (this.repos.approvalRequests.updateDeliveryReference && !request.discordMessageId) {
         await this.repos.approvalRequests.updateDeliveryReference(
           requestId,
           sentMsg.id,
