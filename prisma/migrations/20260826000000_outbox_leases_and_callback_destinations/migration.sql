@@ -79,7 +79,7 @@ INSERT INTO "new_CallbackDestination" (
     "id", "resourceId", "url", "status", "keyId", "encryptedSecret", "createdAt", "updatedAt"
 )
 SELECT
-    "id", "resourceId", "url", 'DISABLED', 'legacy-unencrypted', "secret", "createdAt", "updatedAt"
+    "id", "resourceId", "url", 'DISABLED', 'legacy-redacted', 'REDACTED_LEGACY_PLAINTEXT_ROTATION_REQUIRED', "createdAt", "updatedAt"
 FROM "CallbackDestination";
 
 DROP TABLE "CallbackDestination";
