@@ -1,7 +1,5 @@
 import type { AutocompleteInteraction } from 'discord.js';
-
 import type { CommandContext } from './context.js';
-import { getGuardedResourcesForUser } from '../../domain/policy.js';
 
 const MAX_AUTOCOMPLETE_RESULTS = 25;
 
@@ -18,16 +16,21 @@ export async function handleResourceIdAutocomplete(
   const query = String(focusedOption.value).trim().toLowerCase();
   const userId = interaction.user.id;
 
-  const guardedResources = await getGuardedResourcesForUser(context.repositories, userId, query);
-
-  if (guardedResources.length === 0) {
+  const assignments = await context.repositories.guardians.findByUserId(userId);
+  if (assignments.length === 0) {
     await interaction.respond([]);
     return true;
   }
 
+  const resourceIds = [...new Set(assignments.map((a) => a.resourceId))];
+  const resources = await context.repositories.resources.findManyByIds(resourceIds);
+
   const filteredResources = query
-    ? guardedResources.filter((resource) => resource.name.toLowerCase().includes(query))
-    : guardedResources;
+    ? resources.filter(
+        (resource) =>
+          resource.name.toLowerCase().includes(query) || resource.id.toLowerCase().includes(query)
+      )
+    : resources;
 
   await interaction.respond(
     filteredResources.slice(0, MAX_AUTOCOMPLETE_RESULTS).map((resource) => ({

@@ -21,7 +21,6 @@ import { handleSlashCommand, handleAutocomplete } from './commands/index.js';
 import { handleApprovalButton } from './interactions/approvalButtons.js';
 
 import type { Repositories } from '../domain/repositories.js';
-import { getGuardedResourcesForUser } from '../domain/policy.js';
 import { correlationStorage } from '../logging/correlationContext.js';
 
 /**
@@ -176,8 +175,9 @@ export function createDiscordClient(deps: DiscordClientDeps): Client {
         const userId = message.author.id;
 
         // Fetch resources guarded by this user
-        const validResources = await getGuardedResourcesForUser(deps.repositories, userId);
-        const resourceIds = validResources.map((r) => r.id);
+        const assignments = await deps.repositories.guardians.findByUserId(userId);
+        const resourceIds = [...new Set(assignments.map((a) => a.resourceId))];
+        const validResources = await deps.repositories.resources.findManyByIds(resourceIds);
 
         let guardedList = '_None. You are not registered as a guardian for any resources._';
         let pendingList = '_No pending approval requests waiting for you._';

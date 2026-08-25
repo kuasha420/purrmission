@@ -99,7 +99,7 @@ describe('handleResourceAutocomplete', () => {
     assert.deepStrictEqual(respondCalls[0], [{ name: 'My Cool Resource', value: 'res-1' }]);
     assert.deepStrictEqual(findManyByIdsCalls[0], {
       ids: ['res-1', 'res-2'],
-      query: 'cool',
+      query: undefined,
     });
   });
 

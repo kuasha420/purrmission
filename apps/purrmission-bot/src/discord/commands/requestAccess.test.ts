@@ -11,7 +11,6 @@ describe('handleRequestAccess', () => {
     id: resourceId,
     name: 'Production Database',
     mode: 'ONE_OF_N' as const,
-    apiKey: 'key-123',
     createdAt: new Date(),
   };
 
@@ -19,6 +18,7 @@ describe('handleRequestAccess', () => {
     const mockReply = mock.fn(async () => {});
     const mockFollowUp = mock.fn(async () => {});
     const interaction = {
+      id: 'interaction-123',
       options: {
         getString: mock.fn((name: string, _required?: boolean) => {
           if (name === 'resource-id') return resourceId;
@@ -44,11 +44,7 @@ describe('handleRequestAccess', () => {
         },
       },
       services: {
-        resource: {
-          isGuardian: mock.fn(async () => false),
-        },
-        approval: {
-          findActiveApproval: mock.fn(async () => null),
+        ports: {
           createApprovalRequest: mock.fn(async () => ({ success: true })),
         },
       },
@@ -66,7 +62,7 @@ describe('handleRequestAccess', () => {
     );
   });
 
-  it('Branch 2: should reply that user is already authorized if they are an owner/guardian', async () => {
+  it('Branch 2a: should handle creation failure with custom error message', async () => {
     const { interaction, mockReply } = createMockInteraction();
     const context = {
       repositories: {
@@ -75,135 +71,7 @@ describe('handleRequestAccess', () => {
         },
       },
       services: {
-        resource: {
-          isGuardian: mock.fn(async () => true),
-        },
-        approval: {
-          findActiveApproval: mock.fn(async () => null),
-          createApprovalRequest: mock.fn(async () => ({ success: true })),
-        },
-      },
-    } as unknown as CommandContext;
-
-    await handleRequestAccess(interaction, context);
-
-    assert.strictEqual(mockReply.mock.calls.length, 1);
-    assert.deepStrictEqual(
-      (mockReply.mock.calls[0] as unknown as { arguments: unknown[] }).arguments[0],
-      {
-        content: '✅ You are already authorized for **Production Database**. No approval needed.',
-        ephemeral: true,
-      }
-    );
-  });
-
-  it('Branch 3a: should reply with notice if a pending approval request already exists', async () => {
-    const { interaction, mockReply } = createMockInteraction();
-    const existingApproval = {
-      id: 'req-789',
-      resourceId,
-      status: 'PENDING' as const,
-      context: {},
-      createdAt: new Date(),
-      expiresAt: null,
-    };
-
-    const context = {
-      repositories: {
-        resources: {
-          findById: mock.fn(async () => mockResource),
-        },
-      },
-      services: {
-        resource: {
-          isGuardian: mock.fn(async () => false),
-        },
-        approval: {
-          findActiveApproval: mock.fn(async () => existingApproval),
-          createApprovalRequest: mock.fn(async () => ({ success: true })),
-        },
-      },
-    } as unknown as CommandContext;
-
-    await handleRequestAccess(interaction, context);
-
-    assert.strictEqual(mockReply.mock.calls.length, 1);
-    const replyArg = (
-      mockReply.mock.calls[0] as unknown as {
-        arguments: Array<{ content: string; ephemeral?: boolean }>;
-      }
-    ).arguments[0];
-    assert.strictEqual(replyArg.ephemeral, true);
-    assert.match(
-      replyArg.content,
-      /⏳ You already have a pending access request for \*\*Production Database\*\*/
-    );
-    assert.match(replyArg.content, /Request ID: `req-789`/);
-  });
-
-  it('Branch 3b: should proceed to create a new request if previous approval is EXPIRED (not PENDING)', async () => {
-    const { interaction, mockReply } = createMockInteraction();
-    const expiredApproval = {
-      id: 'req-expired',
-      resourceId,
-      status: 'EXPIRED' as const,
-      context: {},
-      createdAt: new Date(Date.now() - 20000),
-      expiresAt: new Date(Date.now() - 10000),
-    };
-    const createdRequest = {
-      id: 'req-new',
-      resourceId,
-      status: 'PENDING' as const,
-      context: {},
-      createdAt: new Date(),
-      expiresAt: null,
-    };
-
-    const context = {
-      repositories: {
-        resources: {
-          findById: mock.fn(async () => mockResource),
-        },
-      },
-      services: {
-        resource: {
-          isGuardian: mock.fn(async () => false),
-        },
-        approval: {
-          findActiveApproval: mock.fn(async () => expiredApproval),
-          createApprovalRequest: mock.fn(async () => ({
-            success: true,
-            request: createdRequest,
-          })),
-        },
-      },
-    } as unknown as CommandContext;
-
-    await handleRequestAccess(interaction, context);
-
-    assert.strictEqual(mockReply.mock.calls.length, 1);
-    assert.match(
-      (mockReply.mock.calls[0] as unknown as { arguments: Array<{ content: string }> }).arguments[0]
-        .content,
-      /📝 \*\*Access request submitted for Production Database\*\*/
-    );
-  });
-
-  it('Branch 4a: should handle creation failure with custom error message', async () => {
-    const { interaction, mockReply } = createMockInteraction();
-    const context = {
-      repositories: {
-        resources: {
-          findById: mock.fn(async () => mockResource),
-        },
-      },
-      services: {
-        resource: {
-          isGuardian: mock.fn(async () => false),
-        },
-        approval: {
-          findActiveApproval: mock.fn(async () => null),
+        ports: {
           createApprovalRequest: mock.fn(async () => ({
             success: false,
             error: 'No active guardians configured for this resource',
@@ -225,7 +93,7 @@ describe('handleRequestAccess', () => {
     );
   });
 
-  it('Branch 4b: should handle creation failure with missing error string (default to Unknown error)', async () => {
+  it('Branch 2b: should handle creation failure with missing error string (default to Unknown error)', async () => {
     const { interaction, mockReply } = createMockInteraction();
     const context = {
       repositories: {
@@ -234,11 +102,7 @@ describe('handleRequestAccess', () => {
         },
       },
       services: {
-        resource: {
-          isGuardian: mock.fn(async () => false),
-        },
-        approval: {
-          findActiveApproval: mock.fn(async () => null),
+        ports: {
           createApprovalRequest: mock.fn(async () => ({
             success: false,
           })),
@@ -258,7 +122,7 @@ describe('handleRequestAccess', () => {
     );
   });
 
-  it('Branch 4c: should handle creation response with success=true but request=undefined', async () => {
+  it('Branch 2c: should handle creation response with success=true but request=undefined', async () => {
     const { interaction, mockReply } = createMockInteraction();
     const context = {
       repositories: {
@@ -267,11 +131,7 @@ describe('handleRequestAccess', () => {
         },
       },
       services: {
-        resource: {
-          isGuardian: mock.fn(async () => false),
-        },
-        approval: {
-          findActiveApproval: mock.fn(async () => null),
+        ports: {
           createApprovalRequest: mock.fn(async () => ({
             success: true,
             request: undefined,
@@ -292,7 +152,7 @@ describe('handleRequestAccess', () => {
     );
   });
 
-  it('Branch 5: should successfully create approval request and notify user', async () => {
+  it('Branch 3: should successfully create approval request via DomainPorts and notify user', async () => {
     const { interaction, mockReply } = createMockInteraction();
     const createdRequest = {
       id: 'req-success-100',
@@ -319,11 +179,7 @@ describe('handleRequestAccess', () => {
         },
       },
       services: {
-        resource: {
-          isGuardian: mock.fn(async () => false),
-        },
-        approval: {
-          findActiveApproval: mock.fn(async () => null),
+        ports: {
           createApprovalRequest: createApprovalRequestMock,
         },
       },
@@ -333,17 +189,16 @@ describe('handleRequestAccess', () => {
 
     // Verify service call arguments
     assert.strictEqual(createApprovalRequestMock.mock.calls.length, 1);
-    assert.deepStrictEqual(
-      (createApprovalRequestMock.mock.calls[0] as unknown as { arguments: unknown[] }).arguments[0],
-      {
-        resourceId,
-        context: {
-          requesterId: userId,
-          action: 'MANUAL_REQUEST',
-          reason: `Requested via Discord command by <@${userId}>`,
-        },
-      }
-    );
+    const callArgs = (
+      createApprovalRequestMock.mock.calls[0] as unknown as { arguments: unknown[] }
+    ).arguments;
+    assert.strictEqual((callArgs[0] as { subjectId: string }).subjectId, userId);
+    assert.strictEqual(callArgs[1], resourceId);
+    assert.strictEqual(callArgs[2], 'MANUAL_REQUEST');
+    assert.strictEqual(callArgs[3], null);
+    assert.deepStrictEqual(callArgs[4], {
+      reason: `Requested via Discord command by <@${userId}>`,
+    });
 
     // Verify interaction reply
     assert.strictEqual(mockReply.mock.calls.length, 1);
@@ -357,46 +212,6 @@ describe('handleRequestAccess', () => {
     assert.match(replyArg.content, /Request ID: `req-success-100`/);
   });
 
-  it('Branch 3c: should reply with notice if an approved access request already exists', async () => {
-    const { interaction, mockReply } = createMockInteraction();
-    const approvedApproval = {
-      id: 'req-approved-123',
-      resourceId,
-      status: 'APPROVED' as const,
-      context: {},
-      createdAt: new Date(),
-      expiresAt: null,
-    };
-
-    const context = {
-      repositories: {
-        resources: {
-          findById: mock.fn(async () => mockResource),
-        },
-      },
-      services: {
-        resource: {
-          isGuardian: mock.fn(async () => false),
-        },
-        approval: {
-          findActiveApproval: mock.fn(async () => approvedApproval),
-          createApprovalRequest: mock.fn(async () => ({ success: true })),
-        },
-      },
-    } as unknown as CommandContext;
-
-    await handleRequestAccess(interaction, context);
-
-    assert.strictEqual(mockReply.mock.calls.length, 1);
-    assert.deepStrictEqual(
-      (mockReply.mock.calls[0] as unknown as { arguments: unknown[] }).arguments[0],
-      {
-        content: '✅ You already have an approved access request for **Production Database**.',
-        ephemeral: true,
-      }
-    );
-  });
-
   it('Error handling: should reply with generic error when findById throws an exception', async () => {
     const { interaction, mockReply } = createMockInteraction();
     const context = {
@@ -408,77 +223,7 @@ describe('handleRequestAccess', () => {
         },
       },
       services: {
-        resource: {
-          isGuardian: mock.fn(async () => false),
-        },
-        approval: {
-          findActiveApproval: mock.fn(async () => null),
-          createApprovalRequest: mock.fn(async () => ({ success: true })),
-        },
-      },
-    } as unknown as CommandContext;
-
-    await handleRequestAccess(interaction, context);
-
-    assert.strictEqual(mockReply.mock.calls.length, 1);
-    assert.deepStrictEqual(
-      (mockReply.mock.calls[0] as unknown as { arguments: unknown[] }).arguments[0],
-      {
-        content: '❌ An unexpected error occurred while requesting access.',
-        ephemeral: true,
-      }
-    );
-  });
-
-  it('Error handling: should reply with generic error when isGuardian throws an exception', async () => {
-    const { interaction, mockReply } = createMockInteraction();
-    const context = {
-      repositories: {
-        resources: {
-          findById: mock.fn(async () => mockResource),
-        },
-      },
-      services: {
-        resource: {
-          isGuardian: mock.fn(async () => {
-            throw new Error('Resource service failure');
-          }),
-        },
-        approval: {
-          findActiveApproval: mock.fn(async () => null),
-          createApprovalRequest: mock.fn(async () => ({ success: true })),
-        },
-      },
-    } as unknown as CommandContext;
-
-    await handleRequestAccess(interaction, context);
-
-    assert.strictEqual(mockReply.mock.calls.length, 1);
-    assert.deepStrictEqual(
-      (mockReply.mock.calls[0] as unknown as { arguments: unknown[] }).arguments[0],
-      {
-        content: '❌ An unexpected error occurred while requesting access.',
-        ephemeral: true,
-      }
-    );
-  });
-
-  it('Error handling: should reply with generic error when findActiveApproval throws an exception', async () => {
-    const { interaction, mockReply } = createMockInteraction();
-    const context = {
-      repositories: {
-        resources: {
-          findById: mock.fn(async () => mockResource),
-        },
-      },
-      services: {
-        resource: {
-          isGuardian: mock.fn(async () => false),
-        },
-        approval: {
-          findActiveApproval: mock.fn(async () => {
-            throw new Error('Approval query failed');
-          }),
+        ports: {
           createApprovalRequest: mock.fn(async () => ({ success: true })),
         },
       },
@@ -505,11 +250,7 @@ describe('handleRequestAccess', () => {
         },
       },
       services: {
-        resource: {
-          isGuardian: mock.fn(async () => false),
-        },
-        approval: {
-          findActiveApproval: mock.fn(async () => null),
+        ports: {
           createApprovalRequest: mock.fn(async () => {
             throw new Error('Creation unexpected error');
           }),
@@ -541,11 +282,7 @@ describe('handleRequestAccess', () => {
         },
       },
       services: {
-        resource: {
-          isGuardian: mock.fn(async () => false),
-        },
-        approval: {
-          findActiveApproval: mock.fn(async () => null),
+        ports: {
           createApprovalRequest: mock.fn(async () => ({ success: true })),
         },
       },
@@ -576,11 +313,7 @@ describe('handleRequestAccess', () => {
         },
       },
       services: {
-        resource: {
-          isGuardian: mock.fn(async () => false),
-        },
-        approval: {
-          findActiveApproval: mock.fn(async () => null),
+        ports: {
           createApprovalRequest: mock.fn(async () => ({ success: true })),
         },
       },
@@ -613,11 +346,7 @@ describe('handleRequestAccess', () => {
         },
       },
       services: {
-        resource: {
-          isGuardian: mock.fn(async () => false),
-        },
-        approval: {
-          findActiveApproval: mock.fn(async () => null),
+        ports: {
           createApprovalRequest: mock.fn(async () => ({ success: true })),
         },
       },
@@ -643,11 +372,7 @@ describe('handleRequestAccess', () => {
         },
       },
       services: {
-        resource: {
-          isGuardian: mock.fn(async () => false),
-        },
-        approval: {
-          findActiveApproval: mock.fn(async () => null),
+        ports: {
           createApprovalRequest: mock.fn(async () => ({ success: true })),
         },
       },
