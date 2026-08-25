@@ -61,6 +61,7 @@ export class RateLimitError extends DomainError {
 // ---------------------------------------------------------------------------
 export interface CreateProjectDTO {
   name: string;
+  description?: string | null;
 }
 
 export interface AddMemberDTO {
@@ -142,6 +143,13 @@ export interface DomainPorts {
     projectId: string,
     envId: string,
     grantId?: string,
+    correlationId?: string
+  ): Promise<Record<string, string>>;
+  revealSecrets(
+    principal: Principal,
+    projectId: string,
+    envId: string,
+    options?: { keys?: readonly string[]; grantId?: string },
     correlationId?: string
   ): Promise<Record<string, string>>;
   setSecrets(principal: Principal, dto: BatchSetSecretsDTO, correlationId?: string): Promise<void>;

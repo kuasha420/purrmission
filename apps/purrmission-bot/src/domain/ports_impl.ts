@@ -7,7 +7,7 @@ import type {
   BatchSetSecretsDTO,
   CallbackDestinationDTO,
 } from './ports.js';
-import { ForbiddenError, NotFoundError } from './ports.js';
+import { ForbiddenError, NotFoundError, ConflictError } from './ports.js';
 import type {
   Principal,
   Project,
@@ -16,12 +16,15 @@ import type {
   ApprovalGrant,
   ProjectMember,
 } from './models.js';
+import type { Repositories } from './repositories.js';
+import type { Prisma } from '@prisma/client';
 import { validatePrincipal } from './principal.js';
 import { hasCapability } from './policy.js';
 import { ProjectService } from './project.js';
 import { ResourceService, ApprovalService } from './services.js';
 import { AuditService, sanitizeUrlForAudit } from './audit.js';
-import type { Repositories } from './repositories.js';
+import { AccessDeniedError } from './auth.js';
+import { resolveTargetVersions } from './target_versions.js';
 import { encryptValue } from '../infra/crypto.js';
 
 export class DomainPortsImpl implements DomainPorts {
@@ -381,6 +384,142 @@ export class DomainPortsImpl implements DomainPorts {
     throw new ForbiddenError('Secret values require the grant-consuming redemption endpoint');
   }
 
+  async revealSecrets(
+    principal: Principal,
+    projectId: string,
+    envId: string,
+    options?: { keys?: readonly string[]; grantId?: string },
+    correlationId?: string
+  ): Promise<Record<string, string>> {
+    this.ensureValidPrincipal(principal);
+    const project = await this.projectService.getProject(projectId);
+    if (!project) throw new NotFoundError('Project not found');
+
+    const env = await this.projectService.getEnvironmentById(projectId, envId);
+    if (!env || !env.resourceId) throw new NotFoundError('Environment not found');
+
+    const resourceId = env.resourceId;
+
+    if (options?.grantId) {
+      // Delegated access via grant
+      const versions = await resolveTargetVersions(
+        this.repositories,
+        resourceId,
+        'secret.value.read',
+        null,
+        options.keys
+      );
+      if (!versions) {
+        throw new ForbiddenError('Failed to resolve target versions for grant consumption');
+      }
+
+      const authFamily =
+        principal.type === 'PAWTHY_TOKEN'
+          ? 'PAWTHY_CLI'
+          : principal.type === 'RESOURCE_API_KEY'
+            ? 'RESOURCE_KEY'
+            : principal.type === 'SERVICE'
+              ? 'SERVICE'
+              : 'DISCORD';
+      const audience = principal.audience || 'purrmission-bot';
+
+      try {
+        await this.approvalService.consumeGrant(
+          options.grantId,
+          principal,
+          'secret.value.read',
+          versions.targetVersion,
+          versions.policyVersion,
+          {
+            requiredAuthFamily: authFamily,
+            requiredAudience: audience,
+            canonicalKeyDigest: versions.canonicalKeyDigest,
+          }
+        );
+      } catch (err) {
+        if (err instanceof AccessDeniedError || err instanceof ConflictError) {
+          throw new ForbiddenError(err.message);
+        }
+        throw err;
+      }
+    } else {
+      // Direct capability evaluation
+      const auth = await hasCapability(this.repositories, principal, 'secret.value.read', {
+        projectId,
+        resourceId,
+      });
+      if (!auth.allowed) {
+        await this.audit.log({
+          eventFamily: 'AUTHORIZATION',
+          eventType: 'AUTHORIZATION_DECISION',
+          surface: 'DOMAIN',
+          operation: 'secret.value.read',
+          outcomeCode: 'DENIED',
+          decisionCode: auth.decisionCode,
+          reasonCode: auth.reasonCode,
+          authoritySources: auth.authoritySources,
+          targetType: 'RESOURCE',
+          targetId: resourceId,
+          actorType: principal.type,
+          principalId: principal.id,
+          actorId: principal.subjectId,
+          authKind: principal.authKind,
+          projectId,
+          resourceId,
+          correlationId,
+          payload: { reason: auth.safeExplanation },
+        });
+        throw new ForbiddenError(auth.safeExplanation);
+      }
+    }
+
+    // Exact key selection before decryption
+    const result: Record<string, string> = {};
+    if (options?.keys && options.keys.length > 0) {
+      for (const key of options.keys) {
+        const field = await this.repositories.resourceFields.findByResourceAndName(resourceId, key);
+        if (field) {
+          result[key] = field.value;
+        }
+      }
+    } else {
+      const fieldMetas =
+        await this.repositories.resourceFields.findMetadataByResourceId(resourceId);
+      for (const meta of fieldMetas) {
+        const field = await this.repositories.resourceFields.findByResourceAndName(
+          resourceId,
+          meta.name
+        );
+        if (field) {
+          result[meta.name] = field.value;
+        }
+      }
+    }
+
+    await this.audit.log({
+      eventFamily: 'AUTHORIZATION',
+      eventType: 'AUTHORIZATION_DECISION',
+      surface: 'DOMAIN',
+      operation: 'secret.value.read',
+      outcomeCode: 'SUCCESS',
+      capability: 'secret.value.read',
+      decisionCode: 'ALLOW',
+      reasonCode: options?.grantId ? 'GRANT' : 'AUTHENTICATED_SUBJECT',
+      authoritySources: options?.grantId ? ['APPROVAL_GRANT'] : ['AUTHENTICATED_SUBJECT'],
+      targetType: 'RESOURCE',
+      targetId: resourceId,
+      actorType: principal.type,
+      principalId: principal.id,
+      actorId: principal.subjectId,
+      authKind: principal.authKind,
+      projectId,
+      resourceId,
+      correlationId,
+    });
+
+    return result;
+  }
+
   async setSecrets(
     principal: Principal,
     dto: BatchSetSecretsDTO,
@@ -479,7 +618,7 @@ export class DomainPortsImpl implements DomainPorts {
       throw new ForbiddenError(auth.safeExplanation);
     }
 
-    const created = await this.repositories.transaction(async (tx) => {
+    const created = await this.repositories.transaction(async (tx: Prisma.TransactionClient) => {
       const verificationToken = crypto.randomUUID();
       const challengeExpiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000);
       const destination = await this.repositories.callbackDestinations.create(
@@ -573,13 +712,15 @@ export class DomainPortsImpl implements DomainPorts {
     }
 
     const dests = await this.repositories.callbackDestinations.findByResourceId(resourceId);
-    return dests.map((d) => ({
-      id: d.id,
-      resourceId: d.resourceId,
-      url: d.url,
-      enabled: d.status === 'ACTIVE',
-      createdAt: d.createdAt,
-    }));
+    return dests.map(
+      (d: { id: string; resourceId: string; url: string; status: string; createdAt: Date }) => ({
+        id: d.id,
+        resourceId: d.resourceId,
+        url: d.url,
+        enabled: d.status === 'ACTIVE',
+        createdAt: d.createdAt,
+      })
+    );
   }
 
   async deleteCallback(

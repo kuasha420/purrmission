@@ -105,15 +105,25 @@ describe('Resource API', () => {
     const field = JSON.parse(createRes.payload);
     assert.strictEqual(field.name, 'DB_PASS');
 
-    // Get Value
-    const getRes = await server.inject({
+    // Legacy GET returns 405
+    const legacyGetRes = await server.inject({
       method: 'GET',
       url: `/api/resources/${resourceId}/fields/DB_PASS`,
       headers: { Authorization: `Bearer ${validToken}` },
     });
-    assert.strictEqual(getRes.statusCode, 200);
-    const getBody = JSON.parse(getRes.payload);
-    assert.strictEqual(getBody.value, 'secret123');
+    assert.strictEqual(legacyGetRes.statusCode, 405);
+
+    // Reveal Value via POST
+    const revealRes = await server.inject({
+      method: 'POST',
+      url: `/api/resources/${resourceId}/fields/reveal`,
+      headers: { Authorization: `Bearer ${validToken}` },
+      payload: { name: 'DB_PASS' },
+    });
+    assert.strictEqual(revealRes.statusCode, 200);
+    assert.strictEqual(revealRes.headers['cache-control'], 'no-store');
+    const revealBody = JSON.parse(revealRes.payload);
+    assert.strictEqual(revealBody.value, 'secret123');
   });
 
   it('should list fields', async () => {
@@ -403,9 +413,10 @@ describe('Resource API', () => {
         payload: { name: 'CREATED_BY_GUARDIAN', value: 'must-not-write' },
       }),
       server.inject({
-        method: 'GET',
-        url: `/api/resources/${resourceId}/fields/EXISTING`,
+        method: 'POST',
+        url: `/api/resources/${resourceId}/fields/reveal`,
         headers: { Authorization: `Bearer ${guardianToken}` },
+        payload: { name: 'EXISTING' },
       }),
       server.inject({
         method: 'DELETE',
