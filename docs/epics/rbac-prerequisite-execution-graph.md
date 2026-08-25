@@ -11,28 +11,21 @@
   routing are recorded in the
   [2026-07-26 prerequisite conformance report](../reports/2026-07-26-prerequisite-conformance-report.md)
   and [#138](https://github.com/kuasha420/purrmission/pull/138)
-- Current execution checkpoint: Waves 1 and 2 are Verified and closed. #119 completed through
-  [#147](https://github.com/kuasha420/purrmission/pull/147) at merge
-  `b4139782c61021fa6ec8ec3d6a4b8a952602b8de`; clean-master build, lint, full tests, and
-  fresh/populated/interrupted migration rehearsals pass. #120 and #121 are verified and closed;
-  #122 is now the next Ready node. #105's code path merged in #149, while its real offsite
-  production rehearsal remains an open rollout gate.
-- Last assessed: 2026-08-21
+- Current execution checkpoint: Waves 1 through 7 are Verified and closed. All underlying
+  implementation lanes (#117, #118, #119, #120, #121, #122, #123, #127, #128, #129, #130) are
+  merged into `master` via clean merge commits; clean-master build, lint, full tests (543 passing),
+  and fresh/populated/interrupted migration rehearsals pass. #124 (Cross-surface integration and
+  regression conformance gate) is now the current Ready node. #105's code path merged in #149, while
+  its real offsite production rehearsal remains an open rollout gate.
+- Last assessed: 2026-08-26
 
-All implementation nodes and both gates were reopened after the No-go result. Reopening records
-ownership; it does not make every node ready at once. #117's first implementation failed
-independent post-merge verification, then its corrective lane passed review and post-merge
-verification. #118 and #119 completed the serialized Wave 2 integration defined in Section 3.2;
-#120 and #121 are verified and closed, completing Wave 3; #122 is the next Ready lane. Issue #105
-remains independently claimable on the parallel production-safety lane.
-Every later node must wait for the incoming dependencies in Section 3 to be post-merge verified
-and closed.
-
-The approved stabilization intentionally trades availability for authority safety. #120 restores
-only custody-bound TOTP linking and exact delegation-consent input; those records grant no reveal
-authority. Until #122 lands its request/grant contracts, provisional grant issuance and non-owner
-delegated TOTP reveal remain disabled. Direct Resource Owner reveal and authorized unlink remain
-available.
+All implementation nodes across Waves 1 through 7 are complete, verified, and merged. #117 established
+the principal context and granular capability matrix; #118 and #119 provided signed audit v2 and
+metadata target versioning; #120 and #121 finalized TOTP custody/consent and HMAC credential lifecycles;
+#122 landed the Approval Request V2 and one-time grant state machine; #123 and #127 established outbox
+leases, SSRF webhooks, and the frozen DomainPorts substrate; #128 and #129 cut over Discord and Fastify
+HTTP endpoints; and #130 cut over the Pawthy CLI client.
+Wave 8 (#124) is now unlocked and ready to integrate cross-surface conformance and regression tests.
 
 ## 1. Goal and authority
 
@@ -84,13 +77,13 @@ flowchart TD
   I119["#119<br/>Metadata projections and target versions<br/>Verified and closed"]
   I120["#120<br/>TOTP custody and consent<br/>Verified and closed"]
   I121["#121<br/>Credential lifecycle<br/>Verified and closed"]
-  I122["#122<br/>Approval Request V2 and grants<br/>Ready"]
-  I123["#123<br/>Notification and callback delivery"]
-  I127["#127<br/>Shared adapter and transaction substrate"]
-  I128["#128<br/>Discord cutover"]
-  I129["#129<br/>HTTP cutover"]
-  I130["#130<br/>Pawthy cutover"]
-  I124["#124<br/>Integration and conformance gate"]
+  I122["#122<br/>Approval Request V2 and grants<br/>Verified and closed"]
+  I123["#123<br/>Notification and callback delivery<br/>Verified and closed"]
+  I127["#127<br/>Shared adapter and transaction substrate<br/>Verified and closed"]
+  I128["#128<br/>Discord cutover<br/>Verified and closed"]
+  I129["#129<br/>HTTP cutover<br/>Verified and closed"]
+  I130["#130<br/>Pawthy cutover<br/>Verified and closed"]
+  I124["#124<br/>Integration and conformance gate<br/>Ready"]
   I126["#126<br/>Independent knowledgebase reassessment"]
   READY["Prerequisites complete and verified<br/>Ready to file dashboard phases"]
   NOGO["No-go<br/>Blocking remediation under #116"]
@@ -161,8 +154,9 @@ incomplete at final reassessment, #126 must preserve an explicit production roll
 | #123    | Verified and closed via PR #154              | Outbox delivery leases and registered webhook destinations complete                        |
 | #127    | Verified and closed via PR #155              | Shared DomainPorts boundary & transaction substrate complete                               |
 | #128    | Verified and closed via PR #157              | Discord slash command layer cutover to DomainPorts complete                                |
-| #129    | In Review / Cutover Complete                 | Fastify HTTP routes cut over to DomainPorts with typed principal & reveal semantics        |
-| #130    | Queued after #129                            | Pawthy CLI cutover to DomainPorts                                                          |
+| #129    | Verified and closed via PR #158              | Fastify HTTP routes cut over to DomainPorts with typed principal & reveal semantics        |
+| #130    | Verified and closed via PR #159              | Pawthy CLI cutover to DomainPorts, POST reveal, bounded polling, token commands            |
+| #124    | Ready for execution                          | Unlocked; Cross-surface integration and regression conformance gate                        |
 | #105    | Implementation merged; rollout evidence open | #149 merged; real offsite upload/download/isolated restore still blocks production rollout |
 
 Research, threat modeling, test design, and file-collision planning may begin one wave early.
