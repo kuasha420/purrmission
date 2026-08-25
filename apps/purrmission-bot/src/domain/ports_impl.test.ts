@@ -24,6 +24,29 @@ describe('DomainPortsImpl Shared Adapter Contracts', () => {
   });
 
   describe('Project Lifecycle & Capability Boundaries', () => {
+    it('rejects invalid or empty principals across port boundaries', async () => {
+      const invalidPrincipal = {
+        type: 'DISCORD_USER' as const,
+        id: '',
+        subjectId: '',
+        authKind: 'DISCORD' as const,
+      };
+
+      await assert.rejects(
+        async () => {
+          await services.ports.listProjects(invalidPrincipal);
+        },
+        (err) => err instanceof ForbiddenError
+      );
+
+      await assert.rejects(
+        async () => {
+          await services.ports.createProject(invalidPrincipal, { name: 'Invalid' });
+        },
+        (err) => err instanceof ForbiddenError
+      );
+    });
+
     it('allows authenticated Discord user to create project, and forbids service principal', async () => {
       const project = await services.ports.createProject(ownerPrincipal, {
         name: 'Alpha Project',
@@ -165,7 +188,13 @@ describe('DomainPortsImpl Shared Adapter Contracts', () => {
 
     it('rolls back resource creation if environment persistence fails', async () => {
       const project = await services.ports.createProject(ownerPrincipal, { name: 'App' });
-      const initialResources = await repos.resources.findManyByIds([]);
+      let createdResourceId: string | null = null;
+      const originalCreateResource = repos.resources.create.bind(repos.resources);
+      repos.resources.create = async (input, tx) => {
+        const res = await originalCreateResource(input, tx);
+        createdResourceId = res.id;
+        return res;
+      };
 
       // Inject a one-time failure on createEnvironment in project repo
       const originalCreateEnvironment = repos.projects.createEnvironment.bind(repos.projects);
@@ -185,11 +214,13 @@ describe('DomainPortsImpl Shared Adapter Contracts', () => {
       );
 
       // Restore
+      repos.resources.create = originalCreateResource;
       repos.projects.createEnvironment = originalCreateEnvironment;
 
-      // Verify no orphaned resources exist
-      const afterResources = await repos.resources.findManyByIds([]);
-      assert.equal(afterResources.length, initialResources.length);
+      // Verify created resource was rolled back and is absent
+      assert.ok(createdResourceId);
+      const orphanedResource = await repos.resources.findById(createdResourceId);
+      assert.equal(orphanedResource, null);
     });
 
     it('allows project members to list and view environments but forbids outsiders', async () => {

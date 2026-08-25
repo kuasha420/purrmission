@@ -1217,9 +1217,9 @@ export class InMemoryAuthRepository implements AuthRepository {
 }
 
 export class InMemoryProjectRepository implements ProjectRepository {
-  private projects: Map<string, Project> = new Map();
-  private environments: Map<string, Environment> = new Map();
-  private members: Map<string, ProjectMember> = new Map();
+  public projects: Map<string, Project> = new Map();
+  public environments: Map<string, Environment> = new Map();
+  public members: Map<string, ProjectMember> = new Map();
 
   async createProject(input: CreateProjectInput): Promise<Project> {
     const project: Project = {
@@ -1719,19 +1719,44 @@ export class InMemoryCallbackDestinationRepository implements CallbackDestinatio
 export function createInMemoryRepositories(): Repositories {
   const resources = new InMemoryResourceRepository();
   const projects = new InMemoryProjectRepository();
+  const guardians = new InMemoryGuardianRepository(resources);
+  const approvalRequests = new InMemoryApprovalRequestRepository();
+  const totp = new InMemoryTOTPRepository(resources);
+  const resourceFields = new InMemoryResourceFieldRepository(resources);
+  const audit = new InMemoryAuditRepository(projects);
+  const auth = new InMemoryAuthRepository();
+  const outbox = new InMemoryOutboxRepository();
+  const credentials = new InMemoryCredentialRepository();
+  const approvalGrants = new InMemoryApprovalGrantRepository();
+  const callbackDestinations = new InMemoryCallbackDestinationRepository();
+
   return {
-    transaction: (callback) => callback({} as Prisma.TransactionClient),
+    transaction: async (callback) => {
+      const snapshotResources = new Map(resources.resources);
+      const snapshotProjects = new Map(projects.projects);
+      const snapshotEnvironments = new Map(projects.environments);
+      const snapshotMembers = new Map(projects.members);
+      try {
+        return await callback({} as Prisma.TransactionClient);
+      } catch (err) {
+        resources.resources = snapshotResources;
+        projects.projects = snapshotProjects;
+        projects.environments = snapshotEnvironments;
+        projects.members = snapshotMembers;
+        throw err;
+      }
+    },
     resources,
-    guardians: new InMemoryGuardianRepository(resources),
-    approvalRequests: new InMemoryApprovalRequestRepository(),
-    totp: new InMemoryTOTPRepository(resources),
-    resourceFields: new InMemoryResourceFieldRepository(resources),
-    audit: new InMemoryAuditRepository(projects),
-    auth: new InMemoryAuthRepository(),
+    guardians,
+    approvalRequests,
+    totp,
+    resourceFields,
+    audit,
+    auth,
     projects,
-    outbox: new InMemoryOutboxRepository(),
-    credentials: new InMemoryCredentialRepository(),
-    approvalGrants: new InMemoryApprovalGrantRepository(),
-    callbackDestinations: new InMemoryCallbackDestinationRepository(),
+    outbox,
+    credentials,
+    approvalGrants,
+    callbackDestinations,
   };
 }

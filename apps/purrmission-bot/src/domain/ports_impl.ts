@@ -35,6 +35,13 @@ export class DomainPortsImpl implements DomainPorts {
     if (!audit) throw new TypeError('DomainPortsImpl requires an audit dependency.');
   }
 
+  private ensureValidPrincipal(principal: Principal): void {
+    const res = validatePrincipal(principal);
+    if (!res.valid) {
+      throw new ForbiddenError(res.safeExplanation ?? 'Invalid principal authentication');
+    }
+  }
+
   // ---------------------------------------------------------------------------
   // Projects
   // ---------------------------------------------------------------------------
@@ -43,7 +50,7 @@ export class DomainPortsImpl implements DomainPorts {
     dto: CreateProjectDTO,
     correlationId?: string
   ): Promise<Project> {
-    validatePrincipal(principal);
+    this.ensureValidPrincipal(principal);
     const auth = await hasCapability(this.repositories, principal, 'project.create');
     if (!auth.allowed) {
       await this.audit.log({
@@ -76,7 +83,7 @@ export class DomainPortsImpl implements DomainPorts {
   }
 
   async listProjects(principal: Principal, _correlationId?: string): Promise<Project[]> {
-    validatePrincipal(principal);
+    this.ensureValidPrincipal(principal);
     if (principal.type === 'SERVICE') {
       return [];
     }
@@ -88,7 +95,7 @@ export class DomainPortsImpl implements DomainPorts {
     projectId: string,
     correlationId?: string
   ): Promise<Project | null> {
-    validatePrincipal(principal);
+    this.ensureValidPrincipal(principal);
     const project = await this.projectService.getProject(projectId);
     if (!project) return null;
 
@@ -123,7 +130,7 @@ export class DomainPortsImpl implements DomainPorts {
     dto: AddMemberDTO,
     correlationId?: string
   ): Promise<void> {
-    validatePrincipal(principal);
+    this.ensureValidPrincipal(principal);
     const project = await this.projectService.getProject(dto.projectId);
     if (!project) throw new NotFoundError('Project not found');
 
@@ -162,7 +169,7 @@ export class DomainPortsImpl implements DomainPorts {
     memberUserId: string,
     correlationId?: string
   ): Promise<void> {
-    validatePrincipal(principal);
+    this.ensureValidPrincipal(principal);
     const project = await this.projectService.getProject(projectId);
     if (!project) throw new NotFoundError('Project not found');
 
@@ -200,7 +207,7 @@ export class DomainPortsImpl implements DomainPorts {
     projectId: string,
     correlationId?: string
   ): Promise<ProjectMember[]> {
-    validatePrincipal(principal);
+    this.ensureValidPrincipal(principal);
     const project = await this.projectService.getProject(projectId);
     if (!project) throw new NotFoundError('Project not found');
 
@@ -241,7 +248,7 @@ export class DomainPortsImpl implements DomainPorts {
     dto: CreateEnvironmentDTO,
     correlationId?: string
   ): Promise<Environment> {
-    validatePrincipal(principal);
+    this.ensureValidPrincipal(principal);
     const project = await this.projectService.getProject(dto.projectId);
     if (!project) throw new NotFoundError('Project not found');
 
@@ -286,7 +293,7 @@ export class DomainPortsImpl implements DomainPorts {
     projectId: string,
     correlationId?: string
   ): Promise<Environment[]> {
-    validatePrincipal(principal);
+    this.ensureValidPrincipal(principal);
     const project = await this.projectService.getProject(projectId);
     if (!project) throw new NotFoundError('Project not found');
 
@@ -325,7 +332,7 @@ export class DomainPortsImpl implements DomainPorts {
     envSlug: string,
     correlationId?: string
   ): Promise<Environment | null> {
-    validatePrincipal(principal);
+    this.ensureValidPrincipal(principal);
     const project = await this.projectService.getProject(projectId);
     if (!project) return null;
 
@@ -362,11 +369,12 @@ export class DomainPortsImpl implements DomainPorts {
   // Secrets & Reveal Operations
   // ---------------------------------------------------------------------------
   async getSecrets(
-    _principal: Principal,
+    principal: Principal,
     _projectId: string,
     _envId: string,
     _grantId?: string
   ): Promise<Record<string, string>> {
+    this.ensureValidPrincipal(principal);
     // A GET must be safe and idempotent. Secret-value redemption consumes an exact grant, so it
     // cannot be implemented by this read port. Keep the legacy boundary fail-closed until the
     // dedicated authenticated, grant-consuming POST use case is introduced (#122/#128).
@@ -378,7 +386,7 @@ export class DomainPortsImpl implements DomainPorts {
     dto: BatchSetSecretsDTO,
     correlationId?: string
   ): Promise<void> {
-    validatePrincipal(principal);
+    this.ensureValidPrincipal(principal);
     const project = await this.projectService.getProject(dto.projectId);
     if (!project) throw new NotFoundError('Project not found');
 
@@ -422,6 +430,7 @@ export class DomainPortsImpl implements DomainPorts {
     grantId?: string,
     consentId?: string
   ): Promise<string> {
+    this.ensureValidPrincipal(principal);
     return this.resourceService.revealTOTPCode(resourceId, principal, grantId, consentId);
   }
 
@@ -435,7 +444,7 @@ export class DomainPortsImpl implements DomainPorts {
     secret: string,
     correlationId?: string
   ): Promise<CallbackDestinationDTO> {
-    validatePrincipal(principal);
+    this.ensureValidPrincipal(principal);
     const resource = await this.repositories.resources.findById(resourceId);
     if (!resource) throw new NotFoundError('Resource not found');
 
@@ -531,7 +540,7 @@ export class DomainPortsImpl implements DomainPorts {
     resourceId: string,
     correlationId?: string
   ): Promise<CallbackDestinationDTO[]> {
-    validatePrincipal(principal);
+    this.ensureValidPrincipal(principal);
     const env = await this.repositories.projects.findEnvironmentByResourceId(resourceId);
     if (!env) throw new NotFoundError('Associated environment not found');
 
@@ -579,7 +588,7 @@ export class DomainPortsImpl implements DomainPorts {
     callbackId: string,
     correlationId?: string
   ): Promise<void> {
-    validatePrincipal(principal);
+    this.ensureValidPrincipal(principal);
     const env = await this.repositories.projects.findEnvironmentByResourceId(resourceId);
     if (!env) throw new NotFoundError('Associated environment not found');
 
@@ -670,7 +679,7 @@ export class DomainPortsImpl implements DomainPorts {
     },
     _correlationId?: string
   ): Promise<{ success: boolean; request?: ApprovalRequest; error?: string }> {
-    validatePrincipal(principal);
+    this.ensureValidPrincipal(principal);
     return this.approvalService.createApprovalRequest({
       resourceId,
       principal,
@@ -696,7 +705,7 @@ export class DomainPortsImpl implements DomainPorts {
     consentId?: string,
     _correlationId?: string
   ): Promise<{ success: boolean; error?: string }> {
-    validatePrincipal(principal);
+    this.ensureValidPrincipal(principal);
     if (principal.type === 'SERVICE') {
       throw new ForbiddenError('Service principals cannot resolve approval requests');
     }
@@ -709,7 +718,7 @@ export class DomainPortsImpl implements DomainPorts {
     requestId: string,
     _correlationId?: string
   ): Promise<{ success: boolean; error?: string }> {
-    validatePrincipal(principal);
+    this.ensureValidPrincipal(principal);
     return this.approvalService.cancelApprovalRequest(requestId, principal);
   }
 
@@ -718,7 +727,7 @@ export class DomainPortsImpl implements DomainPorts {
     requestId: string,
     correlationId?: string
   ): Promise<ApprovalRequest | null> {
-    validatePrincipal(principal);
+    this.ensureValidPrincipal(principal);
     const request = await this.approvalService.getApprovalRequest(requestId);
     if (!request) return null;
 
@@ -744,6 +753,7 @@ export class DomainPortsImpl implements DomainPorts {
       }
     }
 
+    const explanation = queueAuth.safeExplanation ?? 'Permission denied';
     await this.audit.log({
       eventFamily: 'AUTHORIZATION',
       eventType: 'AUTHORIZATION_DECISION',
@@ -761,9 +771,9 @@ export class DomainPortsImpl implements DomainPorts {
       authKind: principal.authKind,
       resourceId: request.resourceId,
       correlationId,
-      payload: { reason: 'Permission denied' },
+      payload: { reason: explanation },
     });
-    throw new ForbiddenError('Permission denied');
+    throw new ForbiddenError(explanation);
   }
 
   async getApprovalGrantByRequestId(
@@ -771,7 +781,7 @@ export class DomainPortsImpl implements DomainPorts {
     requestId: string,
     correlationId?: string
   ): Promise<ApprovalGrant | null> {
-    validatePrincipal(principal);
+    this.ensureValidPrincipal(principal);
     const request = await this.getApprovalRequest(principal, requestId, correlationId);
     if (!request) return null;
 
