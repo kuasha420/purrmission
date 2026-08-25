@@ -376,7 +376,7 @@ describe('Format Module (Issue #64)', () => {
     it('pawthy pull with --format json writes secrets.json', async () => {
       mock.method(
         axios,
-        'get',
+        'post',
         async (): Promise<{ status: number; data: unknown }> => ({
           status: 200,
           data: { secrets: { DB_HOST: 'localhost', PORT: '5432' } },
@@ -394,7 +394,7 @@ describe('Format Module (Issue #64)', () => {
     it('pawthy pull auto-detects .yaml file extension', async () => {
       mock.method(
         axios,
-        'get',
+        'post',
         async (): Promise<{ status: number; data: unknown }> => ({
           status: 200,
           data: { secrets: { SERVICE: 'auth' } },

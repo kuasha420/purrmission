@@ -225,13 +225,23 @@ export const initCommand = new Command('init')
             const status = error.response?.status;
             if (status === 409) {
               console.error(chalk.red('An environment with this slug already exists.'));
+            } else if (status === 403) {
+              console.error(
+                chalk.red(
+                  'You do not have permission to create an environment in this project. Only the project owner can create environments.'
+                )
+              );
             } else if (status === 400) {
               const message = error.response?.data?.error || error.response?.data?.message;
               console.error(
                 chalk.red(`Invalid environment data.${message ? ` ${String(message)}` : ''}`)
               );
             } else {
-              console.error(chalk.red(`Failed to create environment: ${error.message}`));
+              console.error(
+                chalk.red(
+                  `Failed to create environment: ${error.message} (Correlation ID: ${correlation.commandId})`
+                )
+              );
             }
           } else {
             console.error(

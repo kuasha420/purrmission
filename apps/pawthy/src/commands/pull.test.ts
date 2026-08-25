@@ -14,6 +14,11 @@ describe('Pull Command', () => {
   beforeEach(async () => {
     exitCode = null;
 
+    // Set fast poll intervals for tests
+    process.env.PAWTHY_POLL_INTERVAL_MS = '5';
+    process.env.PAWTHY_POLL_MAX_INTERVAL_MS = '20';
+    process.env.PAWTHY_POLL_TIMEOUT_MS = '150';
+
     // Reset commander options to prevent test pollution
     pullCommand.setOptionValueWithSource('file', undefined, 'default');
     pullCommand.setOptionValueWithSource('format', undefined, 'default');
@@ -22,10 +27,14 @@ describe('Pull Command', () => {
     pullCommand.setOptionValueWithSource('keys', undefined, 'default');
     pullCommand.setOptionValueWithSource('merge', undefined, 'default');
     pullCommand.setOptionValueWithSource('env', undefined, 'default');
+    pullCommand.setOptionValueWithSource('grant', undefined, 'default');
+    pullCommand.setOptionValueWithSource('grantId', undefined, 'default');
     pullCommand.setOptionValue('merge', undefined);
+    pullCommand.setOptionValue('grant', undefined);
+    pullCommand.setOptionValue('grantId', undefined);
 
     // Create a unique temp directory outside the repository
-    tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'pawthy-test-'));
+    tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'pawthy-test-pull-'));
 
     // Mock process.cwd to return our temp directory
     mock.method(process, 'cwd', () => tempDir);
@@ -48,6 +57,9 @@ describe('Pull Command', () => {
     // Clean up environment variables to prevent test pollution
     delete process.env.PAWTHY_PROJECT_ID;
     delete process.env.PAWTHY_ENV_ID;
+    delete process.env.PAWTHY_POLL_INTERVAL_MS;
+    delete process.env.PAWTHY_POLL_MAX_INTERVAL_MS;
+    delete process.env.PAWTHY_POLL_TIMEOUT_MS;
 
     // Clean up the temp directory
     try {
@@ -57,39 +69,365 @@ describe('Pull Command', () => {
     }
   });
 
-  it('fails closed immediately when status is 202 (Pending Approval)', async () => {
-    // Mock config.get for token
+  it('pulls secrets via POST reveal endpoint without exposing keys in URL', async () => {
+    let requestedUrl = '';
+    let requestMethod = '';
+    let requestBody: unknown = null;
+    let authHeader = '';
+    let correlationHeader = '';
+    let causationHeader = '';
+
     mock.method(config, 'get', (key: string) => {
       if (key === 'token') return 'test-token';
       if (key === 'apiUrl') return 'http://localhost:3000';
       return undefined;
     });
 
-    // A pending response must remain terminal until #130 owns bounded polling.
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const getMock = mock.method(axios, 'get', async (): Promise<any> => {
-      return {
-        status: 202,
-        data: {
-          status: 'pending',
-          message: 'Secret access is pending approval in Discord',
-          requestId: 'request-1',
-        },
-      };
-    });
+    mock.method(
+      axios,
+      'post',
+      async (url: string, data: unknown, reqConfig: { headers?: Record<string, string> }) => {
+        requestedUrl = url;
+        requestMethod = 'POST';
+        requestBody = data;
+        authHeader = reqConfig?.headers?.Authorization || '';
+        correlationHeader = reqConfig?.headers?.['x-correlation-id'] || '';
+        causationHeader = reqConfig?.headers?.['x-causation-id'] || '';
+        return {
+          status: 200,
+          data: { secrets: { SECRET_A: 'val_a', SECRET_B: 'val_b' } },
+        };
+      }
+    );
 
-    // Suppress console.log / console.error for clean test output
     mock.method(console, 'log', () => {});
     mock.method(console, 'error', () => {});
 
-    try {
-      await pullCommand.parseAsync(['node', 'pawthy', 'pull']);
-    } catch {
-      // Expected to throw because process.exit throws.
-    }
+    await pullCommand.parseAsync(['node', 'pawthy', 'pull']);
 
-    assert.strictEqual(exitCode, 1);
-    assert.strictEqual(getMock.mock.callCount(), 1, 'pending pulls must not enter a GET poll loop');
+    assert.strictEqual(
+      requestedUrl,
+      'http://localhost:3000/api/projects/test-project/environments/test-env/secrets/reveal'
+    );
+    assert.strictEqual(requestMethod, 'POST');
+    assert.strictEqual(authHeader, 'Bearer test-token');
+    assert.ok(correlationHeader.length > 0);
+    assert.ok(causationHeader.length > 0);
+    assert.deepStrictEqual(requestBody, {});
+
+    const content = await fs.readFile(path.join(tempDir, '.env'), 'utf-8');
+    assert.ok(content.includes('SECRET_A=val_a'));
+    assert.ok(content.includes('SECRET_B=val_b'));
+  });
+
+  it('supports direct grant redemption via --grant flag in POST body', async () => {
+    let requestedUrl = '';
+    let requestBody: unknown = null;
+
+    mock.method(config, 'get', (key: string) => {
+      if (key === 'token') return 'test-token';
+      if (key === 'apiUrl') return 'http://localhost:3000';
+      return undefined;
+    });
+
+    mock.method(axios, 'post', async (url: string, data: unknown) => {
+      requestedUrl = url;
+      requestBody = data;
+      return {
+        status: 200,
+        data: { secrets: { GRANTED_SECRET: 'granted_val' } },
+      };
+    });
+
+    mock.method(console, 'log', () => {});
+    mock.method(console, 'error', () => {});
+
+    await pullCommand.parseAsync(['node', 'pawthy', 'pull', '--grant', 'grant-uuid-123']);
+
+    assert.ok(requestedUrl.endsWith('/secrets/reveal'));
+    assert.deepStrictEqual(requestBody, { grantId: 'grant-uuid-123' });
+
+    const content = await fs.readFile(path.join(tempDir, '.env'), 'utf-8');
+    assert.ok(content.includes('GRANTED_SECRET=granted_val'));
+  });
+
+  describe('Approval Request Lifecycle & Bounded Polling', () => {
+    it('handles 202 pending -> approved -> reveals secrets with grantId', async () => {
+      mock.method(config, 'get', (key: string) => {
+        if (key === 'token') return 'test-token';
+        if (key === 'apiUrl') return 'http://localhost:3000';
+        return undefined;
+      });
+
+      let initialRevealCall = 0;
+      let finalRevealCall = 0;
+      let pollCallCount = 0;
+      let finalGrantId = '';
+
+      mock.method(axios, 'post', async (_url: string, data: { grantId?: string }) => {
+        if (!data.grantId) {
+          initialRevealCall++;
+          return {
+            status: 202,
+            data: {
+              status: 'pending',
+              message: 'Access pending Guardian approval in Discord',
+              requestId: 'req-uuid-999',
+            },
+          };
+        } else {
+          finalRevealCall++;
+          finalGrantId = data.grantId;
+          return {
+            status: 200,
+            data: { secrets: { REVEALED_AFTER_APPROVAL: 'approved_val' } },
+          };
+        }
+      });
+
+      mock.method(axios, 'get', async (url: string) => {
+        pollCallCount++;
+        assert.ok(url.includes('/api/requests/req-uuid-999'));
+        if (pollCallCount === 1) {
+          return {
+            status: 200,
+            data: {
+              requestId: 'req-uuid-999',
+              status: 'PENDING',
+            },
+          };
+        }
+        return {
+          status: 200,
+          data: {
+            requestId: 'req-uuid-999',
+            status: 'APPROVED',
+            grantId: 'grant-resolved-777',
+            resolvedBy: 'guardian-user-1',
+          },
+        };
+      });
+
+      const consoleLogs: string[] = [];
+      mock.method(console, 'log', (msg: string) => {
+        consoleLogs.push(msg);
+      });
+      mock.method(console, 'error', () => {});
+
+      await pullCommand.parseAsync(['node', 'pawthy', 'pull']);
+
+      assert.strictEqual(initialRevealCall, 1);
+      assert.strictEqual(pollCallCount, 2);
+      assert.strictEqual(finalRevealCall, 1);
+      assert.strictEqual(finalGrantId, 'grant-resolved-777');
+
+      const content = await fs.readFile(path.join(tempDir, '.env'), 'utf-8');
+      assert.ok(content.includes('REVEALED_AFTER_APPROVAL=approved_val'));
+    });
+
+    it('handles 202 pending -> denied by guardian', async () => {
+      mock.method(config, 'get', (key: string) => {
+        if (key === 'token') return 'test-token';
+        if (key === 'apiUrl') return 'http://localhost:3000';
+        return undefined;
+      });
+
+      mock.method(axios, 'post', async () => ({
+        status: 202,
+        data: {
+          status: 'pending',
+          requestId: 'req-uuid-denied',
+        },
+      }));
+
+      mock.method(axios, 'get', async () => ({
+        status: 200,
+        data: {
+          requestId: 'req-uuid-denied',
+          status: 'DENIED',
+        },
+      }));
+
+      const consoleErrors: string[] = [];
+      mock.method(console, 'error', (msg: string) => {
+        consoleErrors.push(msg);
+      });
+      mock.method(console, 'log', () => {});
+
+      await assert.rejects(
+        () => pullCommand.parseAsync(['node', 'pawthy', 'pull']),
+        /process.exit called with 1/
+      );
+
+      assert.strictEqual(exitCode, 1);
+      assert.ok(consoleErrors.some((e) => e.includes('was denied by a Guardian')));
+    });
+
+    it('handles 202 pending -> expired or cancelled', async () => {
+      mock.method(config, 'get', (key: string) => {
+        if (key === 'token') return 'test-token';
+        if (key === 'apiUrl') return 'http://localhost:3000';
+        return undefined;
+      });
+
+      mock.method(axios, 'post', async () => ({
+        status: 202,
+        data: {
+          status: 'pending',
+          requestId: 'req-uuid-expired',
+        },
+      }));
+
+      mock.method(axios, 'get', async () => ({
+        status: 200,
+        data: {
+          requestId: 'req-uuid-expired',
+          status: 'EXPIRED',
+        },
+      }));
+
+      const consoleErrors: string[] = [];
+      mock.method(console, 'error', (msg: string) => {
+        consoleErrors.push(msg);
+      });
+      mock.method(console, 'log', () => {});
+
+      await assert.rejects(
+        () => pullCommand.parseAsync(['node', 'pawthy', 'pull']),
+        /process.exit called with 1/
+      );
+
+      assert.strictEqual(exitCode, 1);
+      assert.ok(consoleErrors.some((e) => e.includes('has expired')));
+    });
+
+    it('fails safely when 202 response is missing requestId', async () => {
+      mock.method(config, 'get', (key: string) => {
+        if (key === 'token') return 'test-token';
+        if (key === 'apiUrl') return 'http://localhost:3000';
+        return undefined;
+      });
+
+      mock.method(axios, 'post', async () => ({
+        status: 202,
+        data: {
+          status: 'pending',
+          // Missing requestId
+        },
+      }));
+
+      const consoleErrors: string[] = [];
+      mock.method(console, 'error', (msg: string) => {
+        consoleErrors.push(msg);
+      });
+      mock.method(console, 'log', () => {});
+
+      await assert.rejects(
+        () => pullCommand.parseAsync(['node', 'pawthy', 'pull']),
+        /process.exit called with 1/
+      );
+
+      assert.strictEqual(exitCode, 1);
+      assert.ok(consoleErrors.some((e) => e.includes('without a valid request ID')));
+    });
+
+    it('handles 429 rate-limited backoff and network retries during polling', async () => {
+      mock.method(config, 'get', (key: string) => {
+        if (key === 'token') return 'test-token';
+        if (key === 'apiUrl') return 'http://localhost:3000';
+        return undefined;
+      });
+
+      let pollAttempt = 0;
+
+      mock.method(axios, 'post', async (_url: string, data: { grantId?: string }) => {
+        if (!data.grantId) {
+          return {
+            status: 202,
+            data: { status: 'pending', requestId: 'req-rate-limited' },
+          };
+        }
+        return {
+          status: 200,
+          data: { secrets: { SECRET_RETRY: 'success' } },
+        };
+      });
+
+      mock.method(axios, 'get', async () => {
+        pollAttempt++;
+        if (pollAttempt === 1) {
+          // Simulate 429 rate limit
+          const error = Object.assign(new Error('Rate limited'), {
+            isAxiosError: true,
+            response: {
+              status: 429,
+              headers: { 'retry-after': '0.01' },
+              data: { error: 'slow_down' },
+            },
+          });
+          throw error;
+        } else if (pollAttempt === 2) {
+          // Simulate transient network failure
+          throw new Error('Network timeout');
+        } else {
+          return {
+            status: 200,
+            data: {
+              requestId: 'req-rate-limited',
+              status: 'APPROVED',
+              grantId: 'grant-after-retries',
+            },
+          };
+        }
+      });
+
+      mock.method(console, 'log', () => {});
+      mock.method(console, 'error', () => {});
+
+      await pullCommand.parseAsync(['node', 'pawthy', 'pull']);
+
+      assert.strictEqual(pollAttempt, 3);
+      const content = await fs.readFile(path.join(tempDir, '.env'), 'utf-8');
+      assert.ok(content.includes('SECRET_RETRY=success'));
+    });
+
+    it('times out when polling exceeds total deadline', async () => {
+      process.env.PAWTHY_POLL_INTERVAL_MS = '5';
+      process.env.PAWTHY_POLL_TIMEOUT_MS = '20'; // Very short timeout
+
+      mock.method(config, 'get', (key: string) => {
+        if (key === 'token') return 'test-token';
+        if (key === 'apiUrl') return 'http://localhost:3000';
+        return undefined;
+      });
+
+      mock.method(axios, 'post', async () => ({
+        status: 202,
+        data: { status: 'pending', requestId: 'req-timeout' },
+      }));
+
+      mock.method(axios, 'get', async () => ({
+        status: 200,
+        data: {
+          requestId: 'req-timeout',
+          status: 'PENDING',
+        },
+      }));
+
+      const consoleErrors: string[] = [];
+      mock.method(console, 'error', (msg: string) => {
+        consoleErrors.push(msg);
+      });
+      mock.method(console, 'log', () => {});
+
+      await assert.rejects(
+        () => pullCommand.parseAsync(['node', 'pawthy', 'pull']),
+        /process.exit called with 1/
+      );
+
+      assert.strictEqual(exitCode, 1);
+      assert.ok(consoleErrors.some((e) => e.includes('Timed out waiting for approval')));
+    });
   });
 
   it('should prioritize CLI flags over env vars and .pawthyrc', async () => {
@@ -100,12 +438,10 @@ describe('Pull Command', () => {
       return undefined;
     });
 
-    // Set env vars
     process.env.PAWTHY_PROJECT_ID = 'env-project';
     process.env.PAWTHY_ENV_ID = 'env-env';
 
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    mock.method(axios, 'get', async (url: string): Promise<any> => {
+    mock.method(axios, 'post', async (url: string) => {
       requestedUrl = url;
       return {
         status: 200,
@@ -126,8 +462,7 @@ describe('Pull Command', () => {
       'flag-env',
     ]);
 
-    // Verify the URL contained the flag values
-    assert.ok(requestedUrl.includes('/projects/flag-project/environments/flag-env/secrets'));
+    assert.ok(requestedUrl.includes('/projects/flag-project/environments/flag-env/secrets/reveal'));
   });
 
   it('should prioritize .pawthyrc over env vars', async () => {
@@ -138,12 +473,10 @@ describe('Pull Command', () => {
       return undefined;
     });
 
-    // Set env vars
     process.env.PAWTHY_PROJECT_ID = 'env-project';
     process.env.PAWTHY_ENV_ID = 'env-env';
 
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    mock.method(axios, 'get', async (url: string): Promise<any> => {
+    mock.method(axios, 'post', async (url: string) => {
       requestedUrl = url;
       return {
         status: 200,
@@ -156,8 +489,7 @@ describe('Pull Command', () => {
 
     await pullCommand.parseAsync(['node', 'pawthy', 'pull']);
 
-    // Verify the URL contained the .pawthyrc values, not the env var values
-    assert.ok(requestedUrl.includes('/projects/test-project/environments/test-env/secrets'));
+    assert.ok(requestedUrl.includes('/projects/test-project/environments/test-env/secrets/reveal'));
   });
 
   it('should use env vars if .pawthyrc is missing', async () => {
@@ -168,15 +500,12 @@ describe('Pull Command', () => {
       return undefined;
     });
 
-    // Delete the .pawthyrc file
     await fs.unlink(path.join(tempDir, '.pawthyrc'));
 
-    // Set env vars
     process.env.PAWTHY_PROJECT_ID = 'env-project';
     process.env.PAWTHY_ENV_ID = 'env-env';
 
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    mock.method(axios, 'get', async (url: string): Promise<any> => {
+    mock.method(axios, 'post', async (url: string) => {
       requestedUrl = url;
       return {
         status: 200,
@@ -189,8 +518,7 @@ describe('Pull Command', () => {
 
     await pullCommand.parseAsync(['node', 'pawthy', 'pull']);
 
-    // Verify the URL contained the env var values
-    assert.ok(requestedUrl.includes('/projects/env-project/environments/env-env/secrets'));
+    assert.ok(requestedUrl.includes('/projects/env-project/environments/env-env/secrets/reveal'));
   });
 
   it('should exit with code 1 if project ID or environment ID is missing and no .pawthyrc', async () => {
@@ -200,17 +528,15 @@ describe('Pull Command', () => {
       return undefined;
     });
 
-    // Delete the .pawthyrc file so it cannot be resolved there
     await fs.unlink(path.join(tempDir, '.pawthyrc'));
 
     mock.method(console, 'log', () => {});
     mock.method(console, 'error', () => {});
 
-    try {
-      await pullCommand.parseAsync(['node', 'pawthy', 'pull']);
-    } catch {
-      // Expected to throw because process.exit throws
-    }
+    await assert.rejects(
+      () => pullCommand.parseAsync(['node', 'pawthy', 'pull']),
+      /process.exit called with 1/
+    );
 
     assert.strictEqual(exitCode, 1);
   });
@@ -222,7 +548,6 @@ describe('Pull Command', () => {
       return undefined;
     });
 
-    // Write initial .env file with comments and local variables
     const initialEnv = [
       '# DB config',
       'DATABASE_URL=postgres://localhost/db',
@@ -240,73 +565,62 @@ describe('Pull Command', () => {
     ].join('\n');
     await fs.writeFile(path.join(tempDir, '.env'), initialEnv);
 
-    // Mock axios.get to return updated and new secrets
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    mock.method(axios, 'get', async (): Promise<any> => {
-      return {
-        status: 200,
-        data: {
-          secrets: {
-            DATABASE_URL: 'postgres://prod-host/db',
-            SPACED_KEY: 'new-value',
-            SINGLE_QUOTED: 'new-single',
-            WITH_COMMENT: 'new-val',
-            MULTILINE: 'new line 1\nnew line 2',
-            EXISTING_OVERWRITE: 'new-value',
-            NEW_SECRET: 'new-secret-val',
-          },
+    mock.method(axios, 'post', async () => ({
+      status: 200,
+      data: {
+        secrets: {
+          DATABASE_URL: 'postgres://prod-host/db',
+          SPACED_KEY: 'new-value',
+          SINGLE_QUOTED: 'new-single',
+          WITH_COMMENT: 'new-val',
+          MULTILINE: 'new line 1\nnew line 2',
+          EXISTING_OVERWRITE: 'new-value',
+          NEW_SECRET: 'new-secret-val',
         },
-      };
-    });
+      },
+    }));
 
     mock.method(console, 'log', () => {});
     mock.method(console, 'error', () => {});
 
     await pullCommand.parseAsync(['node', 'pawthy', 'pull', '--merge']);
 
-    // Read the resulting .env file
     const mergedContent = await fs.readFile(path.join(tempDir, '.env'), 'utf-8');
     const lines = mergedContent.split('\n');
 
-    // Check that DATABASE_URL and EXISTING_OVERWRITE were updated
     assert.ok(lines.includes('DATABASE_URL=postgres://prod-host/db'));
     assert.ok(lines.includes('EXISTING_OVERWRITE=new-value'));
-
-    // Check spacing, quotes, and comments preservation
     assert.ok(lines.includes('  SPACED_KEY  =  "new-value"  '));
     assert.ok(lines.includes("SINGLE_QUOTED = 'new-single'"));
     assert.ok(lines.includes('WITH_COMMENT = new-val # preserve this comment'));
 
-    // Check multiline preservation/updating
-    // The multiline value contains a newline, so it should be double-quoted
     const multilineStartIndex = lines.findIndex((l) => l.startsWith('MULTILINE ='));
     assert.notStrictEqual(multilineStartIndex, -1);
     assert.strictEqual(lines[multilineStartIndex], 'MULTILINE = "new line 1');
     assert.strictEqual(lines[multilineStartIndex + 1], 'new line 2"');
 
-    // Check that LOCAL_ONLY and comments were preserved
     assert.ok(lines.includes('# DB config'));
     assert.ok(lines.includes('LOCAL_ONLY=123'));
     assert.ok(lines.includes('# Local variables'));
-
-    // Check that NEW_SECRET was appended
     assert.ok(lines.includes('NEW_SECRET=new-secret-val'));
   });
 
-  it('should support whitelisting via CLI keys flag in pull command and preserve local-only variables', async () => {
+  it('should support whitelisting via CLI keys flag in pull command and pass keys in POST body', async () => {
+    let requestPayload: { keys?: string[] } = {};
+
     mock.method(config, 'get', (key: string) => {
       if (key === 'token') return 'test-token';
       if (key === 'apiUrl') return 'http://localhost:3000';
       return undefined;
     });
 
-    // Write a pre-existing .env file
     await fs.writeFile(
       path.join(tempDir, '.env'),
       'DATABASE_URL=postgres://localhost/db\nLOCAL_ONLY=123\n'
     );
 
-    mock.method(axios, 'get', async () => {
+    mock.method(axios, 'post', async (_url: string, data: { keys?: string[] }) => {
+      requestPayload = data;
       return {
         status: 200,
         data: {
@@ -322,8 +636,9 @@ describe('Pull Command', () => {
     mock.method(console, 'log', () => {});
     mock.method(console, 'error', () => {});
 
-    // Request only DATABASE_URL and API_KEY
     await pullCommand.parseAsync(['node', 'pawthy', 'pull', '-k', 'DATABASE_URL, API_KEY']);
+
+    assert.deepStrictEqual(requestPayload.keys, ['DATABASE_URL', 'API_KEY']);
 
     const content = await fs.readFile(path.join(tempDir, '.env'), 'utf-8');
     const lines = content
@@ -333,19 +648,19 @@ describe('Pull Command', () => {
 
     assert.ok(lines.includes('DATABASE_URL=postgres://prod-host/db'));
     assert.ok(lines.includes('API_KEY=secret-key'));
-    // LOCAL_ONLY should be preserved because whitelisting forces merge behavior
     assert.ok(lines.includes('LOCAL_ONLY=123'));
     assert.ok(!lines.includes('ANOTHER_VAR=val'));
   });
 
   it('should support whitelisting via keys array in .pawthyrc in pull command', async () => {
+    let requestPayload: { keys?: string[] } = {};
+
     mock.method(config, 'get', (key: string) => {
       if (key === 'token') return 'test-token';
       if (key === 'apiUrl') return 'http://localhost:3000';
       return undefined;
     });
 
-    // Write a .pawthyrc containing a keys whitelist
     await fs.writeFile(
       path.join(tempDir, '.pawthyrc'),
       JSON.stringify({
@@ -355,7 +670,8 @@ describe('Pull Command', () => {
       })
     );
 
-    mock.method(axios, 'get', async () => {
+    mock.method(axios, 'post', async (_url: string, data: { keys?: string[] }) => {
+      requestPayload = data;
       return {
         status: 200,
         data: {
@@ -372,6 +688,8 @@ describe('Pull Command', () => {
 
     await pullCommand.parseAsync(['node', 'pawthy', 'pull']);
 
+    assert.deepStrictEqual(requestPayload.keys, ['DATABASE_URL']);
+
     const content = await fs.readFile(path.join(tempDir, '.env'), 'utf-8');
     const lines = content
       .split('\n')
@@ -383,13 +701,14 @@ describe('Pull Command', () => {
   });
 
   it('should support whitelisting via keys array in .pawthyrc.local in pull command', async () => {
+    let requestPayload: { keys?: string[] } = {};
+
     mock.method(config, 'get', (key: string) => {
       if (key === 'token') return 'test-token';
       if (key === 'apiUrl') return 'http://localhost:3000';
       return undefined;
     });
 
-    // Write a .pawthyrc and a .pawthyrc.local
     await fs.writeFile(
       path.join(tempDir, '.pawthyrc'),
       JSON.stringify({
@@ -404,7 +723,8 @@ describe('Pull Command', () => {
       })
     );
 
-    mock.method(axios, 'get', async () => {
+    mock.method(axios, 'post', async (_url: string, data: { keys?: string[] }) => {
+      requestPayload = data;
       return {
         status: 200,
         data: {
@@ -420,6 +740,8 @@ describe('Pull Command', () => {
     mock.method(console, 'error', () => {});
 
     await pullCommand.parseAsync(['node', 'pawthy', 'pull']);
+
+    assert.deepStrictEqual(requestPayload.keys, ['API_KEY']);
 
     const content = await fs.readFile(path.join(tempDir, '.env'), 'utf-8');
     const lines = content
@@ -432,13 +754,14 @@ describe('Pull Command', () => {
   });
 
   it('should support whitelisting via syncKeys array in .pawthyrc in pull command', async () => {
+    let requestPayload: { keys?: string[] } = {};
+
     mock.method(config, 'get', (key: string) => {
       if (key === 'token') return 'test-token';
       if (key === 'apiUrl') return 'http://localhost:3000';
       return undefined;
     });
 
-    // Write a .pawthyrc containing syncKeys alias
     await fs.writeFile(
       path.join(tempDir, '.pawthyrc'),
       JSON.stringify({
@@ -448,7 +771,8 @@ describe('Pull Command', () => {
       })
     );
 
-    mock.method(axios, 'get', async () => {
+    mock.method(axios, 'post', async (_url: string, data: { keys?: string[] }) => {
+      requestPayload = data;
       return {
         status: 200,
         data: {
@@ -464,6 +788,8 @@ describe('Pull Command', () => {
     mock.method(console, 'error', () => {});
 
     await pullCommand.parseAsync(['node', 'pawthy', 'pull']);
+
+    assert.deepStrictEqual(requestPayload.keys, ['DATABASE_URL']);
 
     const content = await fs.readFile(path.join(tempDir, '.env'), 'utf-8');
     const lines = content
@@ -482,16 +808,14 @@ describe('Pull Command', () => {
       return undefined;
     });
 
-    mock.method(axios, 'get', async () => {
-      return {
-        status: 200,
-        data: {
-          secrets: {
-            DEV_SECRET: 'dev-val',
-          },
+    mock.method(axios, 'post', async () => ({
+      status: 200,
+      data: {
+        secrets: {
+          DEV_SECRET: 'dev-val',
         },
-      };
-    });
+      },
+    }));
 
     mock.method(console, 'log', () => {});
     mock.method(console, 'error', () => {});
@@ -509,16 +833,14 @@ describe('Pull Command', () => {
       return undefined;
     });
 
-    mock.method(axios, 'get', async () => {
-      return {
-        status: 200,
-        data: {
-          secrets: {
-            CUSTOM_SECRET: 'custom-val',
-          },
+    mock.method(axios, 'post', async () => ({
+      status: 200,
+      data: {
+        secrets: {
+          CUSTOM_SECRET: 'custom-val',
         },
-      };
-    });
+      },
+    }));
 
     mock.method(console, 'log', () => {});
     mock.method(console, 'error', () => {});
@@ -536,7 +858,6 @@ describe('Pull Command', () => {
     const customContent = await fs.readFile(path.join(tempDir, 'custom.env'), 'utf-8');
     assert.ok(customContent.includes('CUSTOM_SECRET=custom-val'));
 
-    // Ensure .env.development was not created
     let devExists = true;
     try {
       await fs.access(path.join(tempDir, '.env.development'));

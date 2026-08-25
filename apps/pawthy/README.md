@@ -123,6 +123,8 @@ pawthy pull
 | `-F, --format <format>`   | Secret file format (`env`, `json`, `yaml`, `toml`). Auto-detected by extension if omitted. |
 | `-E, --env <environment>` | Environment variant for target file output (e.g., `development`, `production`).            |
 | `-m, --merge`             | Merge fetched secrets into existing file instead of overwriting                            |
+| `-k, --keys <list>`       | Comma-separated list of exact keys to reveal                                               |
+| `-g, --grant <id>`        | Approval grant ID to redeem approved secret access                                         |
 
 **Examples:**
 
@@ -261,14 +263,16 @@ To manage roles, use the `/project member` command in Discord.
 
 ## Command Reference
 
-| Command            | Description                                     |
-| ------------------ | ----------------------------------------------- |
-| `pawthy login`     | Authenticate with Discord Device Flow           |
-| `pawthy init`      | Link current directory to a project/environment |
-| `pawthy push`      | Upload local `.env` to Purrmission              |
-| `pawthy pull`      | Download secrets to local `.env`                |
-| `pawthy --version` | Display CLI version                             |
-| `pawthy --help`    | Show help                                       |
+| Command                     | Description                                                                  |
+| --------------------------- | ---------------------------------------------------------------------------- |
+| `pawthy login`              | Authenticate with Discord Device Flow                                        |
+| `pawthy init`               | Link current directory to a project/environment                              |
+| `pawthy push`               | Upload local secrets to Purrmission                                          |
+| `pawthy pull`               | Download revealed secrets to local secret file                               |
+| `pawthy tokens list`        | List user credentials and active CLI sessions (never leaks secrets/prefixes) |
+| `pawthy tokens revoke <id>` | Revoke an active credential or session                                       |
+| `pawthy --version`          | Display CLI version                                                          |
+| `pawthy --help`             | Show help                                                                    |
 
 ---
 
