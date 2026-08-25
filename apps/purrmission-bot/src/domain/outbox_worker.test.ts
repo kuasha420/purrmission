@@ -5,7 +5,7 @@ import type { AddressInfo } from 'node:net';
 import type { Client } from 'discord.js';
 import { createInMemoryRepositories, InMemoryOutboxRepository } from './repositories.mock.js';
 import type { Repositories } from './repositories.js';
-import { AuditService, buildOutboxEvent } from './audit.js';
+import { AuditService, buildOutboxEvent, sanitizeUrlForAudit } from './audit.js';
 import { OutboxWorker } from './outbox_worker.js';
 import { createServices, Services } from './services.js';
 import { createDiscordPrincipal } from './principal.js';
@@ -542,10 +542,23 @@ describe('OutboxWorker & Callback State Machine', () => {
         assert.equal(callbackEvent.status, 'PENDING');
         assert.equal(callbackEvent.lastErrorCode, 'HTTP_500');
         assert.ok(callbackEvent.nextRetryAt !== null);
+
+        // findByDeliveryId test
+        assert.ok(callbackEvent.deliveryId);
+        const fetchedByDeliveryId = await repos.outbox.findByDeliveryId(callbackEvent.deliveryId);
+        assert.ok(fetchedByDeliveryId);
+        assert.equal(fetchedByDeliveryId.id, callbackEvent.id);
       } finally {
         process.env.ALLOW_PRIVATE_WEBHOOKS = prevAllow;
         await new Promise<void>((resolve) => server.close(() => resolve()));
       }
+    });
+
+    it('sanitizes URLs in audit logs by stripping credentials and query parameters', async () => {
+      const sanitized = sanitizeUrlForAudit(
+        'https://user:secretpass@webhook.example.com:8443/hook?token=supersecret#frag'
+      );
+      assert.equal(sanitized, 'https://webhook.example.com:8443/hook');
     });
   });
 });

@@ -50,7 +50,7 @@ ALTER TABLE "new_OutboxEvent" RENAME TO "OutboxEvent";
 
 CREATE INDEX "OutboxEvent_status_claimExpiresAt_idx" ON "OutboxEvent"("status", "claimExpiresAt");
 CREATE INDEX "OutboxEvent_nextRetryAt_idx" ON "OutboxEvent"("nextRetryAt");
-CREATE INDEX "OutboxEvent_deliveryId_idx" ON "OutboxEvent"("deliveryId");
+CREATE UNIQUE INDEX "OutboxEvent_deliveryId_key" ON "OutboxEvent"("deliveryId");
 CREATE INDEX "OutboxEvent_status_idx" ON "OutboxEvent"("status");
 CREATE INDEX "OutboxEvent_resourceId_idx" ON "OutboxEvent"("resourceId");
 CREATE INDEX "OutboxEvent_requestId_idx" ON "OutboxEvent"("requestId");

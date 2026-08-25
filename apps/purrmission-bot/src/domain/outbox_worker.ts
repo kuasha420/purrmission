@@ -308,17 +308,9 @@ export class OutboxWorker {
         );
       });
 
-      const sentMsg = await dm.send({
+      await dm.send({
         content: `🔐 Approval request for resource: ${resourceId}`,
       });
-
-      if (this.repos.approvalRequests.updateDeliveryReference && !request.discordMessageId) {
-        await this.repos.approvalRequests.updateDeliveryReference(
-          requestId,
-          sentMsg.id,
-          sentMsg.channelId
-        );
-      }
 
       return 'DELIVERED';
     }

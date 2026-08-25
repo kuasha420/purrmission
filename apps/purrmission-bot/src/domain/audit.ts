@@ -814,3 +814,19 @@ export function verifyOutboxIntegrity(
   const right = Buffer.from(expected, 'hex');
   return left.length === right.length && timingSafeEqual(left, right);
 }
+
+/**
+ * Sanitizes URLs before inclusion in audit logs by stripping credentials, query params, and hash fragments.
+ */
+export function sanitizeUrlForAudit(rawUrl: string): string {
+  try {
+    const parsed = new URL(rawUrl);
+    parsed.username = '';
+    parsed.password = '';
+    parsed.search = '';
+    parsed.hash = '';
+    return parsed.toString();
+  } catch {
+    return 'REDACTED_INVALID_URL';
+  }
+}

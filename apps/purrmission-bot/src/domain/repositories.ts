@@ -1498,7 +1498,7 @@ export class PrismaOutboxRepository implements OutboxRepository {
     tx?: Prisma.TransactionClient
   ): Promise<OutboxEvent | null> {
     const client = tx || this.prisma;
-    const row = await client.outboxEvent.findFirst({ where: { deliveryId } });
+    const row = await client.outboxEvent.findUnique({ where: { deliveryId } });
     return row ? this.mapPrismaToDomain(row) : null;
   }
 

@@ -285,7 +285,7 @@ model OutboxEvent {
   requestId      String?
   destinationId  String?
   recipientId    String?
-  deliveryId     String?
+  deliveryId     String?   @unique
   correlationId  String
   causationId    String?
   integrityKeyId String
@@ -303,7 +303,6 @@ model OutboxEvent {
 
   @@index([status, claimExpiresAt])
   @@index([nextRetryAt])
-  @@index([deliveryId])
   @@index([status])
   @@index([resourceId])
   @@index([requestId])

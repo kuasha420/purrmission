@@ -31,7 +31,7 @@ import {
 } from './models.js';
 import type { Repositories } from './repositories.js';
 import { logger } from '../logging/logger.js';
-import { AuditService, buildOutboxEvent } from './audit.js';
+import { AuditService, buildOutboxEvent, sanitizeUrlForAudit } from './audit.js';
 import { AuthService, AccessDeniedError, ForbiddenError } from './auth.js';
 import { ProjectService } from './project.js';
 import {
@@ -3367,7 +3367,7 @@ export class CallbackDestinationService {
         authKind: principal.authKind,
         resourceId: input.resourceId,
         projectId: input.projectId,
-        payload: { name: input.name ?? null, url: input.url },
+        payload: { name: input.name ?? null, url: sanitizeUrlForAudit(input.url) },
       });
       throw new DomainAuthorizationError(auth.safeExplanation);
     }
@@ -3437,7 +3437,7 @@ export class CallbackDestinationService {
           payload: {
             destinationId: dest.id,
             name: input.name ?? null,
-            url: input.url,
+            url: sanitizeUrlForAudit(dest.url),
             status: dest.status,
           },
         },

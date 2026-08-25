@@ -11,7 +11,7 @@ import crypto from 'node:crypto';
 import type { Principal, Project, Environment, ApprovalRequest, ApprovalGrant } from './models.js';
 import { ProjectService } from './project.js';
 import { ResourceService, ApprovalService } from './services.js';
-import { AuditService } from './audit.js';
+import { AuditService, sanitizeUrlForAudit } from './audit.js';
 import type { Repositories } from './repositories.js';
 import { encryptValue } from '../infra/crypto.js';
 
@@ -219,7 +219,7 @@ export class DomainPortsImpl implements DomainPorts {
           resourceId,
           payload: {
             destinationId: destination.id,
-            url: destination.url,
+            url: sanitizeUrlForAudit(destination.url),
             status: destination.status,
           },
         },
