@@ -456,7 +456,7 @@ export function createHttpServer(deps: HttpServerDeps): FastifyInstance {
   const CreateProjectSchema = z
     .object({
       name: z.string().trim().min(1).max(128),
-      description: z.string().max(1024).optional(),
+      description: z.string().max(1024).nullable().optional(),
     })
     .strict();
 

@@ -477,7 +477,7 @@ export class DomainPortsImpl implements DomainPorts {
     const result: Record<string, string> = {};
     if (options?.keys && options.keys.length > 0) {
       for (const key of options.keys) {
-        const field = await this.resourceService.revealField(resourceId, key, principal);
+        const field = await this.repositories.resourceFields.findByResourceAndName(resourceId, key);
         if (field) {
           result[key] = field.value;
         }
@@ -486,7 +486,10 @@ export class DomainPortsImpl implements DomainPorts {
       const fieldMetas =
         await this.repositories.resourceFields.findMetadataByResourceId(resourceId);
       for (const meta of fieldMetas) {
-        const field = await this.resourceService.revealField(resourceId, meta.name, principal);
+        const field = await this.repositories.resourceFields.findByResourceAndName(
+          resourceId,
+          meta.name
+        );
         if (field) {
           result[meta.name] = field.value;
         }
