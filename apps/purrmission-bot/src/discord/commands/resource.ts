@@ -526,7 +526,7 @@ async function handleResourceList(
   }
 
   const resourceIds = [...new Set(guardianAssignments.map((g) => g.resourceId))];
-  const resources = await context.repositories.resources.findManyByIds(resourceIds);
+  const resources = await context.repositories.resources.findMetadataManyByIds(resourceIds);
 
   if (resources.length === 0) {
     await interaction.reply({
@@ -536,9 +536,10 @@ async function handleResourceList(
     return;
   }
 
+  const guardianByResourceId = new Map(guardianAssignments.map((g) => [g.resourceId, g]));
   const lines = ['**📋 Your Resources:**', ''];
   for (const r of resources) {
-    const userGuardian = guardianAssignments.find((g) => g.resourceId === r.id);
+    const userGuardian = guardianByResourceId.get(r.id);
     const isOwner = userGuardian?.role === 'OWNER';
     const roleBadge = isOwner ? '👑 Owner' : '🛡️ Guardian';
     lines.push(`• **${r.name}** (\`${r.id}\`) — ${roleBadge}`);
@@ -983,7 +984,7 @@ async function createFieldAccessRequest(
   const result = await context.services.ports.createApprovalRequest(
     principal,
     resourceId,
-    'FIELD_ACCESS',
+    'secret.value.read',
     fieldName,
     {
       reason: `Requesting access to field "${fieldName}" on ${resourceName}`,
@@ -994,8 +995,14 @@ async function createFieldAccessRequest(
   );
 
   if (!result.success || !result.request) {
+    logger.warn('Failed to create field access request via DomainPorts', {
+      resourceId,
+      fieldName,
+      requesterId,
+      error: result.error,
+    });
     await interaction.reply({
-      content: `❌ Failed to create access request: ${result.error ?? 'Unknown error'}`,
+      content: '❌ Failed to create access request.',
       ephemeral: true,
     });
     return;
@@ -1048,7 +1055,7 @@ async function create2FAAccessRequest(
   const result = await context.services.ports.createApprovalRequest(
     principal,
     resourceId,
-    'TOTP_ACCESS',
+    'totp.code.read',
     null,
     {
       reason: `Requesting access to linked 2FA code on ${resourceName}`,
@@ -1058,8 +1065,13 @@ async function create2FAAccessRequest(
   );
 
   if (!result.success || !result.request) {
+    logger.warn('Failed to create 2FA access request via DomainPorts', {
+      resourceId,
+      requesterId,
+      error: result.error,
+    });
     await interaction.reply({
-      content: `❌ Failed to create access request: ${result.error ?? 'Unknown error'}`,
+      content: '❌ Failed to create access request.',
       ephemeral: true,
     });
     return;

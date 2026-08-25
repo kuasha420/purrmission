@@ -117,8 +117,14 @@ export async function handleApprovalButton(
     );
 
     if (!result.success) {
+      logger.warn('Failed to record approval button decision via DomainPorts', {
+        requestId,
+        action,
+        userId,
+        error: result.error,
+      });
       await interaction.followUp({
-        content: `❌ Request decision recording failed: ${result.error ?? 'Unknown error'}`,
+        content: '❌ Request decision recording failed.',
         ephemeral: true,
       });
       return;

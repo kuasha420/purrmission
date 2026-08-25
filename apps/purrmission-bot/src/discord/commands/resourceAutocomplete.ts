@@ -23,7 +23,7 @@ export async function handleResourceIdAutocomplete(
   }
 
   const resourceIds = [...new Set(assignments.map((a) => a.resourceId))];
-  const resources = await context.repositories.resources.findManyByIds(resourceIds);
+  const resources = await context.repositories.resources.findMetadataManyByIds(resourceIds);
 
   const filteredResources = query
     ? resources.filter(

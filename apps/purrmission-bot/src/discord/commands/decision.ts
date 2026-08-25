@@ -41,8 +41,14 @@ export async function handleDecisionCommand(
         await updateDiscordMessage(interaction, request, decision, userId, actionPastTense);
       }
     } else {
+      logger.warn(`Failed to ${decision.toLowerCase()} request via DomainPorts`, {
+        requestId,
+        decision,
+        userId,
+        error: result.error,
+      });
       await interaction.reply({
-        content: `❌ Failed to ${decision.toLowerCase()} request: ${result.error ?? 'Unknown error'}`,
+        content: `❌ Failed to ${decision.toLowerCase()} request.`,
         ephemeral: true,
       });
     }

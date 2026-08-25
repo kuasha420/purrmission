@@ -173,7 +173,7 @@ describe('Discord Policy & DomainPorts Cutover Verification', () => {
     assert.equal(finalArgs.principal.subjectId, 'requester-user-1');
     assert.equal(finalArgs.principal.authKind, 'DISCORD');
     assert.equal(finalArgs.resourceId, createdResource.id);
-    assert.equal(finalArgs.action, 'FIELD_ACCESS');
+    assert.equal(finalArgs.action, 'secret.value.read');
     assert.equal(finalArgs.targetKey, 'DATABASE_URL');
     assert.equal(finalArgs.correlationId, 'interaction-corr-1');
 
@@ -267,7 +267,7 @@ describe('Discord Policy & DomainPorts Cutover Verification', () => {
     const finalArgs: RecordedCreateApprovalRequestArgs = recordedArgs;
     assert.equal(finalArgs.principal.subjectId, 'requester-user-2');
     assert.equal(finalArgs.resourceId, createdResource.id);
-    assert.equal(finalArgs.action, 'TOTP_ACCESS');
+    assert.equal(finalArgs.action, 'totp.code.read');
     assert.equal(finalArgs.correlationId, 'interaction-corr-2');
 
     assert.equal(mockReply.mock.calls.length, 1);
