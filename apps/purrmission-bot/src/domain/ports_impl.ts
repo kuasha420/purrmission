@@ -1,3 +1,4 @@
+import crypto from 'node:crypto';
 import type {
   DomainPorts,
   CreateProjectDTO,
@@ -7,8 +8,16 @@ import type {
   CallbackDestinationDTO,
 } from './ports.js';
 import { ForbiddenError, NotFoundError } from './ports.js';
-import crypto from 'node:crypto';
-import type { Principal, Project, Environment, ApprovalRequest, ApprovalGrant } from './models.js';
+import type {
+  Principal,
+  Project,
+  Environment,
+  ApprovalRequest,
+  ApprovalGrant,
+  ProjectMember,
+} from './models.js';
+import { validatePrincipal } from './principal.js';
+import { hasCapability } from './policy.js';
 import { ProjectService } from './project.js';
 import { ResourceService, ApprovalService } from './services.js';
 import { AuditService, sanitizeUrlForAudit } from './audit.js';
@@ -26,10 +35,43 @@ export class DomainPortsImpl implements DomainPorts {
     if (!audit) throw new TypeError('DomainPortsImpl requires an audit dependency.');
   }
 
+  private ensureValidPrincipal(principal: Principal): void {
+    const res = validatePrincipal(principal);
+    if (!res.valid) {
+      throw new ForbiddenError(res.safeExplanation ?? 'Invalid principal authentication');
+    }
+  }
+
+  // ---------------------------------------------------------------------------
   // Projects
-  async createProject(principal: Principal, dto: CreateProjectDTO): Promise<Project> {
-    if (principal.type === 'SERVICE') {
-      throw new ForbiddenError('Service principals cannot create projects');
+  // ---------------------------------------------------------------------------
+  async createProject(
+    principal: Principal,
+    dto: CreateProjectDTO,
+    correlationId?: string
+  ): Promise<Project> {
+    this.ensureValidPrincipal(principal);
+    const auth = await hasCapability(this.repositories, principal, 'project.create');
+    if (!auth.allowed) {
+      await this.audit.log({
+        eventFamily: 'AUTHORIZATION',
+        eventType: 'AUTHORIZATION_DECISION',
+        surface: 'DOMAIN',
+        operation: 'project.create',
+        outcomeCode: 'DENIED',
+        decisionCode: auth.decisionCode,
+        reasonCode: auth.reasonCode,
+        authoritySources: auth.authoritySources,
+        targetType: 'PROJECT',
+        targetId: 'new',
+        actorType: principal.type,
+        principalId: principal.id,
+        actorId: principal.subjectId,
+        authKind: principal.authKind,
+        correlationId,
+        payload: { reason: auth.safeExplanation },
+      });
+      throw new ForbiddenError(auth.safeExplanation);
     }
     return this.projectService.createProject(
       {
@@ -40,29 +82,82 @@ export class DomainPortsImpl implements DomainPorts {
     );
   }
 
-  async listProjects(principal: Principal): Promise<Project[]> {
+  async listProjects(principal: Principal, _correlationId?: string): Promise<Project[]> {
+    this.ensureValidPrincipal(principal);
+    if (principal.type === 'SERVICE') {
+      return [];
+    }
     return this.projectService.listProjects(principal.subjectId);
   }
 
-  async getProject(principal: Principal, projectId: string): Promise<Project | null> {
+  async getProject(
+    principal: Principal,
+    projectId: string,
+    correlationId?: string
+  ): Promise<Project | null> {
+    this.ensureValidPrincipal(principal);
     const project = await this.projectService.getProject(projectId);
     if (!project) return null;
 
-    // Check membership/owner
-    const isOwner = project.ownerId === principal.subjectId;
-    const role = await this.projectService.getMemberRole(projectId, principal.subjectId);
-    if (!isOwner && !role) {
-      throw new ForbiddenError('Not a member of the project');
+    const auth = await hasCapability(this.repositories, principal, 'project.view', { projectId });
+    if (!auth.allowed) {
+      await this.audit.log({
+        eventFamily: 'AUTHORIZATION',
+        eventType: 'AUTHORIZATION_DECISION',
+        surface: 'DOMAIN',
+        operation: 'project.view',
+        outcomeCode: 'DENIED',
+        decisionCode: auth.decisionCode,
+        reasonCode: auth.reasonCode,
+        authoritySources: auth.authoritySources,
+        targetType: 'PROJECT',
+        targetId: projectId,
+        actorType: principal.type,
+        principalId: principal.id,
+        actorId: principal.subjectId,
+        authKind: principal.authKind,
+        projectId,
+        correlationId,
+        payload: { reason: auth.safeExplanation },
+      });
+      throw new ForbiddenError(auth.safeExplanation);
     }
     return project;
   }
 
-  async addProjectMember(principal: Principal, dto: AddMemberDTO): Promise<void> {
-    const project = await this.getProject(principal, dto.projectId);
+  async addProjectMember(
+    principal: Principal,
+    dto: AddMemberDTO,
+    correlationId?: string
+  ): Promise<void> {
+    this.ensureValidPrincipal(principal);
+    const project = await this.projectService.getProject(dto.projectId);
     if (!project) throw new NotFoundError('Project not found');
 
-    if (project.ownerId !== principal.subjectId) {
-      throw new ForbiddenError('Only the project owner can add members');
+    const auth = await hasCapability(this.repositories, principal, 'project.members.manage', {
+      projectId: dto.projectId,
+    });
+    if (!auth.allowed) {
+      await this.audit.log({
+        eventFamily: 'AUTHORIZATION',
+        eventType: 'AUTHORIZATION_DECISION',
+        surface: 'DOMAIN',
+        operation: 'project.member.add',
+        outcomeCode: 'DENIED',
+        decisionCode: auth.decisionCode,
+        reasonCode: auth.reasonCode,
+        authoritySources: auth.authoritySources,
+        targetType: 'PROJECT',
+        targetId: dto.projectId,
+        actorType: principal.type,
+        principalId: principal.id,
+        actorId: principal.subjectId,
+        authKind: principal.authKind,
+        projectId: dto.projectId,
+        correlationId,
+        payload: { reason: auth.safeExplanation },
+      });
+      throw new ForbiddenError(auth.safeExplanation);
     }
 
     await this.projectService.addMember(dto.projectId, dto.memberUserId, dto.role, principal);
@@ -71,30 +166,116 @@ export class DomainPortsImpl implements DomainPorts {
   async removeProjectMember(
     principal: Principal,
     projectId: string,
-    memberUserId: string
+    memberUserId: string,
+    correlationId?: string
   ): Promise<void> {
-    const project = await this.getProject(principal, projectId);
+    this.ensureValidPrincipal(principal);
+    const project = await this.projectService.getProject(projectId);
     if (!project) throw new NotFoundError('Project not found');
 
-    if (project.ownerId !== principal.subjectId) {
-      throw new ForbiddenError('Only the project owner can remove members');
+    const auth = await hasCapability(this.repositories, principal, 'project.members.manage', {
+      projectId,
+    });
+    if (!auth.allowed) {
+      await this.audit.log({
+        eventFamily: 'AUTHORIZATION',
+        eventType: 'AUTHORIZATION_DECISION',
+        surface: 'DOMAIN',
+        operation: 'project.member.remove',
+        outcomeCode: 'DENIED',
+        decisionCode: auth.decisionCode,
+        reasonCode: auth.reasonCode,
+        authoritySources: auth.authoritySources,
+        targetType: 'PROJECT',
+        targetId: projectId,
+        actorType: principal.type,
+        principalId: principal.id,
+        actorId: principal.subjectId,
+        authKind: principal.authKind,
+        projectId,
+        correlationId,
+        payload: { reason: auth.safeExplanation },
+      });
+      throw new ForbiddenError(auth.safeExplanation);
     }
 
     await this.projectService.removeMember(projectId, memberUserId, principal);
   }
 
-  async listProjectMembers(principal: Principal, projectId: string) {
-    await this.getProject(principal, projectId);
+  async listProjectMembers(
+    principal: Principal,
+    projectId: string,
+    correlationId?: string
+  ): Promise<ProjectMember[]> {
+    this.ensureValidPrincipal(principal);
+    const project = await this.projectService.getProject(projectId);
+    if (!project) throw new NotFoundError('Project not found');
+
+    const auth = await hasCapability(this.repositories, principal, 'project.members.view', {
+      projectId,
+    });
+    if (!auth.allowed) {
+      await this.audit.log({
+        eventFamily: 'AUTHORIZATION',
+        eventType: 'AUTHORIZATION_DECISION',
+        surface: 'DOMAIN',
+        operation: 'project.members.view',
+        outcomeCode: 'DENIED',
+        decisionCode: auth.decisionCode,
+        reasonCode: auth.reasonCode,
+        authoritySources: auth.authoritySources,
+        targetType: 'PROJECT',
+        targetId: projectId,
+        actorType: principal.type,
+        principalId: principal.id,
+        actorId: principal.subjectId,
+        authKind: principal.authKind,
+        projectId,
+        correlationId,
+        payload: { reason: auth.safeExplanation },
+      });
+      throw new ForbiddenError(auth.safeExplanation);
+    }
+
     return this.projectService.listMembers(projectId);
   }
 
+  // ---------------------------------------------------------------------------
   // Environments
-  async createEnvironment(principal: Principal, dto: CreateEnvironmentDTO): Promise<Environment> {
-    const project = await this.getProject(principal, dto.projectId);
+  // ---------------------------------------------------------------------------
+  async createEnvironment(
+    principal: Principal,
+    dto: CreateEnvironmentDTO,
+    correlationId?: string
+  ): Promise<Environment> {
+    this.ensureValidPrincipal(principal);
+    const project = await this.projectService.getProject(dto.projectId);
     if (!project) throw new NotFoundError('Project not found');
 
-    if (project.ownerId !== principal.subjectId) {
-      throw new ForbiddenError('Only the project owner can create environments');
+    const auth = await hasCapability(this.repositories, principal, 'environment.create', {
+      projectId: dto.projectId,
+    });
+    if (!auth.allowed) {
+      await this.audit.log({
+        eventFamily: 'AUTHORIZATION',
+        eventType: 'AUTHORIZATION_DECISION',
+        surface: 'DOMAIN',
+        operation: 'environment.create',
+        outcomeCode: 'DENIED',
+        decisionCode: auth.decisionCode,
+        reasonCode: auth.reasonCode,
+        authoritySources: auth.authoritySources,
+        targetType: 'PROJECT',
+        targetId: dto.projectId,
+        actorType: principal.type,
+        principalId: principal.id,
+        actorId: principal.subjectId,
+        authKind: principal.authKind,
+        projectId: dto.projectId,
+        correlationId,
+        payload: { reason: auth.safeExplanation },
+      });
+      throw new ForbiddenError(auth.safeExplanation);
     }
 
     return this.projectService.createEnvironment(
@@ -107,49 +288,137 @@ export class DomainPortsImpl implements DomainPorts {
     );
   }
 
-  async listEnvironments(principal: Principal, projectId: string): Promise<Environment[]> {
-    await this.getProject(principal, projectId);
+  async listEnvironments(
+    principal: Principal,
+    projectId: string,
+    correlationId?: string
+  ): Promise<Environment[]> {
+    this.ensureValidPrincipal(principal);
+    const project = await this.projectService.getProject(projectId);
+    if (!project) throw new NotFoundError('Project not found');
+
+    const auth = await hasCapability(this.repositories, principal, 'environment.view', {
+      projectId,
+    });
+    if (!auth.allowed) {
+      await this.audit.log({
+        eventFamily: 'AUTHORIZATION',
+        eventType: 'AUTHORIZATION_DECISION',
+        surface: 'DOMAIN',
+        operation: 'environment.view',
+        outcomeCode: 'DENIED',
+        decisionCode: auth.decisionCode,
+        reasonCode: auth.reasonCode,
+        authoritySources: auth.authoritySources,
+        targetType: 'PROJECT',
+        targetId: projectId,
+        actorType: principal.type,
+        principalId: principal.id,
+        actorId: principal.subjectId,
+        authKind: principal.authKind,
+        projectId,
+        correlationId,
+        payload: { reason: auth.safeExplanation },
+      });
+      throw new ForbiddenError(auth.safeExplanation);
+    }
+
     return this.projectService.listEnvironments(projectId);
   }
 
   async getEnvironment(
     principal: Principal,
     projectId: string,
-    envSlug: string
+    envSlug: string,
+    correlationId?: string
   ): Promise<Environment | null> {
-    await this.getProject(principal, projectId);
+    this.ensureValidPrincipal(principal);
+    const project = await this.projectService.getProject(projectId);
+    if (!project) return null;
+
+    const auth = await hasCapability(this.repositories, principal, 'environment.view', {
+      projectId,
+    });
+    if (!auth.allowed) {
+      await this.audit.log({
+        eventFamily: 'AUTHORIZATION',
+        eventType: 'AUTHORIZATION_DECISION',
+        surface: 'DOMAIN',
+        operation: 'environment.view',
+        outcomeCode: 'DENIED',
+        decisionCode: auth.decisionCode,
+        reasonCode: auth.reasonCode,
+        authoritySources: auth.authoritySources,
+        targetType: 'PROJECT',
+        targetId: projectId,
+        actorType: principal.type,
+        principalId: principal.id,
+        actorId: principal.subjectId,
+        authKind: principal.authKind,
+        projectId,
+        correlationId,
+        payload: { reason: auth.safeExplanation },
+      });
+      throw new ForbiddenError(auth.safeExplanation);
+    }
+
     return this.projectService.getEnvironment(projectId, envSlug);
   }
 
+  // ---------------------------------------------------------------------------
   // Secrets & Reveal Operations
+  // ---------------------------------------------------------------------------
   async getSecrets(
-    _principal: Principal,
+    principal: Principal,
     _projectId: string,
     _envId: string,
     _grantId?: string
   ): Promise<Record<string, string>> {
+    this.ensureValidPrincipal(principal);
     // A GET must be safe and idempotent. Secret-value redemption consumes an exact grant, so it
     // cannot be implemented by this read port. Keep the legacy boundary fail-closed until the
     // dedicated authenticated, grant-consuming POST use case is introduced (#122/#128).
     throw new ForbiddenError('Secret values require the grant-consuming redemption endpoint');
   }
 
-  async setSecrets(principal: Principal, dto: BatchSetSecretsDTO): Promise<void> {
-    const project = await this.getProject(principal, dto.projectId);
+  async setSecrets(
+    principal: Principal,
+    dto: BatchSetSecretsDTO,
+    correlationId?: string
+  ): Promise<void> {
+    this.ensureValidPrincipal(principal);
+    const project = await this.projectService.getProject(dto.projectId);
     if (!project) throw new NotFoundError('Project not found');
 
     const env = await this.projectService.getEnvironmentById(dto.projectId, dto.envId);
     if (!env || !env.resourceId) throw new NotFoundError('Environment not found');
 
-    // Write access check: Owner/Writer
-    let authorized = project.ownerId === principal.subjectId;
-    if (!authorized) {
-      const role = await this.projectService.getMemberRole(dto.projectId, principal.subjectId);
-      authorized = role === 'WRITER';
-    }
-
-    if (!authorized) {
-      throw new ForbiddenError('Write permission required');
+    const auth = await hasCapability(this.repositories, principal, 'secret.write', {
+      projectId: dto.projectId,
+      resourceId: env.resourceId,
+    });
+    if (!auth.allowed) {
+      await this.audit.log({
+        eventFamily: 'AUTHORIZATION',
+        eventType: 'AUTHORIZATION_DECISION',
+        surface: 'DOMAIN',
+        operation: 'secret.write',
+        outcomeCode: 'DENIED',
+        decisionCode: auth.decisionCode,
+        reasonCode: auth.reasonCode,
+        authoritySources: auth.authoritySources,
+        targetType: 'RESOURCE',
+        targetId: env.resourceId,
+        actorType: principal.type,
+        principalId: principal.id,
+        actorId: principal.subjectId,
+        authKind: principal.authKind,
+        projectId: dto.projectId,
+        resourceId: env.resourceId,
+        correlationId,
+        payload: { reason: auth.safeExplanation },
+      });
+      throw new ForbiddenError(auth.safeExplanation);
     }
 
     await this.resourceService.setSecrets(env.resourceId, dto.secrets, principal);
@@ -161,25 +430,53 @@ export class DomainPortsImpl implements DomainPorts {
     grantId?: string,
     consentId?: string
   ): Promise<string> {
+    this.ensureValidPrincipal(principal);
     return this.resourceService.revealTOTPCode(resourceId, principal, grantId, consentId);
   }
 
-  // Webhooks
+  // ---------------------------------------------------------------------------
+  // Webhooks & Callbacks
+  // ---------------------------------------------------------------------------
   async registerCallback(
     principal: Principal,
     resourceId: string,
     url: string,
-    secret: string
+    secret: string,
+    correlationId?: string
   ): Promise<CallbackDestinationDTO> {
+    this.ensureValidPrincipal(principal);
     const resource = await this.repositories.resources.findById(resourceId);
     if (!resource) throw new NotFoundError('Resource not found');
 
     const env = await this.repositories.projects.findEnvironmentByResourceId(resourceId);
     if (!env) throw new NotFoundError('Associated environment not found');
 
-    const project = await this.projectService.getProject(env.projectId);
-    if (!project || project.ownerId !== principal.subjectId) {
-      throw new ForbiddenError('Only the project owner can register callbacks');
+    const auth = await hasCapability(this.repositories, principal, 'callback.destination.manage', {
+      projectId: env.projectId,
+      resourceId,
+    });
+    if (!auth.allowed) {
+      await this.audit.log({
+        eventFamily: 'AUTHORIZATION',
+        eventType: 'AUTHORIZATION_DECISION',
+        surface: 'DOMAIN',
+        operation: 'callback.register',
+        outcomeCode: 'DENIED',
+        decisionCode: auth.decisionCode,
+        reasonCode: auth.reasonCode,
+        authoritySources: auth.authoritySources,
+        targetType: 'RESOURCE',
+        targetId: resourceId,
+        actorType: principal.type,
+        principalId: principal.id,
+        actorId: principal.subjectId,
+        authKind: principal.authKind,
+        projectId: env.projectId,
+        resourceId,
+        correlationId,
+        payload: { reason: auth.safeExplanation },
+      });
+      throw new ForbiddenError(auth.safeExplanation);
     }
 
     const created = await this.repositories.transaction(async (tx) => {
@@ -205,10 +502,10 @@ export class DomainPortsImpl implements DomainPorts {
           surface: 'DOMAIN',
           operation: 'callback.register',
           outcomeCode: 'SUCCESS',
-          capability: 'resource.policy.manage',
+          capability: 'callback.destination.manage',
           decisionCode: 'ALLOW',
-          reasonCode: 'OWNER',
-          authoritySources: ['PROJECT_OWNER'],
+          reasonCode: auth.reasonCode,
+          authoritySources: auth.authoritySources,
           targetType: 'RESOURCE',
           targetId: resourceId,
           actorType: principal.type,
@@ -217,6 +514,7 @@ export class DomainPortsImpl implements DomainPorts {
           authKind: principal.authKind,
           projectId: env.projectId,
           resourceId,
+          correlationId,
           payload: {
             destinationId: destination.id,
             url: sanitizeUrlForAudit(destination.url),
@@ -237,11 +535,42 @@ export class DomainPortsImpl implements DomainPorts {
     };
   }
 
-  async listCallbacks(principal: Principal, resourceId: string): Promise<CallbackDestinationDTO[]> {
+  async listCallbacks(
+    principal: Principal,
+    resourceId: string,
+    correlationId?: string
+  ): Promise<CallbackDestinationDTO[]> {
+    this.ensureValidPrincipal(principal);
     const env = await this.repositories.projects.findEnvironmentByResourceId(resourceId);
     if (!env) throw new NotFoundError('Associated environment not found');
 
-    await this.getProject(principal, env.projectId);
+    const auth = await hasCapability(this.repositories, principal, 'callback.destination.view', {
+      projectId: env.projectId,
+      resourceId,
+    });
+    if (!auth.allowed) {
+      await this.audit.log({
+        eventFamily: 'AUTHORIZATION',
+        eventType: 'AUTHORIZATION_DECISION',
+        surface: 'DOMAIN',
+        operation: 'callback.view',
+        outcomeCode: 'DENIED',
+        decisionCode: auth.decisionCode,
+        reasonCode: auth.reasonCode,
+        authoritySources: auth.authoritySources,
+        targetType: 'RESOURCE',
+        targetId: resourceId,
+        actorType: principal.type,
+        principalId: principal.id,
+        actorId: principal.subjectId,
+        authKind: principal.authKind,
+        projectId: env.projectId,
+        resourceId,
+        correlationId,
+        payload: { reason: auth.safeExplanation },
+      });
+      throw new ForbiddenError(auth.safeExplanation);
+    }
 
     const dests = await this.repositories.callbackDestinations.findByResourceId(resourceId);
     return dests.map((d) => ({
@@ -256,14 +585,39 @@ export class DomainPortsImpl implements DomainPorts {
   async deleteCallback(
     principal: Principal,
     resourceId: string,
-    callbackId: string
+    callbackId: string,
+    correlationId?: string
   ): Promise<void> {
+    this.ensureValidPrincipal(principal);
     const env = await this.repositories.projects.findEnvironmentByResourceId(resourceId);
     if (!env) throw new NotFoundError('Associated environment not found');
 
-    const project = await this.projectService.getProject(env.projectId);
-    if (!project || project.ownerId !== principal.subjectId) {
-      throw new ForbiddenError('Only the project owner can delete callbacks');
+    const auth = await hasCapability(this.repositories, principal, 'callback.destination.manage', {
+      projectId: env.projectId,
+      resourceId,
+    });
+    if (!auth.allowed) {
+      await this.audit.log({
+        eventFamily: 'AUTHORIZATION',
+        eventType: 'AUTHORIZATION_DECISION',
+        surface: 'DOMAIN',
+        operation: 'callback.delete',
+        outcomeCode: 'DENIED',
+        decisionCode: auth.decisionCode,
+        reasonCode: auth.reasonCode,
+        authoritySources: auth.authoritySources,
+        targetType: 'RESOURCE',
+        targetId: resourceId,
+        actorType: principal.type,
+        principalId: principal.id,
+        actorId: principal.subjectId,
+        authKind: principal.authKind,
+        projectId: env.projectId,
+        resourceId,
+        correlationId,
+        payload: { reason: auth.safeExplanation },
+      });
+      throw new ForbiddenError(auth.safeExplanation);
     }
 
     const callback = await this.repositories.callbackDestinations.findById(callbackId);
@@ -283,10 +637,10 @@ export class DomainPortsImpl implements DomainPorts {
           surface: 'DOMAIN',
           operation: 'callback.delete',
           outcomeCode: 'SUCCESS',
-          capability: 'resource.policy.manage',
+          capability: 'callback.destination.manage',
           decisionCode: 'ALLOW',
-          reasonCode: 'OWNER',
-          authoritySources: ['PROJECT_OWNER'],
+          reasonCode: auth.reasonCode,
+          authoritySources: auth.authoritySources,
           targetType: 'RESOURCE',
           targetId: resourceId,
           actorType: principal.type,
@@ -295,6 +649,7 @@ export class DomainPortsImpl implements DomainPorts {
           authKind: principal.authKind,
           projectId: env.projectId,
           resourceId,
+          correlationId,
           payload: {
             destinationId: callbackId,
           },
@@ -305,7 +660,9 @@ export class DomainPortsImpl implements DomainPorts {
     await this.repositories.transaction(remove);
   }
 
+  // ---------------------------------------------------------------------------
   // Approvals & Grants
+  // ---------------------------------------------------------------------------
   async createApprovalRequest(
     principal: Principal,
     resourceId: string,
@@ -319,8 +676,10 @@ export class DomainPortsImpl implements DomainPorts {
       expiresInMs?: number;
       authFamily?: string;
       audience?: string;
-    }
+    },
+    _correlationId?: string
   ): Promise<{ success: boolean; request?: ApprovalRequest; error?: string }> {
+    this.ensureValidPrincipal(principal);
     return this.approvalService.createApprovalRequest({
       resourceId,
       principal,
@@ -343,8 +702,10 @@ export class DomainPortsImpl implements DomainPorts {
     principal: Principal,
     requestId: string,
     decision: 'APPROVE' | 'DENY',
-    consentId?: string
+    consentId?: string,
+    _correlationId?: string
   ): Promise<{ success: boolean; error?: string }> {
+    this.ensureValidPrincipal(principal);
     if (principal.type === 'SERVICE') {
       throw new ForbiddenError('Service principals cannot resolve approval requests');
     }
@@ -354,43 +715,74 @@ export class DomainPortsImpl implements DomainPorts {
 
   async cancelApprovalRequest(
     principal: Principal,
-    requestId: string
+    requestId: string,
+    _correlationId?: string
   ): Promise<{ success: boolean; error?: string }> {
+    this.ensureValidPrincipal(principal);
     return this.approvalService.cancelApprovalRequest(requestId, principal);
   }
 
   async getApprovalRequest(
     principal: Principal,
-    requestId: string
+    requestId: string,
+    correlationId?: string
   ): Promise<ApprovalRequest | null> {
+    this.ensureValidPrincipal(principal);
     const request = await this.approvalService.getApprovalRequest(requestId);
     if (!request) return null;
 
-    const env = await this.repositories.projects.findEnvironmentByResourceId(request.resourceId);
-    if (!env) return null;
-
-    const project = await this.projectService.getProject(env.projectId);
-    if (!project) return null;
-
-    const isMember =
-      project.ownerId === principal.subjectId ||
-      (await this.projectService.getMemberRole(env.projectId, principal.subjectId)) !== null;
-    const isRequester = request.requesterId === principal.subjectId;
-    const guardians = await this.repositories.guardians.findByResourceId(request.resourceId);
-    const isGuardian = guardians.some((g) => g.discordUserId === principal.subjectId);
-
-    if (!isMember && !isRequester && !isGuardian) {
-      throw new ForbiddenError('Permission denied');
+    if (request.requesterId === principal.subjectId) {
+      return request;
     }
 
-    return request;
+    const queueAuth = await hasCapability(this.repositories, principal, 'request.queue.view', {
+      requestId,
+      resourceId: request.resourceId,
+    });
+    if (queueAuth.allowed) {
+      return request;
+    }
+
+    const env = await this.repositories.projects.findEnvironmentByResourceId(request.resourceId);
+    if (env) {
+      const projectAuth = await hasCapability(this.repositories, principal, 'project.view', {
+        projectId: env.projectId,
+      });
+      if (projectAuth.allowed) {
+        return request;
+      }
+    }
+
+    const explanation = queueAuth.safeExplanation ?? 'Permission denied';
+    await this.audit.log({
+      eventFamily: 'AUTHORIZATION',
+      eventType: 'AUTHORIZATION_DECISION',
+      surface: 'DOMAIN',
+      operation: 'request.view',
+      outcomeCode: 'DENIED',
+      decisionCode: queueAuth.decisionCode,
+      reasonCode: queueAuth.reasonCode,
+      authoritySources: queueAuth.authoritySources,
+      targetType: 'APPROVAL_REQUEST',
+      targetId: requestId,
+      actorType: principal.type,
+      principalId: principal.id,
+      actorId: principal.subjectId,
+      authKind: principal.authKind,
+      resourceId: request.resourceId,
+      correlationId,
+      payload: { reason: explanation },
+    });
+    throw new ForbiddenError(explanation);
   }
 
   async getApprovalGrantByRequestId(
     principal: Principal,
-    requestId: string
+    requestId: string,
+    correlationId?: string
   ): Promise<ApprovalGrant | null> {
-    const request = await this.getApprovalRequest(principal, requestId);
+    this.ensureValidPrincipal(principal);
+    const request = await this.getApprovalRequest(principal, requestId, correlationId);
     if (!request) return null;
 
     return this.repositories.approvalGrants.findByRequestId(requestId);

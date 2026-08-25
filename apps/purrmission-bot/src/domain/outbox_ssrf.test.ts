@@ -285,8 +285,6 @@ describe('SSRF Protection, Idempotent Outbox, and Batch Secrets API', () => {
           type: 'DISCORD_USER',
           subjectId: 'owner-1',
           authKind: 'DISCORD',
-          scopes: [],
-          audience: 'api',
         },
         { name: 'My Project' }
       );

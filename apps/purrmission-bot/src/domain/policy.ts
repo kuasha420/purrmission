@@ -267,7 +267,8 @@ export async function getGuardedResourcesForUser(
 /**
  * Capability evaluator (Prerequisite 1/9)
  */
-function resolvePolicyTarget(context: CapabilityContext): PolicyTarget {
+function resolvePolicyTarget(context: CapabilityContext = {}): PolicyTarget {
+  if (!context) return { type: 'GLOBAL' };
   if (context.grantId) return { type: 'APPROVAL_GRANT', id: context.grantId };
   if (context.resourceId && context.fieldName) {
     return { type: 'SECRET', resourceId: context.resourceId, key: context.fieldName };
@@ -306,7 +307,7 @@ export async function hasCapability(
   repositories: CapabilityRepositories,
   principal: Principal,
   capability: Capability,
-  context: CapabilityContext
+  context: CapabilityContext = {}
 ): Promise<EvaluationResult> {
   const target = resolvePolicyTarget(context);
   const authorityRequestId = context.requestId ?? context.authorizationRequestId;
