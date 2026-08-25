@@ -226,7 +226,7 @@ describe('Milestone 2 Environment Cascading Stress & Edge Case Harness', () => {
         'LOCAL_STAGING_KEY=local_val\n# preserve comment'
       );
 
-      mock.method(axios, 'get', async (url: string) => {
+      mock.method(axios, 'post', async (url: string) => {
         requestedUrl = url;
         return {
           status: 200,
@@ -251,7 +251,9 @@ describe('Milestone 2 Environment Cascading Stress & Edge Case Harness', () => {
       ]);
 
       assert.ok(
-        requestedUrl.includes('/projects/remote_proj_888/environments/remote_env_999/secrets')
+        requestedUrl.includes(
+          '/projects/remote_proj_888/environments/remote_env_999/secrets/reveal'
+        )
       );
 
       const fileContent = await fs.readFile(path.join(tempDir, '.env.staging'), 'utf-8');
@@ -261,7 +263,7 @@ describe('Milestone 2 Environment Cascading Stress & Edge Case Harness', () => {
     });
 
     it('2.5: pawthy pull explicit -f overrides -E target file', async () => {
-      mock.method(axios, 'get', async () => {
+      mock.method(axios, 'post', async () => {
         return { status: 200, data: { secrets: { FOO: 'bar' } } };
       });
 
@@ -389,7 +391,7 @@ describe('Milestone 2 Environment Cascading Stress & Edge Case Harness', () => {
       await fs.writeFile(readOnlyFile, 'LOCKED=1');
       await fs.chmod(readOnlyFile, 0o444); // Read-only
 
-      mock.method(axios, 'get', async () => {
+      mock.method(axios, 'post', async () => {
         return { status: 200, data: { secrets: { LOCKED: '2' } } };
       });
 

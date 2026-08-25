@@ -19,6 +19,8 @@ export const pullCommand = new Command('pull')
   .option('-e, --env-id <id>', 'Environment ID')
   .option('-m, --merge', 'Merge with existing file instead of overwriting')
   .option('-k, --keys <list>', 'Comma-separated list of keys to pull')
+  .option('-g, --grant <id>', 'Approval grant ID to redeem')
+  .option('--grant-id <id>', 'Approval grant ID to redeem')
   .action(async (options) => {
     const token = getToken();
     const apiUrl = getApiUrl();
@@ -76,23 +78,27 @@ export const pullCommand = new Command('pull')
 
     // Whitelisting / selective keys sync (Issue #80)
     const keysWhitelist = getKeysWhitelist(options.keys, config);
-    const keysParam = keysWhitelist ? Array.from(keysWhitelist).join(',') : undefined;
+    const keysArray = keysWhitelist ? Array.from(keysWhitelist) : undefined;
+    const initialGrantId = options.grant || options.grantId;
 
     try {
       console.log(chalk.dim('Fetching secrets from Purrmission...'));
 
-      // 1. Fetch Secrets
-      const url = new URL(`${apiUrl}/api/projects/${projectId}/environments/${envId}/secrets`);
-      if (keysParam) {
-        url.searchParams.set('keys', keysParam);
+      // 1. Reveal Secrets via POST reveal endpoint (PR #158 / #130)
+      const revealBody: { keys?: string[]; grantId?: string } = {};
+      if (keysArray && keysArray.length > 0) {
+        revealBody.keys = keysArray;
+      }
+      if (initialGrantId) {
+        revealBody.grantId = initialGrantId;
       }
 
-      const res = await axios.get<{
+      const res = await axios.post<{
         secrets?: Record<string, string>;
         status?: string;
         message?: string;
         requestId?: string;
-      }>(url.toString(), {
+      }>(`${apiUrl}/api/projects/${projectId}/environments/${envId}/secrets/reveal`, revealBody, {
         headers: pawthyRequestHeaders(correlation, { Authorization: `Bearer ${token}` }),
         validateStatus: (status) => status >= 200 && status < 300,
       });
@@ -100,18 +106,112 @@ export const pullCommand = new Command('pull')
       let secrets: Record<string, string> = {};
 
       if (res.status === 202) {
-        const { requestId } = res.data;
+        const requestId = res.data?.requestId;
+        if (!requestId || typeof requestId !== 'string') {
+          console.error(chalk.red('Received pending approval status without a valid request ID.'));
+          process.exit(1);
+          return;
+        }
+
         console.log(`\n⏳ ${chalk.yellow('Access Pending Approval')}`);
-        if (requestId) console.log(chalk.white(`Request ID: ${requestId}`));
-        console.error(
-          chalk.yellow(
-            'Automatic approval polling is temporarily disabled. Re-run `pawthy pull` after approval.'
-          )
+        console.log(chalk.white(`Request ID: ${requestId}`));
+        const rawInitial = Number(process.env.PAWTHY_POLL_INTERVAL_MS);
+        const initialIntervalMs =
+          Number.isFinite(rawInitial) && rawInitial > 0 ? Math.min(rawInitial, 60000) : 2000;
+        const rawMax = Number(process.env.PAWTHY_POLL_MAX_INTERVAL_MS);
+        const maxIntervalMs = Math.max(
+          initialIntervalMs,
+          Number.isFinite(rawMax) && rawMax > 0 ? Math.min(rawMax, 300000) : 10000
         );
-        // #130 owns the final POST/status/grant exchange. Until then, do not turn a pending
-        // response into an authority-bearing GET or keep a CLI process polling indefinitely.
-        process.exit(1);
-        return;
+        const rawTimeout = Number(process.env.PAWTHY_POLL_TIMEOUT_MS);
+        const timeoutMs =
+          Number.isFinite(rawTimeout) && rawTimeout > 0 ? Math.min(rawTimeout, 3600000) : 300000;
+
+        let currentInterval = initialIntervalMs;
+        const startTime = Date.now();
+        let approvedGrantId: string | null = null;
+
+        while (Date.now() - startTime < timeoutMs) {
+          await new Promise((resolve) => setTimeout(resolve, currentInterval));
+
+          try {
+            const reqRes = await axios.get<{
+              requestId: string;
+              status: string;
+              grantId?: string | null;
+              resolvedBy?: string | null;
+              resolvedAt?: string | null;
+            }>(`${apiUrl}/api/requests/${requestId}`, {
+              headers: pawthyRequestHeaders(correlation, { Authorization: `Bearer ${token}` }),
+            });
+
+            const reqData = reqRes.data;
+            if (reqData.status === 'APPROVED' && reqData.grantId) {
+              approvedGrantId = reqData.grantId;
+              console.log(chalk.green('\n✅ Request approved! Retrieving secrets...'));
+              break;
+            } else if (reqData.status === 'DENIED') {
+              console.error(
+                chalk.red(`\n❌ Access request ${requestId} was denied by a Guardian.`)
+              );
+              process.exit(1);
+              return;
+            } else if (reqData.status === 'EXPIRED' || reqData.status === 'CANCELLED') {
+              console.error(
+                chalk.red(`\n❌ Access request ${requestId} has ${reqData.status.toLowerCase()}.`)
+              );
+              process.exit(1);
+              return;
+            }
+
+            currentInterval = Math.min(currentInterval * 1.5, maxIntervalMs);
+          } catch (pollError: unknown) {
+            if (axios.isAxiosError(pollError)) {
+              const status = pollError.response?.status;
+              if (status === 401) {
+                console.error(chalk.red('\nSession expired during polling. Please log in again.'));
+                process.exit(1);
+                return;
+              } else if (status === 403) {
+                console.error(chalk.red(`\nAccess forbidden for request ${requestId}.`));
+                process.exit(1);
+                return;
+              } else if (status === 404) {
+                console.error(chalk.red(`\nRequest ${requestId} not found.`));
+                process.exit(1);
+                return;
+              } else if (status === 429) {
+                const retryAfterHeader = pollError.response?.headers?.['retry-after'];
+                const retryAfterSec = retryAfterHeader ? parseInt(retryAfterHeader, 10) : NaN;
+                if (!isNaN(retryAfterSec) && retryAfterSec > 0) {
+                  currentInterval = Math.min(retryAfterSec * 1000, maxIntervalMs);
+                } else {
+                  currentInterval = Math.min(currentInterval * 2, maxIntervalMs);
+                }
+                continue;
+              }
+            }
+            currentInterval = Math.min(currentInterval * 1.5, maxIntervalMs);
+          }
+        }
+
+        if (!approvedGrantId) {
+          console.error(chalk.red(`\nTimed out waiting for approval of request ${requestId}.`));
+          process.exit(1);
+          return;
+        }
+
+        const finalRevealRes = await axios.post<{ secrets?: Record<string, string> }>(
+          `${apiUrl}/api/projects/${projectId}/environments/${envId}/secrets/reveal`,
+          {
+            ...(keysArray && keysArray.length > 0 ? { keys: keysArray } : {}),
+            grantId: approvedGrantId,
+          },
+          {
+            headers: pawthyRequestHeaders(correlation, { Authorization: `Bearer ${token}` }),
+          }
+        );
+        secrets = finalRevealRes.data.secrets || {};
       } else {
         secrets = res.data.secrets || {};
       }
@@ -161,7 +261,7 @@ export const pullCommand = new Command('pull')
       if (!isMerged) {
         content = serializeSecrets(secrets, format);
 
-        // 3. Write to file with safety check
+        // Safety check if file already exists
         try {
           await fs.access(envPath);
           console.warn(chalk.yellow(`\n⚠️  File ${file} already exists.`));
@@ -171,7 +271,7 @@ export const pullCommand = new Command('pull')
         }
       }
 
-      // 3. Write to file
+      // Write to file
       await fs.writeFile(envPath, content);
 
       console.log(
@@ -185,8 +285,18 @@ export const pullCommand = new Command('pull')
           console.error(chalk.red('Access forbidden: Insufficient permissions or wrong audience.'));
         } else if (error.response?.status === 404) {
           console.error(chalk.red('Project or Environment not found. It may have been deleted.'));
+        } else if (error.response?.status === 405) {
+          console.error(
+            chalk.red(
+              'Method not allowed: Server does not support secret reveal on this endpoint or method.'
+            )
+          );
         } else {
-          console.error(chalk.red(`Failed to pull secrets: ${error.message}`));
+          console.error(
+            chalk.red(
+              `Failed to pull secrets: ${error.message} (Correlation ID: ${correlation.commandId})`
+            )
+          );
         }
       } else {
         console.error(

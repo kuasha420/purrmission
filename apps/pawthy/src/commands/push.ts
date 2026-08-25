@@ -179,7 +179,7 @@ export const pushCommand = new Command('push')
           const targetEnv = envId || 'this environment';
           console.error(
             chalk.red(
-              `Error: Insufficient permissions to push secrets to environment '${targetEnv}'. You require Manager or Owner role on this project to modify secrets.`
+              `Error: Insufficient permissions to push secrets to environment '${targetEnv}'. You require Owner or Writer permissions on this project to modify secrets.`
             )
           );
         } else if (error.response?.status === 404) {
@@ -187,14 +187,22 @@ export const pushCommand = new Command('push')
         } else if (error.response?.status === 409) {
           console.error(chalk.red('Conflict detected: Remote secret version has changed.'));
         } else if (error.response?.status === 400) {
-          const data = error.response.data as any;
+          const data = error.response.data as {
+            error?: string;
+            message?: string;
+            details?: unknown;
+          };
           const message = data?.error || data?.message || 'Invalid data';
           const details = data?.details
             ? `\nDetails: ${JSON.stringify(data.details, null, 2)}`
             : '';
           console.error(chalk.red(`Validation failed: ${message}${details}`));
         } else {
-          console.error(chalk.red(`Failed to push secrets: ${error.message}`));
+          console.error(
+            chalk.red(
+              `Failed to push secrets: ${error.message} (Correlation ID: ${correlation.commandId})`
+            )
+          );
         }
       } else if (
         error instanceof Error &&
