@@ -30,6 +30,19 @@ export function createDiscordPrincipal(discordUserId: string, correlationId?: st
 }
 
 /**
+ * Constructs a principal used by background services and system workers.
+ */
+export function createServicePrincipal(serviceName: string, correlationId?: string): Principal {
+  return {
+    type: 'SERVICE',
+    id: `service:${serviceName}`,
+    subjectId: serviceName,
+    authKind: 'SERVICE',
+    correlationId,
+  };
+}
+
+/**
  * Returns the only identity that may participate in role and ownership authorization.
  */
 export function authorizationSubjectId(principal: Principal): string {
