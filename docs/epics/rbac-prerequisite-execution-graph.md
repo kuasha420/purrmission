@@ -150,16 +150,20 @@ incomplete at final reassessment, #126 must preserve an explicit production roll
 
 ### 3.1 Current wave ledger
 
-| Node(s)   | Current state                                | Evidence / merge gate                                                                      |
-| --------- | -------------------------------------------- | ------------------------------------------------------------------------------------------ |
-| #117      | Verified and closed at merge `a0144d46`      | Human and independent review complete; clean-master common and migration gates pass        |
-| #118      | Verified and closed at merge `4420664f`      | Human/automated review complete; clean-master common and populated migration gates pass    |
-| #119      | Verified and closed at merge `b4139782`      | Automated review complete; clean-master common and migration gates pass                    |
-| #120      | Verified and closed via PR #150              | TOTP custody/consent contracts, migration, and adapter cutover complete                    |
-| #121      | Verified and closed via PR #151              | Credential lifecycle, cutover migration, adapter, and post-merge gates pass                |
-| #122      | Ready; unassigned                            | Wave 3 blockers are Verified; Approval Request V2 is the next implementation lane          |
-| #123-#130 | Blocked according to the dependency graph    | Planning and test design may begin only within the one-wave-ahead rule                     |
-| #105      | Implementation merged; rollout evidence open | #149 merged; real offsite upload/download/isolated restore still blocks production rollout |
+| Node(s) | Current state                                | Evidence / merge gate                                                                      |
+| ------- | -------------------------------------------- | ------------------------------------------------------------------------------------------ |
+| #117    | Verified and closed at merge `a0144d46`      | Human and independent review complete; clean-master common and migration gates pass        |
+| #118    | Verified and closed at merge `4420664f`      | Human/automated review complete; clean-master common and populated migration gates pass    |
+| #119    | Verified and closed at merge `b4139782`      | Automated review complete; clean-master common and migration gates pass                    |
+| #120    | Verified and closed via PR #150              | TOTP custody/consent contracts, migration, and adapter cutover complete                    |
+| #121    | Verified and closed via PR #151              | Credential lifecycle, cutover migration, adapter, and post-merge gates pass                |
+| #122    | Verified and closed via PR #153              | Approval Request V2 and grant issuance/consumption complete                                |
+| #123    | Verified and closed via PR #154              | Outbox delivery leases and registered webhook destinations complete                        |
+| #127    | Verified and closed via PR #155              | Shared DomainPorts boundary & transaction substrate complete                               |
+| #128    | Verified and closed via PR #157              | Discord slash command layer cutover to DomainPorts complete                                |
+| #129    | In Review / Cutover Complete                 | Fastify HTTP routes cut over to DomainPorts with typed principal & reveal semantics        |
+| #130    | Queued after #129                            | Pawthy CLI cutover to DomainPorts                                                          |
+| #105    | Implementation merged; rollout evidence open | #149 merged; real offsite upload/download/isolated restore still blocks production rollout |
 
 Research, threat modeling, test design, and file-collision planning may begin one wave early.
 Production implementation must not merge before every native blocker is **Verified** and closed.

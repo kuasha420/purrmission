@@ -137,6 +137,27 @@ describe('System API E2E Tests', () => {
         // Fallback: throw ForbiddenError
         throw new ForbiddenError('Access denied: Secrets access not approved');
       },
+      setSecrets: async (
+        principal: Principal,
+        dto: { projectId: string; envId: string; secrets: Record<string, string> }
+      ) => {
+        const userId = principal.subjectId;
+        const project = (await mockGetProject.fn(dto.projectId)) as { ownerId: string } | null;
+        if (!project) throw new ResourceNotFoundError('Project not found');
+        let hasWriteAccess = project.ownerId === userId;
+        if (!hasWriteAccess) {
+          const role = await mockGetMemberRole.fn(dto.projectId, userId);
+          hasWriteAccess = role === 'WRITER';
+        }
+        if (!hasWriteAccess) {
+          throw new ForbiddenError('Write permission required');
+        }
+        const env = (await mockGetEnvironmentById.fn(dto.projectId, dto.envId)) as {
+          resourceId: string;
+        } | null;
+        if (!env || !env.resourceId) throw new ResourceNotFoundError('Environment not found');
+        await mockSetSecrets.fn(env.resourceId, dto.secrets, principal);
+      },
       createApprovalRequest: async (principal: Principal, resourceId: string, action: string) => {
         const result = await mockCreateApprovalRequest.fn({
           resourceId,

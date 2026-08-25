@@ -1,7 +1,7 @@
 /**
  * Fastify HTTP server setup.
  *
- * Provides the HTTP API for external services to request approvals.
+ * Provides the authenticated HTTP API for external services and Pawthy CLI.
  */
 import formBody from '@fastify/formbody';
 import type { Client } from 'discord.js';
@@ -11,10 +11,10 @@ import { z } from 'zod';
 import {
   AccessDeniedError,
   ExpiredTokenError,
-  ForbiddenError,
   InvalidGrantError,
   SlowDownError,
 } from '../domain/auth.js';
+import { DomainError, ForbiddenError, NotFoundError } from '../domain/ports.js';
 import { ResourceNotFoundError } from '../domain/errors.js';
 import type { Capability, Principal } from '../domain/models.js';
 import { createDiscordPrincipal } from '../domain/principal.js';
@@ -48,10 +48,23 @@ export interface HttpServerDeps {
 const createRequestSchema = z.object({
   resourceId: z.string().min(1, 'resourceId is required'),
   apiKey: z.string().min(1, 'apiKey is required'),
+  action: z.string().min(1).optional().default('secret.value.read'),
+  targetKey: z.string().nullable().optional(),
   context: z.record(z.unknown()).optional().default({}),
-  callbackUrl: z.string().url().optional(),
+  callbackUrl: z
+    .never({
+      message:
+        'Arbitrary callback URLs are forbidden; use registered destinations via /api/resources/:id/callbacks',
+    })
+    .optional(),
+  channelId: z
+    .never({
+      message: 'Direct channelId routing is forbidden',
+    })
+    .optional(),
+  destinationId: z.string().uuid().optional(),
   expiresInMs: z.number().positive().optional(),
-  channelId: z.string().min(1).optional(), // Discord channel to send the approval message
+  reason: z.string().max(500).optional(),
 });
 
 type CreateRequestBody = z.infer<typeof createRequestSchema>;
@@ -147,8 +160,28 @@ export function createHttpServer(deps: HttpServerDeps): FastifyInstance {
     };
   });
 
+  // ---------------------------------------------------------------------------
+  // Approval Requests
+  // ---------------------------------------------------------------------------
+
   // Create approval request endpoint
   server.post<{ Body: CreateRequestBody }>('/api/requests', async (request, reply) => {
+    // Check for raw callbackUrl / channelId before safeParse to provide clear error message
+    const rawBody = (request.body || {}) as Record<string, unknown>;
+    if (rawBody.callbackUrl !== undefined) {
+      return reply.status(400).send({
+        error: 'validation_error',
+        message:
+          'Arbitrary callback URLs are forbidden; use registered destinations via /api/resources/:id/callbacks',
+      });
+    }
+    if (rawBody.channelId !== undefined) {
+      return reply.status(400).send({
+        error: 'validation_error',
+        message: 'Direct channelId routing is forbidden',
+      });
+    }
+
     // Validate request body
     const parseResult = createRequestSchema.safeParse(request.body);
     if (!parseResult.success) {
@@ -173,51 +206,46 @@ export function createHttpServer(deps: HttpServerDeps): FastifyInstance {
     }
     const { resource, principal } = authentication;
 
-    // Verify resourceId matches the API key's resource
+    // Verify resourceId matches the API key resource
     if (resource.id !== body.resourceId) {
       logger.warn('Resource ID mismatch', {
         providedResourceId: body.resourceId,
-        apiKeyResourceId: authentication.resource.id,
+        apiKeyResourceId: resource.id,
       });
       return reply.status(401).send({
         error: 'Resource ID does not match API key',
       });
     }
 
-    // Create the approval request
-    const result = await services.approval.createApprovalRequest({
-      resourceId: body.resourceId,
-      context: body.context,
-      expiresInMs: body.expiresInMs,
+    // Create the approval request via DomainPorts
+    const result = await services.ports.createApprovalRequest(
       principal,
-      requesterId: principal.subjectId,
-      requesterType: principal.type,
-      authKind: principal.authKind,
-      action: 'resource.view',
-    });
+      body.resourceId,
+      body.action,
+      body.targetKey ?? null,
+      {
+        reason: body.reason,
+        expiresInMs: body.expiresInMs,
+      },
+      request.correlationId
+    );
 
-    if (!result.success) {
+    if (!result.success || !result.request) {
       logger.error('Failed to create approval request', {
         error: result.error,
       });
       return reply.status(400).send({
-        error: result.error,
+        error: result.error ?? 'Failed to create approval request',
       });
     }
-
-    if (!result.request) {
-      throw new Error('Approval request creation failed unexpectedly');
-    }
     const approvalRequest = result.request;
-
-    // Discord notification is enqueued via the transactional outbox and processed by the worker
 
     logger.info('Approval request created via API', {
       requestId: approvalRequest.id,
       resourceId: resource.id,
     });
 
-    return reply.status(201).send({
+    return reply.header('Cache-Control', 'no-store').status(201).send({
       requestId: approvalRequest.id,
       status: approvalRequest.status,
       resourceId: resource.id,
@@ -235,26 +263,34 @@ export function createHttpServer(deps: HttpServerDeps): FastifyInstance {
     async (request, reply) => {
       const { id } = request.params;
       const userId = request.user.id;
-
       const principal = extractPrincipal(request, userId);
 
       try {
-        const approvalRequest = await services.ports.getApprovalRequest(principal, id);
+        const approvalRequest = await services.ports.getApprovalRequest(
+          principal,
+          id,
+          request.correlationId
+        );
         if (!approvalRequest) {
           return reply.status(404).send({
-            error: 'Request not found',
+            error: 'not_found',
+            message: 'Request not found',
           });
         }
 
         let grantId: string | null = null;
         if (approvalRequest.status === 'APPROVED') {
-          const grant = await services.ports.getApprovalGrantByRequestId(principal, id);
+          const grant = await services.ports.getApprovalGrantByRequestId(
+            principal,
+            id,
+            request.correlationId
+          );
           if (grant) {
             grantId = grant.id;
           }
         }
 
-        return {
+        return reply.header('Cache-Control', 'no-store').send({
           requestId: approvalRequest.id,
           resourceId: approvalRequest.resourceId,
           status: approvalRequest.status,
@@ -263,33 +299,104 @@ export function createHttpServer(deps: HttpServerDeps): FastifyInstance {
           resolvedBy: approvalRequest.resolvedBy ?? null,
           resolvedAt: approvalRequest.resolvedAt?.toISOString() ?? null,
           grantId,
-        };
+        });
       } catch (err) {
-        if (err instanceof ForbiddenError) {
-          throw new AccessDeniedError(
-            'Access denied: You do not have permission to view this request.'
-          );
+        if (err instanceof ForbiddenError || err instanceof AccessDeniedError) {
+          return reply.status(404).send({
+            error: 'not_found',
+            message: 'Request not found',
+          });
         }
         throw err;
       }
     }
   );
 
+  // Decide request endpoint (Guardian approval / denial)
+  const DecideRequestSchema = z
+    .object({
+      decision: z.enum(['APPROVE', 'DENY']),
+      consentId: z.string().uuid().optional(),
+    })
+    .strict();
+
+  server.post<{ Params: { id: string }; Body: z.infer<typeof DecideRequestSchema> }>(
+    '/api/requests/:id/decide',
+    {
+      preHandler: [authenticate],
+      schema: { body: DecideRequestSchema },
+    },
+    async (request, reply) => {
+      const { id } = request.params;
+      const { decision, consentId } = request.body;
+      const principal = extractPrincipal(request, request.user.id);
+
+      const result = await services.ports.recordApprovalDecision(
+        principal,
+        id,
+        decision,
+        consentId,
+        request.correlationId
+      );
+
+      if (!result.success) {
+        return reply.status(400).send({
+          error: result.error ?? 'Failed to record decision',
+        });
+      }
+
+      return reply
+        .header('Cache-Control', 'no-store')
+        .send({ success: true, status: decision === 'APPROVE' ? 'APPROVED' : 'DENIED' });
+    }
+  );
+
+  // Cancel request endpoint (Requester cancellation)
+  server.post<{ Params: { id: string } }>(
+    '/api/requests/:id/cancel',
+    {
+      preHandler: [authenticate],
+    },
+    async (request, reply) => {
+      const { id } = request.params;
+      const principal = extractPrincipal(request, request.user.id);
+
+      const result = await services.ports.cancelApprovalRequest(
+        principal,
+        id,
+        request.correlationId
+      );
+
+      if (!result.success) {
+        return reply.status(400).send({
+          error: result.error ?? 'Failed to cancel request',
+        });
+      }
+
+      return reply.header('Cache-Control', 'no-store').send({ success: true, status: 'CANCELLED' });
+    }
+  );
+
+  // ---------------------------------------------------------------------------
+  // Device Auth Flow
+  // ---------------------------------------------------------------------------
+
   // Device Auth Flow: Initiate
   server.post('/api/auth/device/code', async (request, reply) => {
     try {
       const result = await services.auth.initiateDeviceFlow(request.ip);
-      return {
+      return reply.header('Cache-Control', 'no-store').send({
         device_code: result.deviceCode,
         user_code: result.userCode,
         verification_uri: result.verificationUri,
         expires_in: result.expiresIn,
         interval: result.interval,
-      };
+      });
     } catch (e: unknown) {
       if (e instanceof Error && e.message.includes('Rate limit exceeded')) {
         return reply
           .status(429)
+          .header('Cache-Control', 'no-store')
           .send({ error: 'slow_down', error_description: 'Rate limit exceeded' });
       }
       throw e;
@@ -316,13 +423,13 @@ export function createHttpServer(deps: HttpServerDeps): FastifyInstance {
           return reply.status(400).send({ error: 'authorization_pending' });
         }
 
-        return {
+        return reply.header('Cache-Control', 'no-store').send({
           access_token: result.token,
           token_type: 'Bearer',
           expires_in: result.apiToken.expiresAt
             ? Math.round((result.apiToken.expiresAt.getTime() - Date.now()) / 1000)
             : 0,
-        };
+        });
       } catch (e: unknown) {
         if (e instanceof SlowDownError) {
           return reply.status(400).send({ error: 'slow_down' });
@@ -346,42 +453,94 @@ export function createHttpServer(deps: HttpServerDeps): FastifyInstance {
   // -------------------------------------------------------------------------
 
   // Zod Schemas
-  const CreateProjectSchema = z.object({
-    name: z.string().min(1),
-    description: z.string().optional(),
-  });
+  const CreateProjectSchema = z
+    .object({
+      name: z.string().trim().min(1).max(128),
+      description: z.string().max(1024).optional(),
+    })
+    .strict();
 
-  const CreateEnvironmentSchema = z.object({
-    name: z.string().min(1),
-    slug: z.string().min(1),
-  });
+  const CreateEnvironmentSchema = z
+    .object({
+      name: z.string().trim().min(1).max(128),
+      slug: z
+        .string()
+        .trim()
+        .min(1)
+        .max(64)
+        .regex(/^[a-z0-9-]+$/),
+    })
+    .strict();
 
-  const ProjectParamsSchema = z.object({
-    projectId: z.string().uuid(),
-  });
+  const ProjectParamsSchema = z
+    .object({
+      projectId: z.string().uuid(),
+    })
+    .strict();
 
-  const CreateResourceFieldSchema = z.object({
-    name: z
-      .string()
-      .min(1)
-      .max(64)
-      .regex(/^[A-Za-z0-9_-]+$/),
-    value: z.string().max(10240),
-  });
+  const EnvironmentParamsSchema = z
+    .object({
+      projectId: z.string().uuid(),
+      envId: z.string().uuid(),
+    })
+    .strict();
 
-  const ResourceParamsSchema = z.object({
-    id: z.string().uuid(),
-  });
+  const CreateResourceFieldSchema = z
+    .object({
+      name: z
+        .string()
+        .trim()
+        .min(1)
+        .max(64)
+        .regex(/^[A-Za-z0-9_-]+$/),
+      value: z.string().max(10240),
+    })
+    .strict();
 
-  const FieldParamsSchema = z.object({
-    id: z.string().uuid(),
-    name: z.string().min(1),
-  });
+  const ResourceParamsSchema = z
+    .object({
+      id: z.string().uuid(),
+    })
+    .strict();
 
-  const LinkTotpSchema = z.object({
-    totpAccountId: z.string().uuid(),
-    consentId: z.string().uuid(),
-  });
+  const FieldParamsSchema = z
+    .object({
+      id: z.string().uuid(),
+      name: z.string().trim().min(1),
+    })
+    .strict();
+
+  const RevealFieldSchema = z
+    .object({
+      name: z.string().trim().min(1),
+      grantId: z.string().uuid().optional(),
+    })
+    .strict();
+
+  const PutSecretsSchema = z
+    .object({
+      secrets: z
+        .record(z.string().min(1).max(250), z.string().max(65536))
+        .refine((rec) => Object.keys(rec).length <= 100, {
+          message: 'Secret batch count exceeds maximum of 100.',
+        }),
+    })
+    .strict();
+
+  const RevealSecretsSchema = z
+    .object({
+      keys: z.array(z.string().trim().min(1).max(250)).max(100).optional(),
+      grantId: z.string().uuid().optional(),
+    })
+    .strict();
+
+  const LinkTotpSchema = z
+    .object({
+      totpAccountId: z.string().uuid(),
+      consentId: z.string().uuid(),
+    })
+    .strict();
+
   const TOTPLinkConsentSchema = z
     .object({
       resourceId: z.string().uuid(),
@@ -398,6 +557,7 @@ export function createHttpServer(deps: HttpServerDeps): FastifyInstance {
         .default({}),
     })
     .strict();
+
   const TOTPDelegationConsentSchema = z
     .object({
       requesterId: z.string().min(1).max(128),
@@ -406,6 +566,28 @@ export function createHttpServer(deps: HttpServerDeps): FastifyInstance {
       audience: z.string().min(1).max(128),
     })
     .strict();
+
+  const RegisterCallbackSchema = z
+    .object({
+      url: z.string().url().max(1024),
+      secret: z.string().min(16).max(256),
+    })
+    .strict();
+
+  const CallbackParamsSchema = z
+    .object({
+      id: z.string().uuid(),
+      callbackId: z.string().uuid(),
+    })
+    .strict();
+
+  const RevealTOTPSchema = z
+    .object({
+      grantId: z.string().uuid().optional(),
+      consentId: z.string().uuid().optional(),
+    })
+    .strict()
+    .nullish();
 
   // Authentication Hook
   async function authenticate(req: FastifyRequest, _rep: FastifyReply) {
@@ -496,21 +678,44 @@ export function createHttpServer(deps: HttpServerDeps): FastifyInstance {
     if (error instanceof z.ZodError) {
       return reply.status(400).send({ error: 'validation_error', details: error.issues });
     }
-    const err = error as Error & { name?: string; message?: string };
-    if (err.name === 'DuplicateError') {
-      return reply.status(409).send({ error: err.message });
+    const err = error as Error & { name?: string; message?: string; code?: string };
+    const errCode = (err as unknown as DomainError).code;
+
+    if (err.name === 'DuplicateError' || err.name === 'ConflictError' || errCode === 'CONFLICT') {
+      return reply.status(409).send({ error: 'conflict', message: err.message });
     }
-    if (err.name === 'ResourceNotFoundError') {
-      return reply.status(404).send({ error: err.message });
+    if (
+      err.name === 'ResourceNotFoundError' ||
+      err.name === 'NotFoundError' ||
+      errCode === 'NOT_FOUND'
+    ) {
+      return reply.status(404).send({ error: 'not_found', message: err.message });
     }
-    if (err.name === 'AccessDeniedError') {
+    if (
+      err.name === 'AccessDeniedError' ||
+      err.name === 'UnauthorizedError' ||
+      err.name === 'AuthUnauthorizedError' ||
+      errCode === 'UNAUTHORIZED'
+    ) {
       return reply.status(401).send({ error: 'unauthorized', message: err.message });
     }
-    if (err.name === 'ForbiddenError') {
+    if (
+      err.name === 'ForbiddenError' ||
+      err.name === 'AuthForbiddenError' ||
+      errCode === 'FORBIDDEN'
+    ) {
       return reply.status(403).send({
         error: 'INSUFFICIENT_PERMISSIONS',
         message: err.message,
       });
+    }
+    if (
+      err.name === 'SlowDownError' ||
+      err.name === 'RateLimitError' ||
+      errCode === 'RATE_LIMIT_EXCEEDED' ||
+      (err.message && err.message.includes('Rate limit exceeded'))
+    ) {
+      return reply.status(429).send({ error: 'slow_down', message: 'Rate limit exceeded' });
     }
     if (err.name === 'InvalidGrantError') {
       return reply.status(400).send({ error: 'invalid_grant', message: err.message });
@@ -518,13 +723,21 @@ export function createHttpServer(deps: HttpServerDeps): FastifyInstance {
     if (err.name === 'ExpiredTokenError') {
       return reply.status(400).send({ error: 'expired_token' });
     }
+    if (err.name === 'ValidationError' || errCode === 'VALIDATION_FAILED') {
+      return reply.status(400).send({ error: 'validation_error', message: err.message });
+    }
 
     // Default handler
     logger.error('Unhandled API error', {
+      correlationId: request.correlationId,
       error: err instanceof Error ? { message: err.message, stack: err.stack } : err,
     });
     return reply.status(500).send({ error: 'internal_server_error' });
   });
+
+  // ---------------------------------------------------------------------------
+  // Auth & Credentials
+  // ---------------------------------------------------------------------------
 
   server.get('/api/auth/credentials', { preHandler: [authenticate] }, async (req, rep) => {
     const principal = extractPrincipal(req, req.user.id);
@@ -664,6 +877,11 @@ export function createHttpServer(deps: HttpServerDeps): FastifyInstance {
       return rep.status(204).send();
     }
   );
+
+  // ---------------------------------------------------------------------------
+  // Projects & Environments (via DomainPorts)
+  // ---------------------------------------------------------------------------
+
   server.post(
     '/api/projects',
     {
@@ -677,16 +895,16 @@ export function createHttpServer(deps: HttpServerDeps): FastifyInstance {
       const userId = req.user.id;
       const principal = extractPrincipal(req, userId);
 
-      const project = await services.project.createProject(
+      const project = await services.ports.createProject(
+        principal,
         {
           name,
           description,
-          ownerId: userId,
         },
-        principal
+        req.correlationId
       );
 
-      return rep.status(201).send(project);
+      return rep.header('Cache-Control', 'no-store').status(201).send(project);
     }
   );
 
@@ -695,10 +913,11 @@ export function createHttpServer(deps: HttpServerDeps): FastifyInstance {
     {
       preHandler: [authenticate],
     },
-    async (req, _rep) => {
+    async (req, rep) => {
       const userId = req.user.id;
-      const projects = await services.project.listProjects(userId);
-      return projects;
+      const principal = extractPrincipal(req, userId);
+      const projects = await services.ports.listProjects(principal, req.correlationId);
+      return rep.header('Cache-Control', 'no-store').send(projects);
     }
   );
 
@@ -710,17 +929,15 @@ export function createHttpServer(deps: HttpServerDeps): FastifyInstance {
         params: ProjectParamsSchema,
       },
     },
-    async (req, _rep) => {
+    async (req, rep) => {
       const { projectId } = req.params as z.infer<typeof ProjectParamsSchema>;
       const userId = req.user.id;
+      const principal = extractPrincipal(req, userId);
 
-      const project = await services.project.getProject(projectId);
-      if (!project) throw new ResourceNotFoundError('Project not found');
+      const project = await services.ports.getProject(principal, projectId, req.correlationId);
+      if (!project) throw new NotFoundError('Project not found');
 
-      const role = await services.project.getMemberRole(projectId, userId);
-      if (project.ownerId !== userId && !role) throw new AccessDeniedError('Access denied');
-
-      return project;
+      return rep.header('Cache-Control', 'no-store').send(project);
     }
   );
 
@@ -739,17 +956,14 @@ export function createHttpServer(deps: HttpServerDeps): FastifyInstance {
       const userId = req.user.id;
       const principal = extractPrincipal(req, userId);
 
-      const project = await services.project.getProject(projectId);
-      if (!project) throw new ResourceNotFoundError('Project not found');
-      if (project.ownerId !== userId) throw new AccessDeniedError('Access denied');
-
-      const env = await services.project.createEnvironment(
+      const env = await services.ports.createEnvironment(
+        principal,
         {
           name,
           slug,
           projectId,
         },
-        principal
+        req.correlationId
       );
       return rep.header('Cache-Control', 'no-store').status(201).send(env);
     }
@@ -763,18 +977,13 @@ export function createHttpServer(deps: HttpServerDeps): FastifyInstance {
         params: ProjectParamsSchema,
       },
     },
-    async (req, _rep) => {
+    async (req, rep) => {
       const { projectId } = req.params as z.infer<typeof ProjectParamsSchema>;
       const userId = req.user.id;
+      const principal = extractPrincipal(req, userId);
 
-      const project = await services.project.getProject(projectId);
-      if (!project) throw new ResourceNotFoundError('Project not found');
-
-      const role = await services.project.getMemberRole(projectId, userId);
-      if (project.ownerId !== userId && !role) throw new AccessDeniedError('Access denied');
-
-      const envs = await services.project.listEnvironments(projectId);
-      return envs;
+      const envs = await services.ports.listEnvironments(principal, projectId, req.correlationId);
+      return rep.header('Cache-Control', 'no-store').send(envs);
     }
   );
 
@@ -782,12 +991,15 @@ export function createHttpServer(deps: HttpServerDeps): FastifyInstance {
     '/api/projects/:projectId/environments/:envId/secrets',
     {
       preHandler: [authenticate],
+      schema: {
+        params: EnvironmentParamsSchema,
+      },
     },
     async (_req, rep) => {
       // Secret redemption is a state-changing, one-time grant consumption and therefore must not
       // happen on GET. This legacy route intentionally performs no policy lookup, approval
       // creation, grant consumption, or value-bearing repository read.
-      return rep.status(405).header('allow', 'PUT').send({
+      return rep.status(405).header('allow', 'PUT').header('Cache-Control', 'no-store').send({
         error: 'method_not_allowed',
         message:
           'Secret value retrieval is unavailable. PUT replaces secrets and does not redeem access.',
@@ -799,38 +1011,55 @@ export function createHttpServer(deps: HttpServerDeps): FastifyInstance {
     '/api/projects/:projectId/environments/:envId/secrets',
     {
       preHandler: [authenticate],
+      schema: {
+        params: EnvironmentParamsSchema,
+        body: PutSecretsSchema,
+      },
     },
-    async (req, _rep) => {
-      const { projectId, envId } = req.params as { projectId: string; envId: string };
-      const { secrets } = req.body as { secrets: Record<string, string> };
+    async (req, rep) => {
+      const { projectId, envId } = req.params as z.infer<typeof EnvironmentParamsSchema>;
+      const { secrets } = req.body as z.infer<typeof PutSecretsSchema>;
       const userId = req.user.id;
-
-      const project = await services.project.getProject(projectId);
-      if (!project) throw new ResourceNotFoundError('Project not found');
-
-      // Access Control: Owner OR Writer
-      let hasWriteAccess = project.ownerId === userId;
-      if (!hasWriteAccess) {
-        const role = await services.project.getMemberRole(projectId, userId);
-        hasWriteAccess = role === 'WRITER';
-      }
-
-      if (!hasWriteAccess) {
-        throw new ForbiddenError('Write permission required');
-      }
-
-      const environment = await services.project.getEnvironmentById(projectId, envId);
-      if (!environment) throw new ResourceNotFoundError('Environment not found');
-      if (!environment.resourceId)
-        throw new ResourceNotFoundError('Environment has no linked resource');
-
-      const resourceId = environment.resourceId;
-
       const principal = extractPrincipal(req, userId);
 
-      await services.resource.setSecrets(resourceId, secrets, principal);
+      await services.ports.setSecrets(
+        principal,
+        {
+          projectId,
+          envId,
+          secrets,
+        },
+        req.correlationId
+      );
 
-      return { success: true };
+      return rep.header('Cache-Control', 'no-store').send({ success: true });
+    }
+  );
+
+  server.post(
+    '/api/projects/:projectId/environments/:envId/secrets/reveal',
+    {
+      preHandler: [authenticate],
+      schema: {
+        params: EnvironmentParamsSchema,
+        body: RevealSecretsSchema,
+      },
+    },
+    async (req, rep) => {
+      const { projectId, envId } = req.params as z.infer<typeof EnvironmentParamsSchema>;
+      const { keys, grantId } = (req.body || {}) as z.infer<typeof RevealSecretsSchema>;
+      const userId = req.user.id;
+      const principal = extractPrincipal(req, userId);
+
+      const secrets = await services.ports.revealSecrets(
+        principal,
+        projectId,
+        envId,
+        { keys, grantId },
+        req.correlationId
+      );
+
+      return rep.header('Cache-Control', 'no-store').send({ secrets });
     }
   );
 
@@ -846,11 +1075,11 @@ export function createHttpServer(deps: HttpServerDeps): FastifyInstance {
         params: ResourceParamsSchema,
       },
     },
-    async (req) => {
+    async (req, rep) => {
       const { id } = req.params;
       await requireResourceCapability(req, 'secret.metadata.read', id);
       const fields = await services.resource.listFieldsMetadata(id);
-      return fields.map((f) => f.name);
+      return rep.header('Cache-Control', 'no-store').send(fields.map((f) => f.name));
     }
   );
 
@@ -873,53 +1102,11 @@ export function createHttpServer(deps: HttpServerDeps): FastifyInstance {
 
       const principal = extractPrincipal(req, req.principal?.subjectId ?? 'unknown');
       const field = await services.resource.createField(id, name, value, principal);
-      return rep.status(201).send(field);
+      return rep.header('Cache-Control', 'no-store').status(201).send(field);
     }
   );
 
-  server.post<{
-    Params: z.infer<typeof ResourceParamsSchema>;
-    Body: z.infer<typeof TOTPLinkConsentSchema>;
-  }>(
-    '/api/totp/:id/link-consents',
-    {
-      preHandler: [authenticate],
-      schema: { params: ResourceParamsSchema, body: TOTPLinkConsentSchema },
-    },
-    async (req, rep) => {
-      const principal = extractPrincipal(req, req.user.id);
-      const consent = await services.resource.createTOTPLinkConsent(
-        req.params.id,
-        req.body.resourceId,
-        principal,
-        req.body.initiatingResourceOwnerId,
-        req.body.delegationPolicy
-      );
-      rep.header('Cache-Control', 'no-store');
-      return rep.status(201).send(consent);
-    }
-  );
-
-  server.post<{
-    Params: z.infer<typeof ResourceParamsSchema>;
-    Body: z.infer<typeof TOTPDelegationConsentSchema>;
-  }>(
-    '/api/resources/:id/2fa/delegation-consents',
-    {
-      preHandler: [authenticate],
-      schema: { params: ResourceParamsSchema, body: TOTPDelegationConsentSchema },
-    },
-    async (req, rep) => {
-      const principal = extractPrincipal(req, req.user.id);
-      const consent = await services.resource.createTOTPDelegationConsent(
-        { resourceId: req.params.id, ...req.body },
-        principal
-      );
-      rep.header('Cache-Control', 'no-store');
-      return rep.status(201).send(consent);
-    }
-  );
-
+  // Legacy GET reveal route disabled -> 405 Method Not Allowed
   server.get<{ Params: z.infer<typeof FieldParamsSchema> }>(
     '/api/resources/:id/fields/:name',
     {
@@ -928,17 +1115,42 @@ export function createHttpServer(deps: HttpServerDeps): FastifyInstance {
         params: FieldParamsSchema,
       },
     },
-    async (req) => {
-      const { id, name } = req.params;
-      await requireResourceCapability(req, 'secret.value.read', id, name);
+    async (_req, rep) => {
+      return rep.status(405).header('allow', 'POST').header('Cache-Control', 'no-store').send({
+        error: 'method_not_allowed',
+        message:
+          'Secret field reveal via GET is disabled. Use authenticated POST /api/resources/:id/fields/reveal.',
+      });
+    }
+  );
 
-      const principal = extractPrincipal(req, req.principal?.subjectId ?? 'unknown');
-      const field = await services.resource.revealField(id, name, principal);
+  // Authenticated POST reveal route
+  server.post<{
+    Params: z.infer<typeof ResourceParamsSchema>;
+    Body: z.infer<typeof RevealFieldSchema>;
+  }>(
+    '/api/resources/:id/fields/reveal',
+    {
+      preHandler: [authenticate],
+      schema: {
+        params: ResourceParamsSchema,
+        body: RevealFieldSchema,
+      },
+    },
+    async (req, rep) => {
+      const { id } = req.params;
+      const { name, grantId } = req.body;
+      const principal = extractPrincipal(req, req.user.id);
+
+      if (!grantId) {
+        await requireResourceCapability(req, 'secret.value.read', id, name);
+      }
+      const field = await services.resource.revealField(id, name, principal, grantId);
       if (!field) {
-        throw new ResourceNotFoundError(`Field '${name}' not found`);
+        throw new ResourceNotFoundError("Field '" + name + "' not found");
       }
 
-      return { name: field.name, value: field.value };
+      return rep.header('Cache-Control', 'no-store').send({ name: field.name, value: field.value });
     }
   );
 
@@ -961,11 +1173,40 @@ export function createHttpServer(deps: HttpServerDeps): FastifyInstance {
   );
 
   // ---------------------------------------------------------------------------
-  // Resource 2FA Endpoints
+  // Webhooks & Callback Destinations (#123)
   // ---------------------------------------------------------------------------
 
-  server.post<{ Params: z.infer<typeof ResourceParamsSchema> }>(
-    '/api/resources/:id/2fa/code',
+  server.post<{
+    Params: z.infer<typeof ResourceParamsSchema>;
+    Body: z.infer<typeof RegisterCallbackSchema>;
+  }>(
+    '/api/resources/:id/callbacks',
+    {
+      preHandler: [authenticate],
+      schema: {
+        params: ResourceParamsSchema,
+        body: RegisterCallbackSchema,
+      },
+    },
+    async (req, rep) => {
+      const { id } = req.params;
+      const { url, secret } = req.body;
+      const principal = extractPrincipal(req, req.user.id);
+
+      const destination = await services.ports.registerCallback(
+        principal,
+        id,
+        url,
+        secret,
+        req.correlationId
+      );
+
+      return rep.header('Cache-Control', 'no-store').status(201).send(destination);
+    }
+  );
+
+  server.get<{ Params: z.infer<typeof ResourceParamsSchema> }>(
+    '/api/resources/:id/callbacks',
     {
       preHandler: [authenticate],
       schema: {
@@ -974,12 +1215,60 @@ export function createHttpServer(deps: HttpServerDeps): FastifyInstance {
     },
     async (req, rep) => {
       const { id } = req.params;
+      const principal = extractPrincipal(req, req.user.id);
+
+      const list = await services.ports.listCallbacks(principal, id, req.correlationId);
+      return rep.header('Cache-Control', 'no-store').send(list);
+    }
+  );
+
+  server.delete<{ Params: z.infer<typeof CallbackParamsSchema> }>(
+    '/api/resources/:id/callbacks/:callbackId',
+    {
+      preHandler: [authenticate],
+      schema: {
+        params: CallbackParamsSchema,
+      },
+    },
+    async (req, rep) => {
+      const { id, callbackId } = req.params;
+      const principal = extractPrincipal(req, req.user.id);
+
+      await services.ports.deleteCallback(principal, id, callbackId, req.correlationId);
+      return rep.status(204).send();
+    }
+  );
+
+  // ---------------------------------------------------------------------------
+  // Resource 2FA & TOTP Endpoints
+  // ---------------------------------------------------------------------------
+
+  server.post<{
+    Params: z.infer<typeof ResourceParamsSchema>;
+    Body: z.infer<typeof RevealTOTPSchema>;
+  }>(
+    '/api/resources/:id/2fa/code',
+    {
+      preHandler: [authenticate],
+      schema: {
+        params: ResourceParamsSchema,
+        body: RevealTOTPSchema,
+      },
+    },
+    async (req, rep) => {
+      const { id } = req.params;
       const userId = req.user.id;
       const principal = extractPrincipal(req, userId);
+      const body = req.body;
 
-      const code = await services.resource.revealTOTPCode(id, principal);
-      rep.header('Cache-Control', 'no-store');
-      return { code };
+      const code = await services.ports.revealTOTP(
+        principal,
+        id,
+        body?.grantId,
+        body?.consentId,
+        req.correlationId
+      );
+      return rep.header('Cache-Control', 'no-store').send({ code });
     }
   );
 
@@ -1001,7 +1290,7 @@ export function createHttpServer(deps: HttpServerDeps): FastifyInstance {
       const principal = extractPrincipal(req, req.user.id);
 
       await services.resource.linkTOTPAccount(id, totpAccountId, principal, consentId);
-      return rep.status(200).send({ success: true });
+      return rep.header('Cache-Control', 'no-store').status(200).send({ success: true });
     }
   );
 
@@ -1022,6 +1311,47 @@ export function createHttpServer(deps: HttpServerDeps): FastifyInstance {
     }
   );
 
+  server.post<{
+    Params: z.infer<typeof ResourceParamsSchema>;
+    Body: z.infer<typeof TOTPLinkConsentSchema>;
+  }>(
+    '/api/totp/:id/link-consents',
+    {
+      preHandler: [authenticate],
+      schema: { params: ResourceParamsSchema, body: TOTPLinkConsentSchema },
+    },
+    async (req, rep) => {
+      const principal = extractPrincipal(req, req.user.id);
+      const consent = await services.resource.createTOTPLinkConsent(
+        req.params.id,
+        req.body.resourceId,
+        principal,
+        req.body.initiatingResourceOwnerId,
+        req.body.delegationPolicy
+      );
+      return rep.header('Cache-Control', 'no-store').status(201).send(consent);
+    }
+  );
+
+  server.post<{
+    Params: z.infer<typeof ResourceParamsSchema>;
+    Body: z.infer<typeof TOTPDelegationConsentSchema>;
+  }>(
+    '/api/resources/:id/2fa/delegation-consents',
+    {
+      preHandler: [authenticate],
+      schema: { params: ResourceParamsSchema, body: TOTPDelegationConsentSchema },
+    },
+    async (req, rep) => {
+      const principal = extractPrincipal(req, req.user.id);
+      const consent = await services.resource.createTOTPDelegationConsent(
+        { resourceId: req.params.id, ...req.body },
+        principal
+      );
+      return rep.header('Cache-Control', 'no-store').status(201).send(consent);
+    }
+  );
+
   server.post<{ Params: z.infer<typeof ResourceParamsSchema> }>(
     '/api/totp/:id/code',
     {
@@ -1031,8 +1361,7 @@ export function createHttpServer(deps: HttpServerDeps): FastifyInstance {
     async (req, rep) => {
       const principal = extractPrincipal(req, req.user.id);
       const code = await services.resource.revealPersonalTOTPCode(req.params.id, principal);
-      rep.header('Cache-Control', 'no-store');
-      return { code };
+      return rep.header('Cache-Control', 'no-store').send({ code });
     }
   );
 
@@ -1048,8 +1377,7 @@ export function createHttpServer(deps: HttpServerDeps): FastifyInstance {
       const { id } = req.params; // TOTP Account ID
       const principal = extractPrincipal(req, req.user.id);
       const recoveryKey = await services.resource.revealTOTPRecoveryKey(id, principal);
-      rep.header('Cache-Control', 'no-store');
-      return { recoveryKey };
+      return rep.header('Cache-Control', 'no-store').send({ recoveryKey });
     }
   );
 
@@ -1066,7 +1394,7 @@ export async function startHttpServer(
   const server = createHttpServer(deps);
 
   await server.listen({ port, host: '0.0.0.0' });
-  logger.info(`HTTP server listening on port ${port}`);
+  logger.info('HTTP server listening on port ' + port);
 
   return server;
 }
