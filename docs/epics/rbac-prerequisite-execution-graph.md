@@ -13,10 +13,10 @@
   and [#138](https://github.com/kuasha420/purrmission/pull/138)
 - Current execution checkpoint: Waves 1 through 7 are Verified and closed. All underlying
   implementation lanes (#117, #118, #119, #120, #121, #122, #123, #127, #128, #129, #130) are
-  merged into `master` via clean merge commits; clean-master build, lint, full tests (543 passing),
-  and fresh/populated/interrupted migration rehearsals pass. #124 (Cross-surface integration and
-  regression conformance gate) is now the current Ready node. #105's code path merged in #149, while
-  its real offsite production rehearsal remains an open rollout gate.
+  merged into `master` via clean merge commits; clean-master build, lint, full bot/Pawthy/ops test
+  suites, and fresh/populated/interrupted migration rehearsals pass. #124 (Cross-surface integration
+  and regression conformance gate) is now the current Ready node. #105's code path merged in #149,
+  while its real offsite production rehearsal remains an open rollout gate.
 - Last assessed: 2026-08-26
 
 All implementation nodes across Waves 1 through 7 are complete, verified, and merged. #117 established

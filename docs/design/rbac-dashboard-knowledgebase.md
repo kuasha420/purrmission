@@ -10,8 +10,8 @@
 - Dashboard readiness: **No-go** (do not file Discord OAuth/session or Web Dashboard backend/frontend implementation phases until the prerequisite remediation and independent gate are complete)
 - Baseline audited revision: `e4269cea4d6f` (`master`, 2026-07-26)
 - Current remediation checkpoint: Waves 1 through 7 (#117, #118, #119, #120, #121, #122, #123,
-  #127, #128, #129, #130) are Verified and closed. Clean-master build, lint, full tests (543
-  passing), and fresh/populated/interrupted migration rehearsals pass. #124 (Cross-surface
+  #127, #128, #129, #130) are Verified and closed. Clean-master build, lint, full bot/Pawthy/ops
+  test suites, and fresh/populated/interrupted migration rehearsals pass. #124 (Cross-surface
   integration and regression conformance gate) is the current active Ready node.
 - Last progress update: 2026-08-26
 - Applies to: Discord commands, the Fastify API, Pawthy, and the future
