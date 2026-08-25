@@ -69,7 +69,15 @@ type SafeAuditPayload = Partial<
     | 'priorDigest'
     | 'delegationEnabled'
     | 'authFamily'
-    | 'audience',
+    | 'audience'
+    | 'destinationId'
+    | 'deliveryId'
+    | 'recipientId'
+    | 'name'
+    | 'url'
+    | 'status'
+    | 'resourceId'
+    | 'error',
     SafePayloadValue
   >
 >;
@@ -100,7 +108,11 @@ export const AUDIT_EVENT_CATALOG = {
   RESOURCE_UPDATE: 'RESOURCE_CONFIGURATION',
   RESOURCE_DELETE: 'RESOURCE_CONFIGURATION',
   CALLBACK_REGISTER: 'RESOURCE_CONFIGURATION',
+  CALLBACK_VERIFY: 'RESOURCE_CONFIGURATION',
+  CALLBACK_ROTATE_SECRET: 'RESOURCE_CONFIGURATION',
+  CALLBACK_DISABLE: 'RESOURCE_CONFIGURATION',
   CALLBACK_DELETE: 'RESOURCE_CONFIGURATION',
+  CALLBACK_LIST: 'RESOURCE_CONFIGURATION',
   AUTHORIZATION_DECISION: 'AUTHORIZATION',
   SECRET_CREATE: 'SECRET_LIFECYCLE',
   SECRET_UPDATE: 'SECRET_LIFECYCLE',
@@ -163,8 +175,12 @@ const PAYLOAD_FIELDS_BY_EVENT = {
   RESOURCE_CREATE: NONE,
   RESOURCE_UPDATE: keys('guardianId', 'memberUserId'),
   RESOURCE_DELETE: NONE,
-  CALLBACK_REGISTER: NONE,
-  CALLBACK_DELETE: NONE,
+  CALLBACK_REGISTER: keys('destinationId', 'name', 'url', 'status'),
+  CALLBACK_VERIFY: keys('destinationId', 'status', 'error'),
+  CALLBACK_ROTATE_SECRET: keys('destinationId'),
+  CALLBACK_DISABLE: keys('destinationId', 'status'),
+  CALLBACK_DELETE: keys('destinationId'),
+  CALLBACK_LIST: keys('resourceId'),
   AUTHORIZATION_DECISION: keys('route', 'projection', 'reason', 'fieldName'),
   SECRET_CREATE: keys('fieldName'),
   SECRET_UPDATE: keys('fieldName'),
@@ -191,9 +207,18 @@ const PAYLOAD_FIELDS_BY_EVENT = {
   GRANT_ISSUE: keys('action', 'targetKey', 'expiresAt'),
   GRANT_CONSUME: keys('action', 'targetKey', 'expiresAt'),
   GRANT_REVOKE: keys('reason'),
-  DELIVERY_ENQUEUE: keys('deliveryType'),
-  DELIVERY_ATTEMPT: keys('attempt', 'deliveryType'),
-  DELIVERY_OUTCOME: keys('attempt', 'deliveryType', 'result', 'errorCode', 'terminal'),
+  DELIVERY_ENQUEUE: keys('deliveryType', 'deliveryId', 'recipientId', 'destinationId'),
+  DELIVERY_ATTEMPT: keys('attempt', 'deliveryType', 'deliveryId', 'recipientId', 'destinationId'),
+  DELIVERY_OUTCOME: keys(
+    'attempt',
+    'deliveryType',
+    'result',
+    'errorCode',
+    'terminal',
+    'deliveryId',
+    'recipientId',
+    'destinationId'
+  ),
   AUDIT_READ: keys('projection', 'exported'),
   AUDIT_EXPORT: keys('projection', 'exported'),
   PRIVACY_PSEUDONYMIZE: keys('deletedCount', 'priorDigest'),
@@ -714,10 +739,18 @@ export function buildOutboxEvent(
     causationId: input.causationId,
   });
   const allowed =
-    input.eventType === 'REQUEST_CREATED'
-      ? new Set(['requestId', 'resourceId'])
+    input.eventType === 'REQUEST_CREATED' ||
+    input.eventType === 'REQUEST_CREATED_GUARDIAN_NOTIFICATION'
+      ? new Set(['requestId', 'resourceId', 'recipientId'])
       : input.eventType === 'APPROVAL_CALLBACK'
-        ? new Set(['requestId', 'status', 'grantId'])
+        ? new Set([
+            'requestId',
+            'destinationId',
+            'status',
+            'targetVersion',
+            'grantId',
+            'idempotencyKey',
+          ])
         : null;
   if (!allowed) throw new Error(`Unregistered outbox event type: ${input.eventType}`);
   const payload: AuditMetadata = {};
@@ -736,6 +769,9 @@ export function buildOutboxEvent(
     eventType: input.eventType,
     resourceId: input.resourceId ?? null,
     requestId: input.requestId ?? null,
+    destinationId: input.destinationId ?? null,
+    recipientId: input.recipientId ?? null,
+    deliveryId: input.deliveryId ?? null,
     correlationId: context.correlationId,
     causationId: context.causationId,
     integrityKeyId: config.outboxIntegrityKeyId,
@@ -760,11 +796,37 @@ export function verifyOutboxIntegrity(
   const unsigned = Object.fromEntries(
     Object.entries(event).filter(
       ([key]) =>
-        !['status', 'attempts', 'lastErrorCode', 'updatedAt', 'integrityHash'].includes(key)
+        ![
+          'status',
+          'attempts',
+          'lastErrorCode',
+          'updatedAt',
+          'integrityHash',
+          'claimedAt',
+          'claimExpiresAt',
+          'claimedBy',
+          'nextRetryAt',
+        ].includes(key)
     )
   );
   const expected = signEnvelope(key, unsigned);
   const left = Buffer.from(event.integrityHash, 'hex');
   const right = Buffer.from(expected, 'hex');
   return left.length === right.length && timingSafeEqual(left, right);
+}
+
+/**
+ * Sanitizes URLs before inclusion in audit logs by stripping credentials, query params, and hash fragments.
+ */
+export function sanitizeUrlForAudit(rawUrl: string): string {
+  try {
+    const parsed = new URL(rawUrl);
+    parsed.username = '';
+    parsed.password = '';
+    parsed.search = '';
+    parsed.hash = '';
+    return parsed.toString();
+  } catch {
+    return 'REDACTED_INVALID_URL';
+  }
 }

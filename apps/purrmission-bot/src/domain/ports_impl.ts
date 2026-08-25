@@ -7,11 +7,13 @@ import type {
   CallbackDestinationDTO,
 } from './ports.js';
 import { ForbiddenError, NotFoundError } from './ports.js';
+import crypto from 'node:crypto';
 import type { Principal, Project, Environment, ApprovalRequest, ApprovalGrant } from './models.js';
 import { ProjectService } from './project.js';
 import { ResourceService, ApprovalService } from './services.js';
-import { AuditService } from './audit.js';
+import { AuditService, sanitizeUrlForAudit } from './audit.js';
 import type { Repositories } from './repositories.js';
+import { encryptValue } from '../infra/crypto.js';
 
 export class DomainPortsImpl implements DomainPorts {
   constructor(
@@ -181,8 +183,19 @@ export class DomainPortsImpl implements DomainPorts {
     }
 
     const created = await this.repositories.transaction(async (tx) => {
+      const verificationToken = crypto.randomUUID();
+      const challengeExpiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000);
       const destination = await this.repositories.callbackDestinations.create(
-        { resourceId, url, secret },
+        {
+          resourceId,
+          projectId: env.projectId,
+          url,
+          keyId: 'default',
+          encryptedSecret: encryptValue(secret),
+          status: 'PENDING_VERIFICATION',
+          verificationToken,
+          verificationChallengeExpiresAt: challengeExpiresAt,
+        },
         tx
       );
       await this.audit.log(
@@ -204,7 +217,11 @@ export class DomainPortsImpl implements DomainPorts {
           authKind: principal.authKind,
           projectId: env.projectId,
           resourceId,
-          payload: {},
+          payload: {
+            destinationId: destination.id,
+            url: sanitizeUrlForAudit(destination.url),
+            status: destination.status,
+          },
         },
         tx
       );
@@ -215,7 +232,7 @@ export class DomainPortsImpl implements DomainPorts {
       id: created.id,
       resourceId: created.resourceId,
       url: created.url,
-      enabled: created.enabled,
+      enabled: created.status === 'ACTIVE',
       createdAt: created.createdAt,
     };
   }
@@ -231,7 +248,7 @@ export class DomainPortsImpl implements DomainPorts {
       id: d.id,
       resourceId: d.resourceId,
       url: d.url,
-      enabled: d.enabled,
+      enabled: d.status === 'ACTIVE',
       createdAt: d.createdAt,
     }));
   }
@@ -278,7 +295,9 @@ export class DomainPortsImpl implements DomainPorts {
           authKind: principal.authKind,
           projectId: env.projectId,
           resourceId,
-          payload: {},
+          payload: {
+            destinationId: callbackId,
+          },
         },
         tx
       );

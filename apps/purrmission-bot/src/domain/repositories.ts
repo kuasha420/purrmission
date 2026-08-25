@@ -56,6 +56,8 @@ import type {
   TOTPLinkEnvelope,
   CallbackDestination,
   CreateCallbackDestinationInput,
+  CallbackDestinationStatus,
+  CallbackDestinationMetadataProjection,
 } from './models.js';
 
 export interface ResourceRepository {
@@ -1147,7 +1149,29 @@ export interface AuditRepository {
  */
 export interface OutboxRepository {
   create(input: CreateOutboxEventInput, tx?: Prisma.TransactionClient): Promise<OutboxEvent>;
-  findPending(): Promise<OutboxEvent[]>;
+  findById(id: string, tx?: Prisma.TransactionClient): Promise<OutboxEvent | null>;
+  findByDeliveryId(deliveryId: string, tx?: Prisma.TransactionClient): Promise<OutboxEvent | null>;
+  findPending(limit?: number): Promise<OutboxEvent[]>;
+  claimEvents(
+    workerId: string,
+    limit: number,
+    leaseDurationMs: number,
+    tx?: Prisma.TransactionClient
+  ): Promise<OutboxEvent[]>;
+  releaseClaim(
+    id: string,
+    nextRetryAt?: Date,
+    lastErrorCode?: string,
+    attempts?: number,
+    tx?: Prisma.TransactionClient
+  ): Promise<void>;
+  markProcessed(id: string, attempts?: number, tx?: Prisma.TransactionClient): Promise<void>;
+  markFailed(
+    id: string,
+    lastErrorCode: string,
+    attempts?: number,
+    tx?: Prisma.TransactionClient
+  ): Promise<void>;
   updateStatus(
     id: string,
     status: 'PENDING' | 'DELIVERY_IN_PROGRESS' | 'DELIVERED_PENDING_AUDIT' | 'PROCESSED' | 'FAILED',
@@ -1443,23 +1467,181 @@ export class PrismaOutboxRepository implements OutboxRepository {
         eventType: input.eventType,
         resourceId: input.resourceId ?? null,
         requestId: input.requestId ?? null,
+        destinationId: input.destinationId ?? null,
+        recipientId: input.recipientId ?? null,
+        deliveryId: input.deliveryId ?? null,
         correlationId: input.correlationId,
         causationId: input.causationId ?? null,
         integrityKeyId: input.integrityKeyId,
         integrityHash: input.integrityHash,
         payload: input.payload as Prisma.InputJsonValue,
+        status: input.status ?? 'PENDING',
+        attempts: input.attempts ?? 0,
+        claimedAt: input.claimedAt ?? null,
+        claimExpiresAt: input.claimExpiresAt ?? null,
+        claimedBy: input.claimedBy ?? null,
+        nextRetryAt: input.nextRetryAt ?? null,
         createdAt: input.createdAt,
       },
     });
     return this.mapPrismaToDomain(created);
   }
 
-  async findPending(): Promise<OutboxEvent[]> {
+  async findById(id: string, tx?: Prisma.TransactionClient): Promise<OutboxEvent | null> {
+    const client = tx || this.prisma;
+    const row = await client.outboxEvent.findUnique({ where: { id } });
+    return row ? this.mapPrismaToDomain(row) : null;
+  }
+
+  async findByDeliveryId(
+    deliveryId: string,
+    tx?: Prisma.TransactionClient
+  ): Promise<OutboxEvent | null> {
+    const client = tx || this.prisma;
+    const row = await client.outboxEvent.findUnique({ where: { deliveryId } });
+    return row ? this.mapPrismaToDomain(row) : null;
+  }
+
+  async findPending(limit = 100): Promise<OutboxEvent[]> {
+    const now = new Date();
     const rows = await this.prisma.outboxEvent.findMany({
-      where: { status: 'PENDING' },
+      where: {
+        OR: [
+          { status: 'PENDING' },
+          { status: 'DELIVERY_IN_PROGRESS', claimExpiresAt: { lt: now } },
+        ],
+        AND: [
+          {
+            OR: [{ nextRetryAt: null }, { nextRetryAt: { lte: now } }],
+          },
+        ],
+      },
       orderBy: { createdAt: 'asc' },
+      take: limit,
     });
     return rows.map((row) => this.mapPrismaToDomain(row));
+  }
+
+  async claimEvents(
+    workerId: string,
+    limit: number,
+    leaseDurationMs: number,
+    tx?: Prisma.TransactionClient
+  ): Promise<OutboxEvent[]> {
+    const client = tx || this.prisma;
+    const now = new Date();
+    const leaseExpiresAt = new Date(now.getTime() + leaseDurationMs);
+
+    const candidates = await client.outboxEvent.findMany({
+      where: {
+        OR: [
+          { status: 'PENDING' },
+          { status: 'DELIVERY_IN_PROGRESS', claimExpiresAt: { lt: now } },
+        ],
+        AND: [
+          {
+            OR: [{ nextRetryAt: null }, { nextRetryAt: { lte: now } }],
+          },
+        ],
+      },
+      orderBy: { createdAt: 'asc' },
+      take: limit,
+    });
+
+    const claimed: OutboxEvent[] = [];
+    for (const candidate of candidates) {
+      const updateResult = await client.outboxEvent.updateMany({
+        where: {
+          id: candidate.id,
+          OR: [
+            { status: 'PENDING' },
+            { status: 'DELIVERY_IN_PROGRESS', claimExpiresAt: { lt: now } },
+          ],
+          AND: [
+            {
+              OR: [{ nextRetryAt: null }, { nextRetryAt: { lte: now } }],
+            },
+          ],
+        },
+        data: {
+          status: 'DELIVERY_IN_PROGRESS',
+          claimedBy: workerId,
+          claimedAt: now,
+          claimExpiresAt: leaseExpiresAt,
+        },
+      });
+
+      if (updateResult.count === 1) {
+        claimed.push({
+          ...this.mapPrismaToDomain(candidate),
+          status: 'DELIVERY_IN_PROGRESS',
+          claimedBy: workerId,
+          claimedAt: now,
+          claimExpiresAt: leaseExpiresAt,
+        });
+      }
+    }
+
+    return claimed;
+  }
+
+  async releaseClaim(
+    id: string,
+    nextRetryAt?: Date,
+    lastErrorCode?: string,
+    attempts?: number,
+    tx?: Prisma.TransactionClient
+  ): Promise<void> {
+    const client = tx || this.prisma;
+    await client.outboxEvent.update({
+      where: { id },
+      data: {
+        status: 'PENDING',
+        claimedBy: null,
+        claimedAt: null,
+        claimExpiresAt: null,
+        nextRetryAt: nextRetryAt ?? null,
+        lastErrorCode: lastErrorCode ?? null,
+        ...(attempts !== undefined ? { attempts } : {}),
+      },
+    });
+  }
+
+  async markProcessed(id: string, attempts?: number, tx?: Prisma.TransactionClient): Promise<void> {
+    const client = tx || this.prisma;
+    await client.outboxEvent.update({
+      where: { id },
+      data: {
+        status: 'PROCESSED',
+        claimedBy: null,
+        claimedAt: null,
+        claimExpiresAt: null,
+        nextRetryAt: null,
+        lastErrorCode: null,
+        ...(attempts !== undefined ? { attempts } : {}),
+      },
+    });
+  }
+
+  async markFailed(
+    id: string,
+    lastErrorCode: string,
+    attempts?: number,
+    tx?: Prisma.TransactionClient
+  ): Promise<void> {
+    const client = tx || this.prisma;
+    await client.outboxEvent.update({
+      where: { id },
+      data: {
+        status: 'FAILED',
+        lastErrorCode,
+        claimedBy: null,
+        claimedAt: null,
+        claimExpiresAt: null,
+        nextRetryAt: null,
+        ...(attempts !== undefined ? { attempts } : {}),
+      },
+    });
   }
 
   async updateStatus(
@@ -1486,6 +1668,9 @@ export class PrismaOutboxRepository implements OutboxRepository {
     eventType: string;
     resourceId: string | null;
     requestId: string | null;
+    destinationId?: string | null;
+    recipientId?: string | null;
+    deliveryId?: string | null;
     correlationId: string;
     causationId: string | null;
     integrityKeyId: string;
@@ -1494,6 +1679,10 @@ export class PrismaOutboxRepository implements OutboxRepository {
     status: string;
     attempts: number;
     lastErrorCode: string | null;
+    claimedAt?: Date | null;
+    claimExpiresAt?: Date | null;
+    claimedBy?: string | null;
+    nextRetryAt?: Date | null;
     createdAt: Date;
     updatedAt: Date;
   }): OutboxEvent {
@@ -1503,6 +1692,9 @@ export class PrismaOutboxRepository implements OutboxRepository {
       eventType: row.eventType,
       resourceId: row.resourceId,
       requestId: row.requestId,
+      destinationId: row.destinationId ?? null,
+      recipientId: row.recipientId ?? null,
+      deliveryId: row.deliveryId ?? null,
       correlationId: row.correlationId,
       causationId: row.causationId,
       integrityKeyId: row.integrityKeyId,
@@ -1511,6 +1703,10 @@ export class PrismaOutboxRepository implements OutboxRepository {
       status: row.status as OutboxEvent['status'],
       attempts: row.attempts,
       lastErrorCode: row.lastErrorCode,
+      claimedAt: row.claimedAt ?? null,
+      claimExpiresAt: row.claimExpiresAt ?? null,
+      claimedBy: row.claimedBy ?? null,
+      nextRetryAt: row.nextRetryAt ?? null,
       createdAt: row.createdAt,
       updatedAt: row.updatedAt,
     };
@@ -2780,9 +2976,43 @@ export interface CallbackDestinationRepository {
     input: CreateCallbackDestinationInput,
     tx?: Prisma.TransactionClient
   ): Promise<CallbackDestination>;
-  findById(id: string): Promise<CallbackDestination | null>;
-  findByResourceId(resourceId: string): Promise<CallbackDestination[]>;
-  updateEnabled(id: string, enabled: boolean, tx?: Prisma.TransactionClient): Promise<void>;
+  findById(id: string, tx?: Prisma.TransactionClient): Promise<CallbackDestination | null>;
+  findByResourceId(
+    resourceId: string,
+    status?: CallbackDestinationStatus,
+    tx?: Prisma.TransactionClient
+  ): Promise<CallbackDestination[]>;
+  findByProjectId(
+    projectId: string,
+    status?: CallbackDestinationStatus,
+    tx?: Prisma.TransactionClient
+  ): Promise<CallbackDestination[]>;
+  findMetadataByResourceId(
+    resourceId: string,
+    tx?: Prisma.TransactionClient
+  ): Promise<CallbackDestinationMetadataProjection[]>;
+  findMetadataById(
+    id: string,
+    tx?: Prisma.TransactionClient
+  ): Promise<CallbackDestinationMetadataProjection | null>;
+  updateStatus(
+    id: string,
+    status: CallbackDestinationStatus,
+    verifiedAt?: Date | null,
+    tx?: Prisma.TransactionClient
+  ): Promise<void>;
+  updateVerificationChallenge(
+    id: string,
+    verificationToken: string,
+    verificationChallengeExpiresAt: Date,
+    tx?: Prisma.TransactionClient
+  ): Promise<void>;
+  rotateSecret(
+    id: string,
+    keyId: string,
+    encryptedSecret: string,
+    tx?: Prisma.TransactionClient
+  ): Promise<void>;
   delete(id: string, tx?: Prisma.TransactionClient): Promise<void>;
 }
 
@@ -2794,36 +3024,174 @@ export class PrismaCallbackDestinationRepository implements CallbackDestinationR
     tx?: Prisma.TransactionClient
   ): Promise<CallbackDestination> {
     const client = tx || this.prisma;
-    const encryptedSecret = encryptValue(input.secret);
     const row = await client.callbackDestination.create({
       data: {
+        ...(input.id ? { id: input.id } : {}),
         resourceId: input.resourceId,
+        projectId: input.projectId ?? null,
+        name: input.name ?? null,
         url: input.url,
-        secret: encryptedSecret,
+        status: input.status ?? 'PENDING_VERIFICATION',
+        keyId: input.keyId,
+        encryptedSecret: input.encryptedSecret,
+        verificationToken: input.verificationToken ?? null,
+        verificationChallengeExpiresAt: input.verificationChallengeExpiresAt ?? null,
       },
     });
     return this.mapRow(row);
   }
 
-  async findById(id: string): Promise<CallbackDestination | null> {
-    const row = await this.prisma.callbackDestination.findUnique({
+  async findById(id: string, tx?: Prisma.TransactionClient): Promise<CallbackDestination | null> {
+    const client = tx || this.prisma;
+    const row = await client.callbackDestination.findUnique({
       where: { id },
     });
     return row ? this.mapRow(row) : null;
   }
 
-  async findByResourceId(resourceId: string): Promise<CallbackDestination[]> {
-    const rows = await this.prisma.callbackDestination.findMany({
-      where: { resourceId },
+  async findByResourceId(
+    resourceId: string,
+    status?: CallbackDestinationStatus,
+    tx?: Prisma.TransactionClient
+  ): Promise<CallbackDestination[]> {
+    const client = tx || this.prisma;
+    const rows = await client.callbackDestination.findMany({
+      where: {
+        resourceId,
+        ...(status ? { status } : {}),
+      },
     });
     return rows.map((r) => this.mapRow(r));
   }
 
-  async updateEnabled(id: string, enabled: boolean, tx?: Prisma.TransactionClient): Promise<void> {
+  async findByProjectId(
+    projectId: string,
+    status?: CallbackDestinationStatus,
+    tx?: Prisma.TransactionClient
+  ): Promise<CallbackDestination[]> {
+    const client = tx || this.prisma;
+    const rows = await client.callbackDestination.findMany({
+      where: {
+        projectId,
+        ...(status ? { status } : {}),
+      },
+    });
+    return rows.map((r) => this.mapRow(r));
+  }
+
+  async findMetadataByResourceId(
+    resourceId: string,
+    tx?: Prisma.TransactionClient
+  ): Promise<CallbackDestinationMetadataProjection[]> {
+    const client = tx || this.prisma;
+    const rows = await client.callbackDestination.findMany({
+      where: { resourceId },
+      select: {
+        id: true,
+        resourceId: true,
+        projectId: true,
+        name: true,
+        url: true,
+        status: true,
+        verifiedAt: true,
+        createdAt: true,
+        updatedAt: true,
+      },
+    });
+    return rows.map((r) => ({
+      id: r.id,
+      resourceId: r.resourceId,
+      projectId: r.projectId,
+      name: r.name,
+      url: r.url,
+      status: r.status as CallbackDestinationStatus,
+      verifiedAt: r.verifiedAt,
+      createdAt: r.createdAt,
+      updatedAt: r.updatedAt,
+    }));
+  }
+
+  async findMetadataById(
+    id: string,
+    tx?: Prisma.TransactionClient
+  ): Promise<CallbackDestinationMetadataProjection | null> {
+    const client = tx || this.prisma;
+    const r = await client.callbackDestination.findUnique({
+      where: { id },
+      select: {
+        id: true,
+        resourceId: true,
+        projectId: true,
+        name: true,
+        url: true,
+        status: true,
+        verifiedAt: true,
+        createdAt: true,
+        updatedAt: true,
+      },
+    });
+    if (!r) return null;
+    return {
+      id: r.id,
+      resourceId: r.resourceId,
+      projectId: r.projectId,
+      name: r.name,
+      url: r.url,
+      status: r.status as CallbackDestinationStatus,
+      verifiedAt: r.verifiedAt,
+      createdAt: r.createdAt,
+      updatedAt: r.updatedAt,
+    };
+  }
+
+  async updateStatus(
+    id: string,
+    status: CallbackDestinationStatus,
+    verifiedAt?: Date | null,
+    tx?: Prisma.TransactionClient
+  ): Promise<void> {
     const client = tx || this.prisma;
     await client.callbackDestination.update({
       where: { id },
-      data: { enabled },
+      data: {
+        status,
+        ...(verifiedAt !== undefined ? { verifiedAt } : {}),
+        ...(status !== 'PENDING_VERIFICATION'
+          ? { verificationToken: null, verificationChallengeExpiresAt: null }
+          : {}),
+      },
+    });
+  }
+
+  async updateVerificationChallenge(
+    id: string,
+    verificationToken: string,
+    verificationChallengeExpiresAt: Date,
+    tx?: Prisma.TransactionClient
+  ): Promise<void> {
+    const client = tx || this.prisma;
+    await client.callbackDestination.update({
+      where: { id },
+      data: {
+        verificationToken,
+        verificationChallengeExpiresAt,
+      },
+    });
+  }
+
+  async rotateSecret(
+    id: string,
+    keyId: string,
+    encryptedSecret: string,
+    tx?: Prisma.TransactionClient
+  ): Promise<void> {
+    const client = tx || this.prisma;
+    await client.callbackDestination.update({
+      where: { id },
+      data: {
+        keyId,
+        encryptedSecret,
+      },
     });
   }
 
@@ -2834,13 +3202,33 @@ export class PrismaCallbackDestinationRepository implements CallbackDestinationR
     });
   }
 
-  private mapRow(row: any): CallbackDestination {
+  private mapRow(row: {
+    id: string;
+    resourceId: string;
+    projectId: string | null;
+    name: string | null;
+    url: string;
+    status: string;
+    keyId: string;
+    encryptedSecret: string;
+    verificationToken: string | null;
+    verificationChallengeExpiresAt: Date | null;
+    verifiedAt: Date | null;
+    createdAt: Date;
+    updatedAt: Date;
+  }): CallbackDestination {
     return {
       id: row.id,
       resourceId: row.resourceId,
+      projectId: row.projectId,
+      name: row.name,
       url: row.url,
-      secret: decryptValue(row.secret),
-      enabled: row.enabled,
+      status: row.status as CallbackDestinationStatus,
+      keyId: row.keyId,
+      encryptedSecret: row.encryptedSecret,
+      verificationToken: row.verificationToken,
+      verificationChallengeExpiresAt: row.verificationChallengeExpiresAt,
+      verifiedAt: row.verifiedAt,
       createdAt: row.createdAt,
       updatedAt: row.updatedAt,
     };

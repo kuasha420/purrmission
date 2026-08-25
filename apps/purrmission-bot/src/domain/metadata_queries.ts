@@ -532,6 +532,10 @@ export const METADATA_CAPABILITY_EXCLUSIONS = {
   'grant.consume': 'Approval Grant operation; grant metadata is not one of these DTO targets.',
   'audit.own.read': 'Authenticated Subject operation; it is not an object metadata capability.',
   'token.manage-own': 'Authenticated Subject operation; it is not an object metadata capability.',
+  'callback.destination.manage': 'Resource-scoped callback destination management capability.',
+  'callback.destination.verify':
+    'Resource-scoped callback destination challenge verification capability.',
+  'callback.destination.view': 'Resource-scoped callback destination metadata query capability.',
 } as const satisfies Partial<Record<Capability, string>>;
 
 type SummarizedCapability = (typeof METADATA_CAPABILITY_SUMMARY_CONTRACT)[MetadataKind][number];

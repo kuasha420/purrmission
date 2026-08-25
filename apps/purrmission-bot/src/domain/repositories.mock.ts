@@ -31,6 +31,8 @@ import type {
   CreateApprovalGrantInput,
   CallbackDestination,
   CreateCallbackDestinationInput,
+  CallbackDestinationStatus,
+  CallbackDestinationMetadataProjection,
   TOTPLinkConsent,
   TOTPDelegationConsent,
   TOTPLinkEnvelope,
@@ -940,15 +942,23 @@ export class InMemoryOutboxRepository implements OutboxRepository {
       id: input.id,
       schemaVersion: input.schemaVersion,
       eventType: input.eventType,
-      resourceId: input.resourceId,
-      requestId: input.requestId,
+      resourceId: input.resourceId ?? null,
+      requestId: input.requestId ?? null,
+      destinationId: input.destinationId ?? null,
+      recipientId: input.recipientId ?? null,
+      deliveryId: input.deliveryId ?? null,
       correlationId: input.correlationId,
-      causationId: input.causationId,
+      causationId: input.causationId ?? null,
       integrityKeyId: input.integrityKeyId,
       integrityHash: input.integrityHash,
       payload: input.payload,
-      status: 'PENDING',
-      attempts: 0,
+      status: input.status ?? 'PENDING',
+      attempts: input.attempts ?? 0,
+      lastErrorCode: null,
+      claimedAt: input.claimedAt ?? null,
+      claimExpiresAt: input.claimExpiresAt ?? null,
+      claimedBy: input.claimedBy ?? null,
+      nextRetryAt: input.nextRetryAt ?? null,
       createdAt: input.createdAt,
       updatedAt: new Date(),
     };
@@ -956,8 +966,123 @@ export class InMemoryOutboxRepository implements OutboxRepository {
     return event;
   }
 
-  async findPending(): Promise<OutboxEvent[]> {
-    return this.events.filter((e) => e.status === 'PENDING');
+  async findById(id: string, _tx?: Prisma.TransactionClient): Promise<OutboxEvent | null> {
+    const found = this.events.find((e) => e.id === id);
+    return found ? { ...found } : null;
+  }
+
+  async findByDeliveryId(
+    deliveryId: string,
+    _tx?: Prisma.TransactionClient
+  ): Promise<OutboxEvent | null> {
+    const found = this.events.find((e) => e.deliveryId === deliveryId);
+    return found ? { ...found } : null;
+  }
+
+  async findPending(limit = 100): Promise<OutboxEvent[]> {
+    const now = new Date();
+    return this.events
+      .filter((e) => {
+        const isEligibleStatus =
+          e.status === 'PENDING' ||
+          (e.status === 'DELIVERY_IN_PROGRESS' &&
+            e.claimExpiresAt !== null &&
+            e.claimExpiresAt !== undefined &&
+            e.claimExpiresAt < now);
+        const isRetryReady = !e.nextRetryAt || e.nextRetryAt <= now;
+        return isEligibleStatus && isRetryReady;
+      })
+      .slice(0, limit)
+      .map((e) => ({ ...e }));
+  }
+
+  async claimEvents(
+    workerId: string,
+    limit: number,
+    leaseDurationMs: number,
+    _tx?: Prisma.TransactionClient
+  ): Promise<OutboxEvent[]> {
+    const now = new Date();
+    const leaseExpiresAt = new Date(now.getTime() + leaseDurationMs);
+    const claimed: OutboxEvent[] = [];
+
+    for (const event of this.events) {
+      if (claimed.length >= limit) break;
+      const isEligibleStatus =
+        event.status === 'PENDING' ||
+        (event.status === 'DELIVERY_IN_PROGRESS' &&
+          event.claimExpiresAt !== null &&
+          event.claimExpiresAt !== undefined &&
+          event.claimExpiresAt < now);
+      const isRetryReady = !event.nextRetryAt || event.nextRetryAt <= now;
+
+      if (isEligibleStatus && isRetryReady) {
+        event.status = 'DELIVERY_IN_PROGRESS';
+        event.claimedBy = workerId;
+        event.claimedAt = now;
+        event.claimExpiresAt = leaseExpiresAt;
+        event.updatedAt = now;
+        claimed.push({ ...event });
+      }
+    }
+    return claimed;
+  }
+
+  async releaseClaim(
+    id: string,
+    nextRetryAt?: Date,
+    lastErrorCode?: string,
+    attempts?: number,
+    _tx?: Prisma.TransactionClient
+  ): Promise<void> {
+    const event = this.events.find((e) => e.id === id);
+    if (event) {
+      event.status = 'PENDING';
+      event.claimedBy = null;
+      event.claimedAt = null;
+      event.claimExpiresAt = null;
+      event.nextRetryAt = nextRetryAt ?? null;
+      event.lastErrorCode = lastErrorCode ?? null;
+      if (attempts !== undefined) event.attempts = attempts;
+      event.updatedAt = new Date();
+    }
+  }
+
+  async markProcessed(
+    id: string,
+    attempts?: number,
+    _tx?: Prisma.TransactionClient
+  ): Promise<void> {
+    const event = this.events.find((e) => e.id === id);
+    if (event) {
+      event.status = 'PROCESSED';
+      event.claimedBy = null;
+      event.claimedAt = null;
+      event.claimExpiresAt = null;
+      event.nextRetryAt = null;
+      event.lastErrorCode = null;
+      if (attempts !== undefined) event.attempts = attempts;
+      event.updatedAt = new Date();
+    }
+  }
+
+  async markFailed(
+    id: string,
+    lastErrorCode: string,
+    attempts?: number,
+    _tx?: Prisma.TransactionClient
+  ): Promise<void> {
+    const event = this.events.find((e) => e.id === id);
+    if (event) {
+      event.status = 'FAILED';
+      event.lastErrorCode = lastErrorCode;
+      event.claimedBy = null;
+      event.claimedAt = null;
+      event.claimExpiresAt = null;
+      event.nextRetryAt = null;
+      if (attempts !== undefined) event.attempts = attempts;
+      event.updatedAt = new Date();
+    }
   }
 
   async updateStatus(
@@ -1444,36 +1569,141 @@ export class InMemoryCallbackDestinationRepository implements CallbackDestinatio
     _tx?: Prisma.TransactionClient
   ): Promise<CallbackDestination> {
     const dest: CallbackDestination = {
-      id: crypto.randomUUID(),
+      id: input.id || crypto.randomUUID(),
       resourceId: input.resourceId,
+      projectId: input.projectId ?? null,
+      name: input.name ?? null,
       url: input.url,
-      secret: input.secret,
-      enabled: true,
+      status: input.status ?? 'PENDING_VERIFICATION',
+      keyId: input.keyId,
+      encryptedSecret: input.encryptedSecret,
+      verificationToken: input.verificationToken ?? null,
+      verificationChallengeExpiresAt: input.verificationChallengeExpiresAt ?? null,
+      verifiedAt: null,
       createdAt: new Date(),
       updatedAt: new Date(),
     };
     this.destinations.set(dest.id, dest);
-    return dest;
+    return { ...dest };
   }
 
-  async findById(id: string): Promise<CallbackDestination | null> {
-    return this.destinations.get(id) ?? null;
+  async findById(id: string, _tx?: Prisma.TransactionClient): Promise<CallbackDestination | null> {
+    const dest = this.destinations.get(id);
+    return dest ? { ...dest } : null;
   }
 
-  async findByResourceId(resourceId: string): Promise<CallbackDestination[]> {
+  async findByResourceId(
+    resourceId: string,
+    status?: CallbackDestinationStatus,
+    _tx?: Prisma.TransactionClient
+  ): Promise<CallbackDestination[]> {
     const results: CallbackDestination[] = [];
     for (const dest of this.destinations.values()) {
-      if (dest.resourceId === resourceId) {
-        results.push(dest);
+      if (dest.resourceId === resourceId && (!status || dest.status === status)) {
+        results.push({ ...dest });
       }
     }
     return results;
   }
 
-  async updateEnabled(id: string, enabled: boolean, _tx?: Prisma.TransactionClient): Promise<void> {
+  async findByProjectId(
+    projectId: string,
+    status?: CallbackDestinationStatus,
+    _tx?: Prisma.TransactionClient
+  ): Promise<CallbackDestination[]> {
+    const results: CallbackDestination[] = [];
+    for (const dest of this.destinations.values()) {
+      if (dest.projectId === projectId && (!status || dest.status === status)) {
+        results.push({ ...dest });
+      }
+    }
+    return results;
+  }
+
+  async findMetadataByResourceId(
+    resourceId: string,
+    _tx?: Prisma.TransactionClient
+  ): Promise<CallbackDestinationMetadataProjection[]> {
+    const results: CallbackDestinationMetadataProjection[] = [];
+    for (const dest of this.destinations.values()) {
+      if (dest.resourceId === resourceId) {
+        results.push({
+          id: dest.id,
+          resourceId: dest.resourceId,
+          projectId: dest.projectId,
+          name: dest.name,
+          url: dest.url,
+          status: dest.status,
+          verifiedAt: dest.verifiedAt,
+          createdAt: dest.createdAt,
+          updatedAt: dest.updatedAt,
+        });
+      }
+    }
+    return results;
+  }
+
+  async findMetadataById(
+    id: string,
+    _tx?: Prisma.TransactionClient
+  ): Promise<CallbackDestinationMetadataProjection | null> {
+    const dest = this.destinations.get(id);
+    if (!dest) return null;
+    return {
+      id: dest.id,
+      resourceId: dest.resourceId,
+      projectId: dest.projectId,
+      name: dest.name,
+      url: dest.url,
+      status: dest.status,
+      verifiedAt: dest.verifiedAt,
+      createdAt: dest.createdAt,
+      updatedAt: dest.updatedAt,
+    };
+  }
+
+  async updateStatus(
+    id: string,
+    status: CallbackDestinationStatus,
+    verifiedAt?: Date | null,
+    _tx?: Prisma.TransactionClient
+  ): Promise<void> {
     const dest = this.destinations.get(id);
     if (dest) {
-      dest.enabled = enabled;
+      dest.status = status;
+      if (verifiedAt !== undefined) dest.verifiedAt = verifiedAt;
+      if (status !== 'PENDING_VERIFICATION') {
+        dest.verificationToken = null;
+        dest.verificationChallengeExpiresAt = null;
+      }
+      dest.updatedAt = new Date();
+    }
+  }
+
+  async updateVerificationChallenge(
+    id: string,
+    verificationToken: string,
+    verificationChallengeExpiresAt: Date,
+    _tx?: Prisma.TransactionClient
+  ): Promise<void> {
+    const dest = this.destinations.get(id);
+    if (dest) {
+      dest.verificationToken = verificationToken;
+      dest.verificationChallengeExpiresAt = verificationChallengeExpiresAt;
+      dest.updatedAt = new Date();
+    }
+  }
+
+  async rotateSecret(
+    id: string,
+    keyId: string,
+    encryptedSecret: string,
+    _tx?: Prisma.TransactionClient
+  ): Promise<void> {
+    const dest = this.destinations.get(id);
+    if (dest) {
+      dest.keyId = keyId;
+      dest.encryptedSecret = encryptedSecret;
       dest.updatedAt = new Date();
     }
   }

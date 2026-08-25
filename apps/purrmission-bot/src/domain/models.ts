@@ -540,6 +540,9 @@ export interface OutboxEvent {
   eventType: string;
   resourceId?: string | null;
   requestId?: string | null;
+  destinationId?: string | null;
+  recipientId?: string | null;
+  deliveryId?: string | null;
   correlationId: string;
   causationId?: string | null;
   integrityKeyId: string;
@@ -548,11 +551,25 @@ export interface OutboxEvent {
   status: 'PENDING' | 'DELIVERY_IN_PROGRESS' | 'DELIVERED_PENDING_AUDIT' | 'PROCESSED' | 'FAILED';
   attempts: number;
   lastErrorCode?: string | null;
+  claimedAt?: Date | null;
+  claimExpiresAt?: Date | null;
+  claimedBy?: string | null;
+  nextRetryAt?: Date | null;
   createdAt: Date;
   updatedAt: Date;
 }
 
-export type CreateOutboxEventInput = Omit<OutboxEvent, 'attempts' | 'status' | 'updatedAt'>;
+export type CreateOutboxEventInput = Omit<
+  OutboxEvent,
+  'attempts' | 'status' | 'updatedAt' | 'claimedAt' | 'claimExpiresAt' | 'claimedBy' | 'nextRetryAt'
+> & {
+  attempts?: number;
+  status?: OutboxEvent['status'];
+  claimedAt?: Date | null;
+  claimExpiresAt?: Date | null;
+  claimedBy?: string | null;
+  nextRetryAt?: Date | null;
+};
 
 /**
  * Represents a device login session (OAuth Device Flow).
@@ -760,6 +777,10 @@ export type Capability =
   | 'audit.queue.read'
   | 'audit.own.read'
   | 'audit.export'
+  // Callback destination capabilities
+  | 'callback.destination.manage'
+  | 'callback.destination.verify'
+  | 'callback.destination.view'
   // Current CLI credential lifecycle capabilities
   | 'token.manage-own';
 
@@ -845,18 +866,45 @@ export interface EvaluationResult {
   safeExplanation: string;
 }
 
+export type CallbackDestinationStatus = 'PENDING_VERIFICATION' | 'ACTIVE' | 'DISABLED';
+
 export interface CallbackDestination {
   id: string;
   resourceId: string;
+  projectId?: string | null;
+  name?: string | null;
   url: string;
-  secret: string;
-  enabled: boolean;
+  status: CallbackDestinationStatus;
+  keyId: string;
+  encryptedSecret: string;
+  verificationToken?: string | null;
+  verificationChallengeExpiresAt?: Date | null;
+  verifiedAt?: Date | null;
   createdAt: Date;
   updatedAt: Date;
 }
 
 export interface CreateCallbackDestinationInput {
+  id?: string;
   resourceId: string;
+  projectId?: string | null;
+  name?: string | null;
   url: string;
-  secret: string;
+  keyId: string;
+  encryptedSecret: string;
+  status?: CallbackDestinationStatus;
+  verificationToken?: string | null;
+  verificationChallengeExpiresAt?: Date | null;
+}
+
+export interface CallbackDestinationMetadataProjection {
+  id: string;
+  resourceId: string;
+  projectId?: string | null;
+  name?: string | null;
+  url: string;
+  status: CallbackDestinationStatus;
+  verifiedAt?: Date | null;
+  createdAt: Date;
+  updatedAt: Date;
 }

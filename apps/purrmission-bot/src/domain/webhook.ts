@@ -8,30 +8,47 @@ import crypto from 'node:crypto';
  * Validates if an IP address is a public, non-reserved IP.
  */
 export function isPublicIP(ip: string): boolean {
-  // Allow overriding in test environments if explicitly configured
+  // Allow overriding in test environments only if explicitly configured
   if (process.env.ALLOW_PRIVATE_WEBHOOKS === 'true') {
+    if (process.env.NODE_ENV !== 'test') {
+      throw new Error('ALLOW_PRIVATE_WEBHOOKS is only permitted when NODE_ENV=test.');
+    }
     return true;
   }
 
   if (isIP(ip) === 4) {
     const parts = ip.split('.').map(Number);
-    if (parts.length !== 4 || parts.some(isNaN)) return false;
+    if (parts.length !== 4 || parts.some((n) => isNaN(n) || n < 0 || n > 255)) return false;
 
-    // Loopback (127.0.0.0/8)
-    if (parts[0] === 127) return false;
-    // Private (RFC 1918)
+    // Current network / "This host on this network" (0.0.0.0/8)
+    if (parts[0] === 0) return false;
+    // Private (RFC 1918: 10.0.0.0/8)
     if (parts[0] === 10) return false;
-    if (parts[0] === 172 && parts[1] >= 16 && parts[1] <= 31) return false;
-    if (parts[0] === 192 && parts[1] === 168) return false;
-    // Link-local (169.254.0.0/16)
-    if (parts[0] === 169 && parts[1] === 254) return false;
-    // Unspecified / Broadcast (0.0.0.0, 255.255.255.255)
-    if (parts[0] === 0 || parts[0] === 255) return false;
-    // Carrier-Grade NAT (100.64.0.0/10)
+    // Carrier-Grade NAT (RFC 6598: 100.64.0.0/10)
     if (parts[0] === 100 && parts[1] >= 64 && parts[1] <= 127) return false;
-    // Multicast (224.0.0.0/4)
+    // Loopback (RFC 1122: 127.0.0.0/8)
+    if (parts[0] === 127) return false;
+    // Link-local (RFC 3927: 169.254.0.0/16)
+    if (parts[0] === 169 && parts[1] === 254) return false;
+    // Private (RFC 1918: 172.16.0.0/12)
+    if (parts[0] === 172 && parts[1] >= 16 && parts[1] <= 31) return false;
+    // IETF Protocol Assignments (RFC 6890: 192.0.0.0/24)
+    if (parts[0] === 192 && parts[1] === 0 && parts[2] === 0) return false;
+    // Documentation / TEST-NET-1 (RFC 5737: 192.0.2.0/24)
+    if (parts[0] === 192 && parts[1] === 0 && parts[2] === 2) return false;
+    // 6to4 Relay Anycast (RFC 7526: 192.88.99.0/24)
+    if (parts[0] === 192 && parts[1] === 88 && parts[2] === 99) return false;
+    // Private (RFC 1918: 192.168.0.0/16)
+    if (parts[0] === 192 && parts[1] === 168) return false;
+    // Benchmarking (RFC 2544: 198.18.0.0/15)
+    if (parts[0] === 198 && (parts[1] === 18 || parts[1] === 19)) return false;
+    // Documentation / TEST-NET-2 (RFC 5737: 198.51.100.0/24)
+    if (parts[0] === 198 && parts[1] === 51 && parts[2] === 100) return false;
+    // Documentation / TEST-NET-3 (RFC 5737: 203.0.113.0/24)
+    if (parts[0] === 203 && parts[1] === 0 && parts[2] === 113) return false;
+    // Multicast (RFC 5771: 224.0.0.0/4)
     if (parts[0] >= 224 && parts[0] <= 239) return false;
-    // Reserved / Future use (240.0.0.0/4)
+    // Reserved / Future use (RFC 1112: 240.0.0.0/4) & Limited Broadcast (255.255.255.255)
     if (parts[0] >= 240) return false;
 
     return true;
@@ -43,19 +60,27 @@ export function isPublicIP(ip: string): boolean {
     if (normalized === '::1' || normalized === '0:0:0:0:0:0:0:1') return false;
     // Unspecified (::)
     if (normalized === '::' || normalized === '0:0:0:0:0:0:0:0') return false;
+    // Discard prefix (100::/64)
+    if (normalized.startsWith('100::') || normalized.startsWith('0100::')) return false;
+    // Documentation prefix (2001:db8::/32)
+    if (normalized.startsWith('2001:db8:') || normalized.startsWith('2001:0db8:')) return false;
     // Link-local (fe80::/10)
     if (
       normalized.startsWith('fe80:') ||
       normalized.startsWith('fe90:') ||
       normalized.startsWith('fea0:') ||
-      normalized.startsWith('feb0:')
+      normalized.startsWith('feb0:') ||
+      normalized.startsWith('fe8') ||
+      normalized.startsWith('fe9') ||
+      normalized.startsWith('fea') ||
+      normalized.startsWith('feb')
     )
       return false;
     // Unique local address (fc00::/7)
     if (normalized.startsWith('fc') || normalized.startsWith('fd')) return false;
     // Multicast (ff00::/8)
     if (normalized.startsWith('ff')) return false;
-    // IPv4-mapped IPv6 address (::ffff:192.0.2.128 or similar)
+    // IPv4-mapped IPv6 address (::ffff:192.0.2.128 or ::ffff:c000:0280)
     if (normalized.startsWith('::ffff:')) {
       const v4Part = normalized.substring(7);
       if (isIP(v4Part) === 4) {
@@ -71,6 +96,8 @@ export function isPublicIP(ip: string): boolean {
 }
 
 export interface WebhookPayload {
+  deliveryId?: string;
+  idempotencyKey?: string;
   eventType: string;
   requestId: string;
   resourceId: string;
@@ -95,24 +122,27 @@ export class SSRFSafeWebhookClient {
   static async send(
     urlStr: string,
     secret: string,
-    payload: Omit<WebhookPayload, 'timestamp' | 'nonce'>
+    payload: Omit<WebhookPayload, 'timestamp' | 'nonce'> & {
+      timestamp?: string;
+      nonce?: string;
+    }
   ): Promise<WebhookResponse> {
     const urlObject = new URL(urlStr);
 
-    // Enforce scheme validation: only HTTPS is allowed (HTTP allowed only in test environment)
-    const isTestEnv =
-      process.env.NODE_ENV === 'test' || process.env.ALLOW_PRIVATE_WEBHOOKS === 'true';
-    if (urlObject.protocol !== 'https:' && !(isTestEnv && urlObject.protocol === 'http:')) {
+    // Enforce scheme validation: only HTTPS is allowed (HTTP allowed only when ALLOW_PRIVATE_WEBHOOKS=true in test)
+    const isTestEnv = process.env.NODE_ENV === 'test';
+    const allowPrivate = isTestEnv && process.env.ALLOW_PRIVATE_WEBHOOKS === 'true';
+    if (urlObject.protocol !== 'https:' && !(allowPrivate && urlObject.protocol === 'http:')) {
       throw new Error(`Forbidden protocol: "${urlObject.protocol}". Only HTTPS is allowed.`);
     }
 
-    // Port check: standard HTTP/HTTPS ports only
+    // Port check: standard HTTPS/HTTP ports only
     const port = urlObject.port
       ? Number(urlObject.port)
       : urlObject.protocol === 'https:'
         ? 443
         : 80;
-    if (port !== 443 && port !== 80 && !isTestEnv) {
+    if (port !== 443 && port !== 8443 && !(allowPrivate && (port === 80 || port > 1024))) {
       throw new Error(`Forbidden outbound port: ${port}.`);
     }
 
@@ -142,8 +172,8 @@ export class SSRFSafeWebhookClient {
     // 4. Construct replay-resistant, value-free envelope
     const envelope: WebhookPayload = {
       ...payload,
-      timestamp: new Date().toISOString(),
-      nonce: crypto.randomUUID(),
+      timestamp: payload.timestamp ?? new Date().toISOString(),
+      nonce: payload.nonce ?? crypto.randomUUID(),
     };
 
     const requestBody = JSON.stringify(envelope);
@@ -162,6 +192,11 @@ export class SSRFSafeWebhookClient {
         'Content-Type': 'application/json',
         'Content-Length': Buffer.byteLength(requestBody),
         'X-Purrmission-Signature': `sha256=${signature}`,
+        'X-Purrmission-Signature-256': `sha256=${signature}`,
+        ...(payload.deliveryId ? { 'X-Purrmission-Delivery-Id': payload.deliveryId } : {}),
+        ...(payload.idempotencyKey
+          ? { 'X-Purrmission-Idempotency-Key': payload.idempotencyKey }
+          : {}),
       },
       // Servername MUST match original hostname for TLS handshake/validation
       servername: urlObject.hostname,
