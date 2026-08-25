@@ -115,11 +115,17 @@ export const pullCommand = new Command('pull')
 
         console.log(`\n⏳ ${chalk.yellow('Access Pending Approval')}`);
         console.log(chalk.white(`Request ID: ${requestId}`));
-        console.log(chalk.dim('Waiting for Guardian approval in Discord...'));
-
-        const initialIntervalMs = Number(process.env.PAWTHY_POLL_INTERVAL_MS) || 2000;
-        const maxIntervalMs = Number(process.env.PAWTHY_POLL_MAX_INTERVAL_MS) || 10000;
-        const timeoutMs = Number(process.env.PAWTHY_POLL_TIMEOUT_MS) || 300000;
+        const rawInitial = Number(process.env.PAWTHY_POLL_INTERVAL_MS);
+        const initialIntervalMs =
+          Number.isFinite(rawInitial) && rawInitial > 0 ? Math.min(rawInitial, 60000) : 2000;
+        const rawMax = Number(process.env.PAWTHY_POLL_MAX_INTERVAL_MS);
+        const maxIntervalMs = Math.max(
+          initialIntervalMs,
+          Number.isFinite(rawMax) && rawMax > 0 ? Math.min(rawMax, 300000) : 10000
+        );
+        const rawTimeout = Number(process.env.PAWTHY_POLL_TIMEOUT_MS);
+        const timeoutMs =
+          Number.isFinite(rawTimeout) && rawTimeout > 0 ? Math.min(rawTimeout, 3600000) : 300000;
 
         let currentInterval = initialIntervalMs;
         const startTime = Date.now();
@@ -282,7 +288,7 @@ export const pullCommand = new Command('pull')
         } else if (error.response?.status === 405) {
           console.error(
             chalk.red(
-              'Method not allowed: Server does not allow secret retrieval via GET. Use POST reveal.'
+              'Method not allowed: Server does not support secret reveal on this endpoint or method.'
             )
           );
         } else {

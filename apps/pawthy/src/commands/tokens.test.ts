@@ -131,6 +131,42 @@ describe('Tokens Command', () => {
       assert.ok(!allOutput.includes('paw_secret1234567890abcdef'), 'Must never output plaintext');
     });
 
+    it('formats malformed or missing timestamps defensively without throwing', async () => {
+      mock.method(config, 'get', (key: string) => {
+        if (key === 'token') return 'test-token';
+        if (key === 'apiUrl') return 'http://localhost:3000';
+        return undefined;
+      });
+
+      mock.method(axios, 'get', async () => ({
+        status: 200,
+        data: [
+          {
+            id: 'cred-malformed',
+            name: 'Malformed Date Token',
+            type: 'PAWTHY_TOKEN',
+            createdAt: 'invalid-date-string',
+            expiresAt: 'bad-expiry',
+            revokedAt: null,
+            revokedReason: null,
+            lastUsedAt: null,
+          },
+        ],
+      }));
+
+      const consoleLogs: string[] = [];
+      mock.method(console, 'log', (msg: string) => {
+        consoleLogs.push(msg);
+      });
+
+      await tokensCommand.parseAsync(['node', 'tokens', 'list']);
+
+      const allOutput = consoleLogs.join('\n');
+      assert.ok(allOutput.includes('cred-malformed'));
+      assert.ok(allOutput.includes('invalid-date-string'));
+      assert.ok(allOutput.includes('bad-expiry'));
+    });
+
     it('handles empty credential list gracefully', async () => {
       mock.method(config, 'get', (key: string) => {
         if (key === 'token') return 'test-token';

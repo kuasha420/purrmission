@@ -54,9 +54,9 @@ tokensCommand
           ? chalk.red(`REVOKED (${cred.revokedReason || 'revoked'})`)
           : chalk.green('ACTIVE');
 
-        const createdAtStr = cred.createdAt ? new Date(cred.createdAt).toISOString() : 'N/A';
-        const expiresAtStr = cred.expiresAt ? new Date(cred.expiresAt).toISOString() : 'Never';
-        const lastUsedStr = cred.lastUsedAt ? new Date(cred.lastUsedAt).toISOString() : 'Never';
+        const createdAtStr = formatTimestamp(cred.createdAt, 'N/A');
+        const expiresAtStr = formatTimestamp(cred.expiresAt, 'Never');
+        const lastUsedStr = formatTimestamp(cred.lastUsedAt, 'Never');
 
         // Plaintext, prefix, and digest are strictly excluded from output
         console.log(`• ${chalk.cyan(cred.name)} (${status})`);
@@ -66,7 +66,7 @@ tokensCommand
         console.log(`  Expires:    ${expiresAtStr}`);
         console.log(`  Last Used:  ${lastUsedStr}`);
         if (isRevoked && cred.revokedAt) {
-          console.log(`  Revoked At: ${new Date(cred.revokedAt).toISOString()}`);
+          console.log(`  Revoked At: ${formatTimestamp(cred.revokedAt, 'N/A')}`);
         }
         console.log('');
       }
@@ -146,3 +146,9 @@ tokensCommand
       process.exit(1);
     }
   });
+
+function formatTimestamp(val: string | null | undefined, fallback: string): string {
+  if (!val) return fallback;
+  const d = new Date(val);
+  return isNaN(d.getTime()) ? String(val) : d.toISOString();
+}

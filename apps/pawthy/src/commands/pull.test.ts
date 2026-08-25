@@ -45,6 +45,11 @@ describe('Pull Command', () => {
       throw new Error(`process.exit called with ${code}`);
     });
 
+    // Set fast poll defaults for deterministic test execution
+    process.env.PAWTHY_POLL_INTERVAL_MS = '10';
+    process.env.PAWTHY_POLL_MAX_INTERVAL_MS = '50';
+    process.env.PAWTHY_POLL_TIMEOUT_MS = '1000';
+
     // Write a dummy .pawthyrc file in the temp directory
     await fs.writeFile(
       path.join(tempDir, '.pawthyrc'),
