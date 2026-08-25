@@ -15,6 +15,7 @@ import { logger } from '../../logging/logger.js';
 import { ProjectMemberRole } from '../../domain/models.js';
 import { createDiscordPrincipal } from '../../domain/principal.js';
 import type { Services } from '../../domain/services.js';
+import { ForbiddenError, NotFoundError } from '../../domain/ports.js';
 
 export const projectCommand = new SlashCommandBuilder()
   .setName('project')
@@ -115,24 +116,23 @@ export async function handleAddMember(
   const roleInput = interaction.options.getString('role');
   const role: ProjectMemberRole = roleInput === 'WRITER' ? 'WRITER' : 'READER';
   const actorId = interaction.user.id;
+  const principal = createDiscordPrincipal(actorId, interaction.id);
 
   try {
-    const project = await services.project.getProject(projectId);
+    const project = await services.ports.getProject(principal, projectId, interaction.id);
     if (!project) {
       await interaction.editReply(`❌ Project not found: \`${projectId}\``);
       return;
     }
 
-    if (project.ownerId !== actorId) {
-      await interaction.editReply('❌ You must be the project owner to add members.');
-      return;
-    }
-
-    await services.project.addMember(
-      projectId,
-      targetUser.id,
-      role,
-      createDiscordPrincipal(actorId)
+    await services.ports.addProjectMember(
+      principal,
+      {
+        projectId,
+        memberUserId: targetUser.id,
+        role,
+      },
+      interaction.id
     );
 
     await interaction.editReply(
@@ -140,6 +140,14 @@ export async function handleAddMember(
     );
     logger.info('Added project member', { projectId, targetUserId: targetUser.id, role, actorId });
   } catch (error) {
+    if (error instanceof ForbiddenError) {
+      await interaction.editReply('❌ You must be the project owner to add members.');
+      return;
+    }
+    if (error instanceof NotFoundError) {
+      await interaction.editReply(`❌ Project not found: \`${projectId}\``);
+      return;
+    }
     logger.error('Failed to add project member', { error });
     await interaction.editReply('❌ An error occurred while adding the member.');
   }
@@ -157,24 +165,28 @@ export async function handleRemoveMember(
   const projectId = interaction.options.getString('project_id', true);
   const targetUser = interaction.options.getUser('user', true);
   const actorId = interaction.user.id;
+  const principal = createDiscordPrincipal(actorId, interaction.id);
 
   try {
-    const project = await services.project.getProject(projectId);
+    const project = await services.ports.getProject(principal, projectId, interaction.id);
     if (!project) {
       await interaction.editReply(`❌ Project not found: \`${projectId}\``);
       return;
     }
 
-    if (project.ownerId !== actorId) {
-      await interaction.editReply('❌ You must be the project owner to remove members.');
-      return;
-    }
-
-    await services.project.removeMember(projectId, targetUser.id, createDiscordPrincipal(actorId));
+    await services.ports.removeProjectMember(principal, projectId, targetUser.id, interaction.id);
 
     await interaction.editReply(`✅ Removed <@${targetUser.id}> from project **${project.name}**.`);
     logger.info('Removed project member', { projectId, targetUserId: targetUser.id, actorId });
   } catch (error) {
+    if (error instanceof ForbiddenError) {
+      await interaction.editReply('❌ You must be the project owner to remove members.');
+      return;
+    }
+    if (error instanceof NotFoundError) {
+      await interaction.editReply(`❌ Project not found: \`${projectId}\``);
+      return;
+    }
     logger.error('Failed to remove project member', { error });
     await interaction.editReply('❌ An error occurred while removing the member.');
   }
@@ -191,21 +203,16 @@ export async function handleListMembers(
 
   const projectId = interaction.options.getString('project_id', true);
   const actorId = interaction.user.id;
+  const principal = createDiscordPrincipal(actorId, interaction.id);
 
   try {
-    const project = await services.project.getProject(projectId);
+    const project = await services.ports.getProject(principal, projectId, interaction.id);
     if (!project) {
       await interaction.editReply(`❌ Project not found: \`${projectId}\``);
       return;
     }
 
-    const memberRole = await services.project.getMemberRole(projectId, actorId);
-    if (project.ownerId !== actorId && !memberRole) {
-      await interaction.editReply('❌ You do not have access to view members of this project.');
-      return;
-    }
-
-    const members = await services.project.listMembers(projectId);
+    const members = await services.ports.listProjectMembers(principal, projectId, interaction.id);
 
     if (members.length === 0) {
       await interaction.editReply(`Project **${project.name}** has no members.`);
@@ -221,6 +228,14 @@ export async function handleListMembers(
       allowedMentions: { users: [] },
     });
   } catch (error) {
+    if (error instanceof ForbiddenError) {
+      await interaction.editReply('❌ You do not have access to view members of this project.');
+      return;
+    }
+    if (error instanceof NotFoundError) {
+      await interaction.editReply(`❌ Project not found: \`${projectId}\``);
+      return;
+    }
     logger.error('Failed to list project members', { error });
     await interaction.editReply('❌ An error occurred while listing members.');
   }

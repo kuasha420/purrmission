@@ -7,6 +7,7 @@
 import type { ChatInputCommandInteraction } from 'discord.js';
 import type { CommandContext } from './context.js';
 import { logger } from '../../logging/logger.js';
+import { createDiscordPrincipal } from '../../domain/principal.js';
 
 /**
  * Handle the /purrmission request-access command.
@@ -32,52 +33,19 @@ export async function handleRequestAccess(
       return;
     }
 
-    // Check if user is already a guardian or owner (they don't need to request access)
-    // Note: isGuardian returns true for both GUARDIAN and OWNER roles, consistent with server-side
-    const isGuardian = await services.resource.isGuardian(resourceId, userId);
-    if (isGuardian) {
-      await interaction.reply({
-        content: `✅ You are already authorized for **${resource.name}**. No approval needed.`,
-        ephemeral: true,
-      });
-      return;
-    }
+    const principal = createDiscordPrincipal(userId, interaction.id);
 
-    // Check for existing pending or approved access request
-    const existingApproval = await services.approval.findActiveApproval(resourceId, userId);
-    if (existingApproval) {
-      if (existingApproval.status === 'PENDING') {
-        await interaction.reply({
-          content: [
-            `⏳ You already have a pending access request for **${resource.name}**.`,
-            '',
-            `Request ID: \`${existingApproval.id}\``,
-            '',
-            '_Please wait for a guardian to approve or deny your request._',
-          ].join('\n'),
-          ephemeral: true,
-        });
-        return;
-      }
-
-      if (existingApproval.status === 'APPROVED') {
-        await interaction.reply({
-          content: `✅ You already have an approved access request for **${resource.name}**.`,
-          ephemeral: true,
-        });
-        return;
-      }
-    }
-
-    // Create new approval request
-    const result = await services.approval.createApprovalRequest({
+    // Create new approval request via DomainPorts (which enqueues outbox events atomically)
+    const result = await services.ports.createApprovalRequest(
+      principal,
       resourceId,
-      context: {
-        requesterId: userId,
-        action: 'MANUAL_REQUEST',
+      'MANUAL_REQUEST',
+      null,
+      {
         reason: `Requested via Discord command by <@${userId}>`,
       },
-    });
+      interaction.id
+    );
 
     if (!result.success || !result.request) {
       logger.error('Failed to create approval request', { error: result.error });

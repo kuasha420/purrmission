@@ -14,22 +14,9 @@ import {
 import type { CommandContext } from './context.js';
 import { logger } from '../../logging/logger.js';
 import { env } from '../../config/env.js';
-import type {
-  AccessRequestContext,
-  AccessRequestContextWithExtras,
-  Capability,
-} from '../../domain/models.js';
-import {
-  createApprovalButtons,
-  createAccessRequestEmbed,
-} from '../interactions/approvalButtons.js';
+import type { Capability } from '../../domain/models.js';
 import { rateLimiter } from '../../infra/rateLimit.js';
-import {
-  getEffectiveGuardians,
-  hasCapability,
-  getGuardedResourcesForUser,
-  isEffectiveOwner,
-} from '../../domain/policy.js';
+import { hasCapability } from '../../domain/policy.js';
 import { handleResourceIdAutocomplete } from './resourceAutocomplete.js';
 import { createDiscordPrincipal } from '../../domain/principal.js';
 
@@ -344,11 +331,12 @@ async function hasResourceCapability(
   resourceId: string,
   discordUserId: string,
   capability: Capability,
-  fieldName?: string
+  fieldName?: string,
+  correlationId?: string
 ): Promise<boolean> {
   const decision = await hasCapability(
     context.repositories,
-    createDiscordPrincipal(discordUserId),
+    createDiscordPrincipal(discordUserId, correlationId),
     capability,
     {
       resourceId,
@@ -383,9 +371,10 @@ async function handleRegisterResource(
   });
 
   try {
+    const principal = createDiscordPrincipal(userId, interaction.id);
     const { resource, guardian, plaintextApiKey } = await context.services.resource.createResource(
       name,
-      createDiscordPrincipal(userId)
+      principal
     );
 
     await interaction.reply({
@@ -526,18 +515,9 @@ async function handleResourceList(
 ): Promise<void> {
   const userId = interaction.user.id;
 
-  const validResources = await getGuardedResourcesForUser(context.repositories, userId);
+  const guardianAssignments = await context.repositories.guardians.findByUserId(userId);
 
-  if (validResources.length === 0) {
-    const explicitGuardians = await context.repositories.guardians.findByUserId(userId);
-    if (explicitGuardians && explicitGuardians.length > 0) {
-      await interaction.reply({
-        content: 'You do not own or guard any resources (orphaned records found).',
-        ephemeral: true,
-      });
-      return;
-    }
-
+  if (guardianAssignments.length === 0) {
     await interaction.reply({
       content: 'You do not own or guard any resources yet.',
       ephemeral: true,
@@ -545,9 +525,22 @@ async function handleResourceList(
     return;
   }
 
+  const resourceIds = [...new Set(guardianAssignments.map((g) => g.resourceId))];
+  const resources = await context.repositories.resources.findMetadataManyByIds(resourceIds);
+
+  if (resources.length === 0) {
+    await interaction.reply({
+      content: 'You do not own or guard any resources (orphaned records found).',
+      ephemeral: true,
+    });
+    return;
+  }
+
+  const guardianByResourceId = new Map(guardianAssignments.map((g) => [g.resourceId, g]));
   const lines = ['**📋 Your Resources:**', ''];
-  for (const r of validResources) {
-    const isOwner = await isEffectiveOwner(context.repositories, r.id, userId);
+  for (const r of resources) {
+    const userGuardian = guardianByResourceId.get(r.id);
+    const isOwner = userGuardian?.role === 'OWNER';
     const roleBadge = isOwner ? '👑 Owner' : '🛡️ Guardian';
     lines.push(`• **${r.name}** (\`${r.id}\`) — ${roleBadge}`);
   }
@@ -975,7 +968,7 @@ async function createFieldAccessRequest(
   requesterId: string
 ): Promise<void> {
   const { resourceFields } = context.repositories;
-  const { approval } = context.services;
+  const principal = createDiscordPrincipal(requesterId, interaction.id);
 
   // Validate field still exists before creating approval request (prevent race condition)
   const existingField = await resourceFields.findByResourceAndName(resourceId, fieldName);
@@ -987,58 +980,32 @@ async function createFieldAccessRequest(
     return;
   }
 
-  // Create approval context
-  const accessContext: AccessRequestContext = {
-    type: 'FIELD_ACCESS',
-    requesterId,
-    fieldName,
-    description: `Requesting access to field "${fieldName}"`,
-  };
-
-  // Create the approval request
-  const result = await approval.createApprovalRequest({
+  // Create the approval request via DomainPorts (which enqueues outbox events atomically)
+  const result = await context.services.ports.createApprovalRequest(
+    principal,
     resourceId,
-    context: accessContext as AccessRequestContextWithExtras,
-    expiresInMs: 15 * 60 * 1000, // 15 minutes
-  });
+    'secret.value.read',
+    fieldName,
+    {
+      reason: `Requesting access to field "${fieldName}" on ${resourceName}`,
+      constraints: { fieldName },
+      expiresInMs: 15 * 60 * 1000, // 15 minutes
+    },
+    interaction.id
+  );
 
   if (!result.success || !result.request) {
+    logger.warn('Failed to create field access request via DomainPorts', {
+      resourceId,
+      fieldName,
+      requesterId,
+      error: result.error,
+    });
     await interaction.reply({
-      content: `❌ Failed to create access request: ${result.error}`,
+      content: '❌ Failed to create access request.',
       ephemeral: true,
     });
     return;
-  }
-
-  // Get guardians to notify
-  const resourceGuardians = await getEffectiveGuardians(context.repositories, resourceId);
-
-  // Send approval requests to guardians via DM (in parallel)
-  const embed = createAccessRequestEmbed(resourceName, accessContext, result.request.expiresAt);
-  const buttons = createApprovalButtons(result.request.id);
-
-  const results = await Promise.allSettled(
-    resourceGuardians.map(async (guardian) => {
-      const user = await interaction.client.users.fetch(guardian.discordUserId);
-      const dm = await user.createDM();
-      await dm.send({
-        embeds: [embed],
-        components: [buttons],
-      });
-      return guardian.discordUserId;
-    })
-  );
-
-  const notifiedCount = results.filter((r) => r.status === 'fulfilled').length;
-  const failedCount = results.filter((r) => r.status === 'rejected').length;
-
-  if (failedCount > 0) {
-    logger.warn('Some guardians could not be notified', {
-      requestId: result.request.id,
-      resourceId,
-      notified: notifiedCount,
-      failed: failedCount,
-    });
   }
 
   logger.info('Created field access request', {
@@ -1046,25 +1013,17 @@ async function createFieldAccessRequest(
     resourceId,
     fieldName,
     requesterId,
-    notifiedGuardians: notifiedCount,
   });
-
-  if (notifiedCount === 0) {
-    await interaction.reply({
-      content: '❌ Failed to notify any guardians. They may have DMs disabled or are unreachable.',
-      ephemeral: true,
-    });
-    return;
-  }
 
   await interaction.reply({
     content: [
       '🔔 **Access request sent!**',
       '',
-      `Your request for field **${fieldName}** on **${resourceName}** has been sent to ${notifiedCount} guardian(s).`,
+      `Your request for field **${fieldName}** on **${resourceName}** has been submitted.`,
       '',
-      '_You will receive a DM when a guardian approves or denies your request._',
-      `_Request expires in 15 minutes._`,
+      `Request ID: \`${result.request.id}\``,
+      '_Guardians will be notified for approval._',
+      '_Request expires in 15 minutes._',
     ].join('\n'),
     ephemeral: true,
   });
@@ -1080,7 +1039,8 @@ async function create2FAAccessRequest(
   resourceId: string,
   requesterId: string
 ): Promise<void> {
-  const { approval, resource: resourceService } = context.services;
+  const { resource: resourceService } = context.services;
+  const principal = createDiscordPrincipal(requesterId, interaction.id);
 
   // Validate TOTP account still linked before creating approval request (prevent race condition)
   if (!(await resourceService.hasLinkedTOTP(resourceId))) {
@@ -1091,82 +1051,47 @@ async function create2FAAccessRequest(
     return;
   }
 
-  // Create approval context
-  const accessContext: AccessRequestContext = {
-    type: 'TOTP_ACCESS',
-    requesterId,
-    description: 'Requesting access to linked 2FA code',
-  };
-
-  // Create the approval request
-  const result = await approval.createApprovalRequest({
+  // Create the approval request via DomainPorts (which enqueues outbox events atomically)
+  const result = await context.services.ports.createApprovalRequest(
+    principal,
     resourceId,
-    context: accessContext as AccessRequestContextWithExtras,
-    expiresInMs: 5 * 60 * 1000, // 5 minutes (shorter for TOTP)
-  });
+    'totp.code.read',
+    null,
+    {
+      reason: `Requesting access to linked 2FA code on ${resourceName}`,
+      expiresInMs: 5 * 60 * 1000, // 5 minutes (shorter for TOTP)
+    },
+    interaction.id
+  );
 
   if (!result.success || !result.request) {
+    logger.warn('Failed to create 2FA access request via DomainPorts', {
+      resourceId,
+      requesterId,
+      error: result.error,
+    });
     await interaction.reply({
-      content: `❌ Failed to create access request: ${result.error}`,
+      content: '❌ Failed to create access request.',
       ephemeral: true,
     });
     return;
-  }
-
-  // Get guardians to notify
-  const resourceGuardians = await getEffectiveGuardians(context.repositories, resourceId);
-
-  // Send approval requests to guardians via DM (in parallel)
-  const embed = createAccessRequestEmbed(resourceName, accessContext, result.request.expiresAt);
-  const buttons = createApprovalButtons(result.request.id);
-
-  const results = await Promise.allSettled(
-    resourceGuardians.map(async (guardian) => {
-      const user = await interaction.client.users.fetch(guardian.discordUserId);
-      const dm = await user.createDM();
-      await dm.send({
-        embeds: [embed],
-        components: [buttons],
-      });
-      return guardian.discordUserId;
-    })
-  );
-
-  const notifiedCount = results.filter((r) => r.status === 'fulfilled').length;
-  const failedCount = results.filter((r) => r.status === 'rejected').length;
-
-  if (failedCount > 0) {
-    logger.warn('Some guardians could not be notified', {
-      requestId: result.request.id,
-      resourceId,
-      notified: notifiedCount,
-      failed: failedCount,
-    });
   }
 
   logger.info('Created 2FA access request', {
     requestId: result.request.id,
     resourceId,
     requesterId,
-    notifiedGuardians: notifiedCount,
   });
-
-  if (notifiedCount === 0) {
-    await interaction.reply({
-      content: '❌ Failed to notify any guardians. They may have DMs disabled or are unreachable.',
-      ephemeral: true,
-    });
-    return;
-  }
 
   await interaction.reply({
     content: [
       '🔔 **Access request sent!**',
       '',
-      `Your request for 2FA code on **${resourceName}** has been sent to ${notifiedCount} guardian(s).`,
+      `Your request for 2FA code on **${resourceName}** has been submitted.`,
       '',
-      '_You will receive a DM when a guardian approves or denies your request._',
-      `_Request expires in 5 minutes (TOTP codes are time-sensitive)._`,
+      `Request ID: \`${result.request.id}\``,
+      '_Guardians will be notified for approval._',
+      '_Request expires in 5 minutes (TOTP codes are time-sensitive)._',
     ].join('\n'),
     ephemeral: true,
   });

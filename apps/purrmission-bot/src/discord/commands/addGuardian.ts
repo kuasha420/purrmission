@@ -1,15 +1,9 @@
-/**
- * Handler for /purrmission-add-guardian command.
- *
- * Adds a new guardian to an existing protected resource.
- */
-
 import type { ChatInputCommandInteraction } from 'discord.js';
 import type { Services } from '../../domain/services.js';
 import { logger } from '../../logging/logger.js';
 
 /**
- * Handle the /purrmission-add-guardian command.
+ * Handle the /guardian add command.
  *
  * @param interaction - The command interaction
  * @param services - Application services
@@ -27,18 +21,6 @@ export async function handleAddGuardian(
     targetUserId: targetUser.id,
     callerId,
   });
-
-  // TODO: Verify that the caller is the OWNER of the resource
-  // For MVP, we allow anyone to add guardians
-  // In production, check:
-  // const callerGuardian = await repositories.guardians.findByResourceAndUser(resourceId, callerId);
-  // if (!callerGuardian || callerGuardian.role !== 'OWNER') {
-  //   await interaction.reply({
-  //     content: '❌ Only the resource owner can add guardians.',
-  //     ephemeral: true,
-  //   });
-  //   return;
-  // }
 
   try {
     const result = await services.resource.addGuardian(resourceId, targetUser.id, callerId);

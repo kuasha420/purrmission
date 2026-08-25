@@ -19,9 +19,15 @@ export async function handleDecisionCommand(
   const icon = decision === 'APPROVE' ? '✅' : '🚫'; // correction: DENY usually 🚫 or ❌
 
   try {
-    const principal = createDiscordPrincipal(userId);
+    const principal = createDiscordPrincipal(userId, interaction.id);
 
-    const result = await services.ports.recordApprovalDecision(principal, requestId, decision);
+    const result = await services.ports.recordApprovalDecision(
+      principal,
+      requestId,
+      decision,
+      undefined,
+      interaction.id
+    );
 
     if (result.success) {
       await interaction.reply({
@@ -30,11 +36,17 @@ export async function handleDecisionCommand(
       });
 
       // Update original message
-      const request = await services.ports.getApprovalRequest(principal, requestId);
+      const request = await services.ports.getApprovalRequest(principal, requestId, interaction.id);
       if (request) {
         await updateDiscordMessage(interaction, request, decision, userId, actionPastTense);
       }
     } else {
+      logger.warn(`Failed to ${decision.toLowerCase()} request via DomainPorts`, {
+        requestId,
+        decision,
+        userId,
+        error: result.error,
+      });
       await interaction.reply({
         content: `❌ Failed to ${decision.toLowerCase()} request.`,
         ephemeral: true,

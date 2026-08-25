@@ -13,15 +13,15 @@ describe('handleResourceAutocomplete', () => {
   let mockContext: CommandContext;
   let respondCalls: any[] = [];
   let findByUserIdOverrides: any[] = [];
-  let findManyByIdsOverrides: any[] = [];
-  let findManyByIdsCalls: Array<{ ids: string[]; query?: string }> = [];
+  let findMetadataManyByIdsOverrides: any[] = [];
+  let findMetadataManyByIdsCalls: Array<{ ids: string[]; query?: string }> = [];
   let findByResourceIdOverrides: any[] = [];
 
   beforeEach(() => {
     respondCalls = [];
     findByUserIdOverrides = [];
-    findManyByIdsOverrides = [];
-    findManyByIdsCalls = [];
+    findMetadataManyByIdsOverrides = [];
+    findMetadataManyByIdsCalls = [];
     findByResourceIdOverrides = [];
 
     mockOptions = {
@@ -57,9 +57,9 @@ describe('handleResourceAutocomplete', () => {
           },
         } as any,
         resources: {
-          findManyByIds: async (ids: string[], query?: string) => {
-            findManyByIdsCalls.push({ ids, query });
-            return findManyByIdsOverrides;
+          findMetadataManyByIds: async (ids: string[], query?: string) => {
+            findMetadataManyByIdsCalls.push({ ids, query });
+            return findMetadataManyByIdsOverrides;
           },
         } as any,
         resourceFields: {
@@ -83,7 +83,7 @@ describe('handleResourceAutocomplete', () => {
     ];
 
     // Resource details
-    findManyByIdsOverrides = [
+    findMetadataManyByIdsOverrides = [
       { id: 'res-1', name: 'My Cool Resource', mode: 'ONE_OF_N' },
       { id: 'res-2', name: 'Other Resource', mode: 'ONE_OF_N' },
     ];
@@ -97,9 +97,9 @@ describe('handleResourceAutocomplete', () => {
     // Verify
     assert.strictEqual(respondCalls.length, 1);
     assert.deepStrictEqual(respondCalls[0], [{ name: 'My Cool Resource', value: 'res-1' }]);
-    assert.deepStrictEqual(findManyByIdsCalls[0], {
+    assert.deepStrictEqual(findMetadataManyByIdsCalls[0], {
       ids: ['res-1', 'res-2'],
-      query: 'cool',
+      query: undefined,
     });
   });
 
@@ -130,7 +130,7 @@ describe('handleResourceAutocomplete', () => {
     ];
 
     // Only one resource found (res-2 is missing/deleted)
-    findManyByIdsOverrides = [{ id: 'res-1', name: 'My Cool Resource', mode: 'ONE_OF_N' }];
+    findMetadataManyByIdsOverrides = [{ id: 'res-1', name: 'My Cool Resource', mode: 'ONE_OF_N' }];
 
     // Execute
     await handleResourceAutocomplete(

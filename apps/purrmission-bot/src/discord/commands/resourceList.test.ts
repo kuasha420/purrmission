@@ -37,7 +37,7 @@ describe('handleResourceCommand - list', () => {
           },
         } as any,
         resources: {
-          findManyByIds: async (_ids: string[]) => {
+          findMetadataManyByIds: async (_ids: string[]) => {
             return findManyByIdsOverrides;
           },
         } as any,

@@ -105,20 +105,32 @@ export async function handleApprovalButton(
   await interaction.deferUpdate();
 
   try {
-    const principal = createDiscordPrincipal(userId);
+    const principal = createDiscordPrincipal(userId, interaction.id);
 
     // Record the decision via the ports layer
-    const result = await services.ports.recordApprovalDecision(principal, requestId, action);
+    const result = await services.ports.recordApprovalDecision(
+      principal,
+      requestId,
+      action,
+      undefined,
+      interaction.id
+    );
 
     if (!result.success) {
+      logger.warn('Failed to record approval button decision via DomainPorts', {
+        requestId,
+        action,
+        userId,
+        error: result.error,
+      });
       await interaction.followUp({
-        content: `❌ Request decision recording failed.`,
+        content: '❌ Request decision recording failed.',
         ephemeral: true,
       });
       return;
     }
 
-    const request = await services.ports.getApprovalRequest(principal, requestId);
+    const request = await services.ports.getApprovalRequest(principal, requestId, interaction.id);
     if (!request) {
       await interaction.followUp({
         content: `❌ Could not retrieve approval request details.`,

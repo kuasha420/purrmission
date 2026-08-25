@@ -10,25 +10,6 @@ import type {
   User,
 } from 'discord.js';
 
-interface MockProjectServices {
-  project: {
-    getProject: (
-      projectId: string
-    ) => Promise<{ id: string; name: string; ownerId: string } | null>;
-    addMember: (
-      projectId: string,
-      targetUserId: string,
-      role: 'READER' | 'WRITER',
-      actorId: Principal
-    ) => Promise<void>;
-    removeMember: (projectId: string, targetUserId: string) => Promise<void>;
-    getMemberRole: (projectId: string, userId: string) => Promise<'READER' | 'WRITER' | null>;
-    listMembers: (
-      projectId: string
-    ) => Promise<Array<{ userId: string; role: 'READER' | 'WRITER' }>>;
-  };
-}
-
 describe('handleProjectCommand', () => {
   let mockInteraction: ChatInputCommandInteraction;
   let mockContext: CommandContext;
@@ -36,13 +17,12 @@ describe('handleProjectCommand', () => {
   let editReplyCalls: Array<string | { content: string; allowedMentions?: { users: string[] } }> =
     [];
   let addMemberCalls: Array<{
-    projectId: string;
-    targetUserId: string;
-    role: 'READER' | 'WRITER';
-    actorId: Principal;
+    principal: Principal;
+    dto: { projectId: string; memberUserId: string; role: 'READER' | 'WRITER' };
   }> = [];
-  let removeMemberCalls: Array<{ projectId: string; targetUserId: string }> = [];
-  let listMembersCalls: string[] = [];
+  let removeMemberCalls: Array<{ principal: Principal; projectId: string; memberUserId: string }> =
+    [];
+  let listMembersCalls: Array<{ principal: Principal; projectId: string }> = [];
 
   beforeEach(() => {
     deferReplyCalls = [];
@@ -52,6 +32,7 @@ describe('handleProjectCommand', () => {
     listMembersCalls = [];
 
     mockInteraction = {
+      id: 'interaction-999',
       user: { id: 'owner-1' } as User,
       options: {
         getSubcommandGroup: ((_required?: boolean) =>
@@ -86,30 +67,40 @@ describe('handleProjectCommand', () => {
 
     mockContext = {
       services: {
-        project: {
-          getProject: async (projectId: string) => ({
+        ports: {
+          getProject: async (_principal: Principal, projectId: string) => ({
             id: projectId,
             name: 'Project One',
             ownerId: 'owner-1',
+            createdAt: new Date(),
           }),
-          addMember: async (
-            projectId: string,
-            targetUserId: string,
-            role: 'READER' | 'WRITER',
-            actorId: Principal
+          addProjectMember: async (
+            principal: Principal,
+            dto: { projectId: string; memberUserId: string; role: 'READER' | 'WRITER' }
           ) => {
-            addMemberCalls.push({ projectId, targetUserId, role, actorId });
+            addMemberCalls.push({ principal, dto });
           },
-          removeMember: async (projectId: string, targetUserId: string) => {
-            removeMemberCalls.push({ projectId, targetUserId });
+          removeProjectMember: async (
+            principal: Principal,
+            projectId: string,
+            memberUserId: string
+          ) => {
+            removeMemberCalls.push({ principal, projectId, memberUserId });
           },
-          getMemberRole: async (_projectId: string, _userId: string) => 'WRITER',
-          listMembers: async (projectId: string) => {
-            listMembersCalls.push(projectId);
-            return [{ userId: 'user-2', role: 'WRITER' }];
+          listProjectMembers: async (principal: Principal, projectId: string) => {
+            listMembersCalls.push({ principal, projectId });
+            return [
+              {
+                id: 'pm-1',
+                projectId,
+                userId: 'user-2',
+                role: 'WRITER' as const,
+                createdAt: new Date(),
+              },
+            ];
           },
         },
-      } as unknown as MockProjectServices,
+      },
     } as unknown as CommandContext;
   });
 
@@ -118,27 +109,13 @@ describe('handleProjectCommand', () => {
 
     assert.deepStrictEqual(deferReplyCalls, [{ ephemeral: true }]);
     assert.equal(addMemberCalls.length, 1);
-    assert.deepStrictEqual(
-      { ...addMemberCalls[0], actorId: undefined },
-      {
-        projectId: 'project-1',
-        targetUserId: 'user-2',
-        role: 'WRITER',
-        actorId: undefined,
-      }
-    );
-    assert.deepStrictEqual(
-      { ...addMemberCalls[0]?.actorId, id: undefined },
-      {
-        id: undefined,
-        type: 'DISCORD_USER',
-        subjectId: 'owner-1',
-        actorDiscordId: 'owner-1',
-        authKind: 'DISCORD',
-        correlationId: undefined,
-      }
-    );
-    assert.match(addMemberCalls[0]?.actorId.id ?? '', /^discord-interaction:/);
+    assert.deepStrictEqual(addMemberCalls[0]?.dto, {
+      projectId: 'project-1',
+      memberUserId: 'user-2',
+      role: 'WRITER',
+    });
+    assert.strictEqual(addMemberCalls[0]?.principal.subjectId, 'owner-1');
+    assert.strictEqual(addMemberCalls[0]?.principal.authKind, 'DISCORD');
     assert.ok(
       typeof editReplyCalls[0] === 'string' &&
         editReplyCalls[0].includes('Added <@user-2> as a **WRITER**')
@@ -150,7 +127,10 @@ describe('handleProjectCommand', () => {
 
     await handleProjectCommand(mockInteraction, mockContext);
 
-    assert.deepStrictEqual(removeMemberCalls, [{ projectId: 'project-1', targetUserId: 'user-2' }]);
+    assert.equal(removeMemberCalls.length, 1);
+    assert.strictEqual(removeMemberCalls[0]?.projectId, 'project-1');
+    assert.strictEqual(removeMemberCalls[0]?.memberUserId, 'user-2');
+    assert.strictEqual(removeMemberCalls[0]?.principal.subjectId, 'owner-1');
     assert.ok(
       typeof editReplyCalls[0] === 'string' &&
         editReplyCalls[0].includes('Removed <@user-2> from project **Project One**')
@@ -162,7 +142,9 @@ describe('handleProjectCommand', () => {
 
     await handleProjectCommand(mockInteraction, mockContext);
 
-    assert.deepStrictEqual(listMembersCalls, ['project-1']);
+    assert.equal(listMembersCalls.length, 1);
+    assert.strictEqual(listMembersCalls[0]?.projectId, 'project-1');
+    assert.strictEqual(listMembersCalls[0]?.principal.subjectId, 'owner-1');
     assert.deepStrictEqual(editReplyCalls[0], {
       content: '**Members of Project One:**\n- <@user-2> (WRITER)',
       allowedMentions: { users: [] },
