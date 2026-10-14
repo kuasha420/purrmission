@@ -8,7 +8,7 @@ This document provides a cohesive reference for Purrmission's technologies, proj
 
 ## 🛠️ Technology Stack
 
-- **Runtime**: Node.js v24.10.1 (ES Modules enabled).
+- **Runtime**: Node.js v24.12.0 (ES Modules enabled, see `.nvmrc`).
 - **Package Manager**: pnpm (configured with monorepo workspaces).
 - **Discord Bot**: `discord.js` v14 for slash commands and interactions.
 - **API Server**: Fastify (`apps/purrmission-bot/src/http/server.ts`).
